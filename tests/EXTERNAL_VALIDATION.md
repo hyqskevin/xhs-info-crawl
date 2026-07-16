@@ -24,8 +24,9 @@ make test-opencli
 
 - 官方国内基础地址：`https://api.minimaxi.com/v1`
 - 接口：`/text/chatcompletion_v2`
-- 模型：`MiniMax-M2.7`
+- 模型：`MiniMax-M3`
 - 实测：HTTP 200，存在 `choices`、`usage`，`base_resp.status_code = 0`
+- `/v1/models` 实测包含 `MiniMax-M3`，且最小 M3 文本请求成功返回模型名 `MiniMax-M3`
 - API Key：仅保存于被 Git 忽略的 `.env`，本记录不包含 Key
 
 由于 API Key 曾通过聊天传递，建议验证结束后在 MiniMax 控制台轮换密钥，并更新本地 `.env`。

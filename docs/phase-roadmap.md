@@ -14,6 +14,7 @@
 - Celery 使用 filesystem broker，不依赖 Redis；任务队列目录位于 `data/celery/queue/`，生产者与 Worker 共享该目录。
 - 结构化数据使用 SQLite，数据库文件默认位于 `data/app.db`。
 - 图片使用本地文件系统，默认保存到 `data/images/`。
+- OCR 使用 PaddleOCR 提取原始文字；MiniMax-M3 结合标题、正文和 OCR 文本进行活动字段结构化提取。MiniMax 不替代基础 OCR。
 - 导出文件保存到 `data/exports/`，每次周报同时生成 Excel（`.xlsx`）和 Markdown（`.md`）。
 - 不使用 MinIO、PostgreSQL、Redis、Docker 或 Docker Compose。
 - 提供统一的初始化和本地启动命令，可分别启动前端、API、Celery Worker 和 Celery Beat。

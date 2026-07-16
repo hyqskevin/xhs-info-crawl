@@ -91,4 +91,14 @@ uv run --project backend paddleocr ocr \
 
 业务代码只依赖 `OCRService` 的引擎接口。PaddleOCR 初始化应在 Celery Worker 进程内惰性执行并复用单例，不能为每张图片重复加载模型。测试环境继续使用轻量假引擎，不下载模型。
 
+处理链路固定为：
+
+```text
+PaddleOCR 提取图片原始文字
+  -> 合并笔记标题、正文与 OCR 文本
+  -> MiniMax-M3 提取活动名称、时间、地点、费用、类型和摘要
+```
+
+MiniMax-M3 文本接口不作为 PaddleOCR 的直接替代。PaddleOCR 保证逐字识别可复现且无按次调用成本；MiniMax-M3 负责理解文本语义和结构化字段。未来若引入独立的图片理解接口，只作为 OCR 失败时的可选兜底。
+
 官方参考：[PaddleOCR 安装文档](https://www.paddleocr.ai/main/en/version3.x/installation.html)、[PaddleOCR Quick Start](https://www.paddleocr.ai/main/en/quick_start.html)。

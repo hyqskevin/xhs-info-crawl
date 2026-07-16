@@ -40,12 +40,17 @@ def test_environment_example_contains_phase_one_settings() -> None:
         "VITE_API_BASE_URL=/api/v1",
         "VITE_API_TIMEOUT_MS=10000",
         "MINIMAX_BASE_URL=https://api.minimaxi.com/v1",
-        "MINIMAX_MODEL=MiniMax-M2.7",
+        "MINIMAX_MODEL=MiniMax-M3",
         "MINIMAX_CHAT_PATH=/text/chatcompletion_v2",
         "OCR_ENABLED=false",
         "OCR_LANGUAGE=ch",
         "OCR_MIN_CONFIDENCE=0.5",
         "PADDLEOCR_MODEL_DIR=./data/models/paddleocr",
+        "XHS_SEARCH_TARGET_COUNT=50",
+        "XHS_SEARCH_SCROLL_MAX_ROUNDS=8",
+        "XHS_DETAIL_SCROLL_MAX_ROUNDS=8",
+        "XHS_SCROLL_PIXELS=800",
+        "XHS_SCROLL_STAGNANT_ROUNDS=2",
     ):
         assert key in content
 

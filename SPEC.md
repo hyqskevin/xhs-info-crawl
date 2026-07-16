@@ -912,7 +912,7 @@ def download_note_details(note_id: int, note_url: str):
 | 数据库 | SQLAlchemy + Alembic | 阶段一 SQLite；阶段二 PostgreSQL 15 |
 | 对象存储 | Storage 接口 | 阶段一本地文件；阶段二 MinIO |
 | OCR | PaddleOCR | 图片文字识别 |
-| LLM | MiniMax API | 字段提取兜底 |
+| LLM | MiniMax-M3 API | 结合正文与 PaddleOCR 文本进行字段提取 |
 | 部署 | 本机进程 / Docker Compose | 阶段一本机直接运行；阶段二容器化 |
 | 监控 | 日志 / Flower | 阶段一任务日志；阶段二增加 Flower |
 

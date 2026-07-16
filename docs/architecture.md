@@ -14,7 +14,7 @@
 | 任务队列 | Celery Worker + Celery Beat | Broker 按阶段替换 |
 | 爬虫 | OpenCLI (Node.js) | 连接本机 Chrome CDP |
 | OCR | PaddleOCR | 图片文字识别 |
-| LLM | MiniMax API | 字段提取兜底 |
+| LLM | MiniMax-M3 API | 结合标题、正文与 PaddleOCR 文本进行字段提取 |
 | 导出 | openpyxl + Markdown 模板 | 同时生成 `.xlsx` 与 `.md` |
 
 ## 阶段一架构

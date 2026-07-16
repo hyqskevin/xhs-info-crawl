@@ -1,5 +1,7 @@
 # 测试用例：字段提取管道 (Field Extraction Pipeline)
 
+> 阶段一固定链路：PaddleOCR 负责图片逐字识别，MiniMax-M3 负责结合标题、正文与 OCR 文本进行结构化字段提取；MiniMax-M3 不替代 PaddleOCR。
+
 ## 测试环境
 - **框架**: pytest 7.x
 - **语言**: Python 3.11

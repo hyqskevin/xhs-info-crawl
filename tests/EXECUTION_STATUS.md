@@ -5,7 +5,7 @@
 ## 当前结果
 
 ```text
-后端：54 passed, 1 skipped
+后端：57 passed, 1 skipped
 前端组件：1 passed
 前端 Playwright：6 passed
 生产构建：passed

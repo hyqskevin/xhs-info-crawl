@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.crawler import AuthenticationRequired, OpenCLIError, OpenCLITimeout, check_login, filter_recent_notes, map_opencli_error, search_notes
+from app.services.crawler import AuthenticationRequired, OpenCLIError, OpenCLITimeout, ScrollPolicy, check_login, collect_with_scroll, filter_recent_notes, map_opencli_error, search_recent_notes
 from app.services.dedup import classify_similarity, merge_activities, similarity_score
 from app.services.extraction import extract_activity_fields
 from app.services.ocr import OCRService
@@ -71,7 +71,7 @@ def test_crawler_checks_login_before_search_and_pauses_on_auth_error() -> None:
         return {"ok": False, "error": {"exitCode": 77, "code": "AUTH_REQUIRED"}}
 
     with pytest.raises(AuthenticationRequired):
-        search_notes("上海 周末活动", 3, runner)
+        search_recent_notes("上海 周末活动", 3, runner)
     assert len(calls) == 1
     assert calls[0][1:3] == ["xiaohongshu", "whoami"]
 
@@ -86,10 +86,42 @@ def test_crawler_searches_only_after_login_check_passes() -> None:
         return {"ok": True, "data": [{"title": "周末活动"}]}
 
     assert check_login(runner) is True
-    result = search_notes("上海 周末活动", 3, runner)
+    result = search_recent_notes("上海 周末活动", 3, runner)
     assert result == [{"title": "周末活动"}]
     assert calls[-2][2] == "whoami"
     assert calls[-1][2] == "search"
+
+
+def test_recent_search_applies_latest_and_one_week_filters_before_scrolling() -> None:
+    events: list[str] = []
+
+    def runner(command: list[str]) -> dict[str, object]:
+        if command[2] == "whoami":
+            return {"ok": True, "data": {"logged_in": True}}
+        events.append(command[2])
+        return {"ok": True, "data": [{"title": "活动", "published_at": datetime.now(timezone.utc).isoformat()}]}
+
+    def apply_filters() -> None:
+        events.extend(["filter:latest", "filter:one_week"])
+
+    result = search_recent_notes("上海 周末活动", 1, runner, apply_filters=apply_filters)
+    assert result
+    assert events[:2] == ["filter:latest", "filter:one_week"]
+    assert events[-1] == "search"
+
+
+def test_collect_with_scroll_stops_at_target_or_after_two_stagnant_rounds() -> None:
+    rounds = iter([[1, 2], [1, 2, 3], [1, 2, 3], [1, 2, 3], [1, 2, 3, 4]])
+    scrolls: list[int] = []
+    result = collect_with_scroll(lambda: next(rounds), lambda pixels: scrolls.append(pixels), ScrollPolicy(target_count=10, max_rounds=8, pixels=800, stagnant_rounds=2))
+    assert result == [1, 2, 3]
+    assert scrolls == [800, 800, 800]
+
+
+def test_collect_with_scroll_reaches_target_count() -> None:
+    rounds = iter([[1], [1, 2], [1, 2, 3]])
+    result = collect_with_scroll(lambda: next(rounds), lambda _: None, ScrollPolicy(target_count=3, max_rounds=8, pixels=800, stagnant_rounds=2))
+    assert result == [1, 2, 3]
 
 
 def test_task_lock_prevents_concurrent_runs_and_releases() -> None:

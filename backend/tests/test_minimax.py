@@ -12,10 +12,10 @@ def test_minimax_client_uses_env_configuration_and_parses_json(tmp_path) -> None
         assert request.url == "https://api.minimaxi.com/v1/text/chatcompletion_v2"
         assert request.headers["authorization"] == "Bearer test-key"
         payload = json.loads(request.content)
-        assert payload["model"] == "MiniMax-M2.7"
+        assert payload["model"] == "MiniMax-M3"
         return httpx.Response(200, json={"choices": [{"message": {"content": '{"name":"活动"}'}}], "base_resp": {"status_code": 0}})
 
-    settings = Settings(project_root=tmp_path, minimax_api_key="test-key", minimax_base_url="https://api.minimaxi.com/v1", minimax_chat_path="/text/chatcompletion_v2", minimax_model="MiniMax-M2.7")
+    settings = Settings(project_root=tmp_path, minimax_api_key="test-key", minimax_base_url="https://api.minimaxi.com/v1", minimax_chat_path="/text/chatcompletion_v2", minimax_model="MiniMax-M3")
     assert MiniMaxClient(settings, httpx.MockTransport(handler)).extract("活动文本") == {"name": "活动"}
 
 

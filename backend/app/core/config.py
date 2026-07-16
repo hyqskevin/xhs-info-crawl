@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     weekly_search_limit: int = 500
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimaxi.com/v1"
-    minimax_model: str = "MiniMax-M2.7"
+    minimax_model: str = "MiniMax-M3"
     minimax_chat_path: str = "/text/chatcompletion_v2"
     ocr_enabled: bool = False
     ocr_language: str = "ch"
@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     ocr_use_doc_unwarping: bool = False
     ocr_use_textline_orientation: bool = False
     paddleocr_model_dir: Path = Path("./data/models/paddleocr")
+    xhs_search_target_count: int = 50
+    xhs_search_scroll_max_rounds: int = 8
+    xhs_detail_scroll_max_rounds: int = 8
+    xhs_scroll_pixels: int = 800
+    xhs_scroll_stagnant_rounds: int = 2
     data_dir_setting: Path = Field(Path("./data"), validation_alias="DATA_DIR")
     image_dir_setting: Path = Field(Path("./data/images"), validation_alias="IMAGE_DIR")
     export_dir_setting: Path = Field(Path("./data/exports"), validation_alias="EXPORT_DIR")
