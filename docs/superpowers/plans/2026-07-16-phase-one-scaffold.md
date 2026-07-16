@@ -1,6 +1,6 @@
 # Phase One Frontend and Backend Scaffold Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build a locally runnable phase-one scaffold with Vue 3, Element Plus, FastAPI, SQLite, Celery filesystem broker, repeatable commands, and automated smoke tests.
 
@@ -30,11 +30,11 @@
 **Interfaces:**
 - Produces: `Settings`, `get_settings()`, and `Settings.ensure_runtime_directories()`, used by API, database, storage, and Celery modules.
 
-- [ ] **Step 1: Write a failing configuration test** that constructs `Settings(project_root=tmp_path)` and asserts SQLite, image, export, and broker directories resolve under the temporary project root.
-- [ ] **Step 2: Run** `uv run --project backend pytest backend/tests/test_config.py -q` and confirm failure because `backend.app.core.config` does not exist.
-- [ ] **Step 3: Implement settings and root project files**, using Pydantic Settings with relative paths derived from `PROJECT_ROOT` and directory creation isolated in `ensure_runtime_directories()`.
-- [ ] **Step 4: Re-run the test** and confirm it passes.
-- [ ] **Step 5: Commit** with `git commit -m "chore: initialize phase one project foundation"`.
+- [x] **Step 1: Write a failing configuration test** that constructs `Settings(project_root=tmp_path)` and asserts SQLite, image, export, and broker directories resolve under the temporary project root.
+- [x] **Step 2: Run** `uv run --project backend pytest backend/tests/test_config.py -q` and confirm failure because `backend.app.core.config` does not exist.
+- [x] **Step 3: Implement settings and root project files**, using Pydantic Settings with relative paths derived from `PROJECT_ROOT` and directory creation isolated in `ensure_runtime_directories()`.
+- [x] **Step 4: Re-run the test** and confirm it passes.
+- [x] **Step 5: Commit** with `git commit -m "chore: initialize phase one project foundation"`.
 
 ### Task 2: FastAPI health endpoint and SQLite initialization
 
@@ -46,11 +46,11 @@
 **Interfaces:**
 - Produces: `app: FastAPI`, `GET /api/v1/health`, `engine`, `SessionLocal`, `get_db()`, and `init_database()`.
 
-- [ ] **Step 1: Write failing tests** asserting health returns `{"code": 200, "message": "success", "data": {"status": "ok", "database": "sqlite"}}` and `init_database()` creates the configured SQLite file.
-- [ ] **Step 2: Run** `uv run --project backend pytest backend/tests/test_health.py backend/tests/test_database.py -q` and confirm imports fail.
-- [ ] **Step 3: Implement the minimal API and database lifecycle**, with a versioned router and startup directory/database initialization.
-- [ ] **Step 4: Re-run both test files** and confirm they pass.
-- [ ] **Step 5: Commit** with `git commit -m "feat: add FastAPI health and SQLite foundation"`.
+- [x] **Step 1: Write failing tests** asserting health returns `{"code": 200, "message": "success", "data": {"status": "ok", "database": "sqlite"}}` and `init_database()` creates the configured SQLite file.
+- [x] **Step 2: Run** `uv run --project backend pytest backend/tests/test_health.py backend/tests/test_database.py -q` and confirm imports fail.
+- [x] **Step 3: Implement the minimal API and database lifecycle**, with a versioned router and startup directory/database initialization.
+- [x] **Step 4: Re-run both test files** and confirm they pass.
+- [x] **Step 5: Commit** with `git commit -m "feat: add FastAPI health and SQLite foundation"`.
 
 ### Task 3: Local storage and Celery filesystem transport
 
@@ -62,11 +62,11 @@
 **Interfaces:**
 - Produces: `Storage` protocol, `LocalStorage.save/read/delete`, `celery_app`, and `health.ping` task.
 
-- [ ] **Step 1: Write failing tests** asserting local storage returns relative object keys and blocks traversal, and Celery uses `filesystem://` with Monday 02:00 Asia/Shanghai beat configuration.
-- [ ] **Step 2: Run** `uv run --project backend pytest backend/tests/test_local_storage.py backend/tests/test_celery_config.py -q` and confirm missing-module failures.
-- [ ] **Step 3: Implement storage and Celery configuration**, sharing `Settings` and creating broker input/output/processed folders.
-- [ ] **Step 4: Re-run both test files** and confirm they pass.
-- [ ] **Step 5: Commit** with `git commit -m "feat: add local storage and celery filesystem broker"`.
+- [x] **Step 1: Write failing tests** asserting local storage returns relative object keys and blocks traversal, and Celery uses `filesystem://` with Monday 02:00 Asia/Shanghai beat configuration.
+- [x] **Step 2: Run** `uv run --project backend pytest backend/tests/test_local_storage.py backend/tests/test_celery_config.py -q` and confirm missing-module failures.
+- [x] **Step 3: Implement storage and Celery configuration**, sharing `Settings` and creating broker input/output/processed folders.
+- [x] **Step 4: Re-run both test files** and confirm they pass.
+- [x] **Step 5: Commit** with `git commit -m "feat: add local storage and celery filesystem broker"`.
 
 ### Task 4: Vue 3 and Element Plus application shell
 
@@ -81,11 +81,11 @@
 - Consumes: `GET /api/v1/health`.
 - Produces: routes for `/dashboard`, `/activities`, `/duplicates`, `/settings`, `/tasks`, and `/reports` in an Element Plus navigation shell.
 
-- [ ] **Step 1: Write a failing Vitest component test** asserting the dashboard renders the application title, health status, and Element Plus cards without Emoji text.
-- [ ] **Step 2: Run** `npm --prefix frontend test -- --run` and confirm failure because the Vue app does not exist.
-- [ ] **Step 3: Implement the Vue shell** using `ElContainer`, `ElMenu`, `ElCard`, `ElTag`, `ElResult`, and icons imported from `@element-plus/icons-vue`.
-- [ ] **Step 4: Re-run Vitest** and confirm it passes.
-- [ ] **Step 5: Commit** with `git commit -m "feat: add Vue Element Plus application shell"`.
+- [x] **Step 1: Write a failing Vitest component test** asserting the dashboard renders the application title, health status, and Element Plus cards without Emoji text.
+- [x] **Step 2: Run** `npm --prefix frontend test -- --run` and confirm failure because the Vue app does not exist.
+- [x] **Step 3: Implement the Vue shell** using `ElContainer`, `ElMenu`, `ElCard`, `ElTag`, `ElResult`, and icons imported from `@element-plus/icons-vue`.
+- [x] **Step 4: Re-run Vitest** and confirm it passes.
+- [x] **Step 5: Commit** with `git commit -m "feat: add Vue Element Plus application shell"`.
 
 ### Task 5: Local developer workflow and scaffold verification
 
@@ -97,11 +97,11 @@
 **Interfaces:**
 - Produces: `make init`, `make dev-api`, `make dev-worker`, `make dev-beat`, `make dev-web`, `make test`, and `make build`.
 
-- [ ] **Step 1: Write a failing scaffold contract test** asserting required directories, environment keys, and executable scripts exist.
-- [ ] **Step 2: Run** `uv run --project backend pytest backend/tests/test_scaffold_contract.py -q` and confirm missing-file failures.
-- [ ] **Step 3: Implement scripts and documentation** with commands that derive the repository root and avoid global package installation.
-- [ ] **Step 4: Run complete verification:** `uv run --project backend pytest backend/tests -q`, `npm --prefix frontend test -- --run`, and `npm --prefix frontend run build`.
-- [ ] **Step 5: Inspect** `git status --short` and `git diff --check`, then commit with `git commit -m "chore: complete local development scaffold"`.
+- [x] **Step 1: Write a failing scaffold contract test** asserting required directories, environment keys, and executable scripts exist.
+- [x] **Step 2: Run** `uv run --project backend pytest backend/tests/test_scaffold_contract.py -q` and confirm missing-file failures.
+- [x] **Step 3: Implement scripts and documentation** with commands that derive the repository root and avoid global package installation.
+- [x] **Step 4: Run complete verification:** `uv run --project backend pytest backend/tests -q`, `npm --prefix frontend test -- --run`, and `npm --prefix frontend run build`.
+- [x] **Step 5: Inspect** `git status --short` and `git diff --check`, then commit with `git commit -m "chore: complete local development scaffold"`.
 
 ## Plan Self-Review
 
