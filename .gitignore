@@ -1,6 +1,7 @@
 .DS_Store
 .env
 .venv/
+.trae/
 backend/.venv/
 backend/.pytest_cache/
 backend/.coverage

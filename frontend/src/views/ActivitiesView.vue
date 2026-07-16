@@ -3,7 +3,7 @@ import {Plus,Refresh,Search,View} from '@element-plus/icons-vue';import {onMount
 const rows=ref<any[]>([]),total=ref(0),dialog=ref(false),drawer=ref(false),detail=ref<any>({}),editing=ref<number>(),filters=reactive({city:'',status:'',page:1}),form=reactive<any>({name:'',city_code:'shanghai',start_time:'',end_time:'',location:'',price:'',type:'展览',source_url:'',summary:'',status:'RAW'})
 async function load(){const r=await api.activities(filters);rows.value=r.data.data.items;total.value=r.data.pagination.total}
 function open(row?:any){editing.value=row?.id;Object.assign(form,row||{name:'',city_code:'shanghai',start_time:'',end_time:'',location:'',price:'',type:'展览',source_url:'',summary:'',status:'RAW'});dialog.value=true}
-async function save(){const data={...form,start_time:new Date(form.start_time).toISOString(),end_time:form.end_time?new Date(form.end_time).toISOString():null};editing.value?await api.updateActivity(editing.value,data):await api.createActivity(data);dialog.value=false;ElMessage.success('保存成功');load()}
+async function save(){if(!form.name?.trim()||!form.start_time){ElMessage.warning('请填写活动名称和开始时间');return}const data={...form,start_time:new Date(form.start_time).toISOString(),end_time:form.end_time?new Date(form.end_time).toISOString():null};editing.value?await api.updateActivity(editing.value,data):await api.createActivity(data);dialog.value=false;ElMessage.success('保存成功');load()}
 async function remove(id:number){await ElMessageBox.confirm('确认删除该活动？','删除确认',{type:'warning'});await api.deleteActivity(id);ElMessage.success('已删除');load()}
 async function show(id:number){detail.value=(await api.activity(id)).data.data;drawer.value=true}
 onMounted(load)
