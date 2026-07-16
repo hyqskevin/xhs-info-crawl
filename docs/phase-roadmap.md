@@ -11,7 +11,7 @@
 - 前端保持 Vue 3 + TypeScript + Vite + Element Plus。
 - 后端使用 Python 3.11 + FastAPI。
 - 异步任务与定时任务继续使用 Celery Worker + Celery Beat。
-- Celery 使用 filesystem broker，不依赖 Redis；任务消息目录位于 `data/celery/`。
+- Celery 使用 filesystem broker，不依赖 Redis；任务队列目录位于 `data/celery/queue/`，生产者与 Worker 共享该目录。
 - 结构化数据使用 SQLite，数据库文件默认位于 `data/app.db`。
 - 图片使用本地文件系统，默认保存到 `data/images/`。
 - 导出文件保存到 `data/exports/`，每次周报同时生成 Excel（`.xlsx`）和 Markdown（`.md`）。
@@ -117,4 +117,3 @@ xhs-info-crawl/
 ```
 
 `data/` 中的运行数据不得提交到 Git；仅保留必要的 `.gitkeep` 和示例文件。
-

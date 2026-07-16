@@ -20,6 +20,5 @@ def test_ensure_runtime_directories_creates_required_folders(tmp_path: Path) -> 
     assert settings.sqlite_path.parent.is_dir()
     assert settings.image_dir.is_dir()
     assert settings.export_dir.is_dir()
-    assert (settings.celery_folder / "in").is_dir()
-    assert (settings.celery_folder / "out").is_dir()
+    assert (settings.celery_folder / "queue").is_dir()
     assert (settings.celery_folder / "processed").is_dir()

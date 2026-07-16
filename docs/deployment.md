@@ -21,7 +21,7 @@ make test       # 后端与前端测试
 data/app.db
 data/images/
 data/exports/
-data/celery/
+data/celery/queue/
 ```
 
 启动 Chrome CDP 并登录小红书后，设置 `OPENCLI_CDP_ENDPOINT`。API、Worker 与 Beat 是独立本机进程，filesystem broker 目录必须使用相同配置。
@@ -53,4 +53,3 @@ MINIMAX_API_KEY=
 - 使用 Alembic 将阶段一数据结构迁移到 PostgreSQL，并提供 SQLite 数据导入工具。
 
 OpenCLI 与 Chrome 初期仍可运行在本地电脑，通过 CDP 与后端连接；服务器化 Chrome 属于阶段二后续部署优化，不是阶段一验收条件。
-

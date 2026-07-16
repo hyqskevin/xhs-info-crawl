@@ -56,8 +56,7 @@ class Settings(BaseSettings):
             self.sqlite_path.parent,
             self.image_dir,
             self.export_dir,
-            self.celery_folder / "in",
-            self.celery_folder / "out",
+            self.celery_folder / "queue",
             self.celery_folder / "processed",
         ):
             path.mkdir(parents=True, exist_ok=True)
