@@ -1,0 +1,59 @@
+import json
+from datetime import datetime, timezone
+from io import BytesIO
+from typing import Annotated, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.core.security import get_current_user
+from app.models.activity import Activity
+from app.models.report import WeeklyReport
+from app.services.report import generate_markdown, generate_xlsx
+
+
+router = APIRouter(prefix="/reports", tags=["reports"])
+
+
+class GenerateRequest(BaseModel):
+    week: str
+    cities: list[str]
+
+
+def select_activities(db: Session, cities: list[str]) -> list[Activity]:
+    return list(db.scalars(select(Activity).where(Activity.city_code.in_(cities), Activity.status == "APPROVED")).all())
+
+
+@router.post("/generate")
+def generate_report(payload: GenerateRequest, _: Annotated[dict[str, str], Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
+    activities = select_activities(db, payload.cities)
+    content = generate_markdown(payload.week, payload.cities, activities)
+    report = db.scalar(select(WeeklyReport).where(WeeklyReport.week == payload.week))
+    if report is None:
+        report = WeeklyReport(week=payload.week, cities=json.dumps(payload.cities), activity_count=len(activities), content=content, status="draft")
+        db.add(report)
+    else:
+        report.cities = json.dumps(payload.cities)
+        report.activity_count = len(activities)
+        report.content = content
+        report.status = "draft"
+        report.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(report)
+    return {"code": 200, "message": "success", "data": {"id": report.id, "week": report.week, "cities": payload.cities, "activity_count": report.activity_count, "status": report.status}}
+
+
+@router.get("/{report_id}/download")
+def download_report(report_id: int, _: Annotated[dict[str, str], Depends(get_current_user)], db: Annotated[Session, Depends(get_db)], format: Annotated[Literal["md", "xlsx"], Query()] = "md"):
+    report = db.get(WeeklyReport, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="周报不存在")
+    filename = f"{report.week}.{format}"
+    if format == "md":
+        return Response(report.content, media_type="text/markdown; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    activities = select_activities(db, json.loads(report.cities))
+    return Response(generate_xlsx(activities), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
