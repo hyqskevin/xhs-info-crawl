@@ -24,13 +24,15 @@ def archive_task_folder(root: Path, started_at: datetime, task_id: int) -> Path:
 def archive_task_result(root: Path, started_at: datetime, task_id: int, note: Note, image_rows: list[tuple[Path, NoteImage]], activities: list[Activity]) -> Path:
     folder = archive_task_folder(root, started_at, task_id)
     source_sections = [f"# {note.title}", "", f"- 原文链接：{note.source_url}", "", "## 正文", "", note.content, "", "## 图片 OCR", ""]
+    image_links:dict[int,str]={}
     for index, (source, image) in enumerate(image_rows, 1):
         suffix = source.suffix.lower() or ".jpg"
         filename = f"{note.platform_note_id}_{index:02d}{suffix}"
         target = folder / "images" / filename
         if source.resolve() != target.resolve(): shutil.copy2(source, target)
         image.storage_key = target.relative_to(root.parent).as_posix()
-        source_sections.extend([f"### 图片 {index}：{filename}", "", image.ocr_text or f"OCR {image.ocr_status}", ""])
+        relative=f"images/{filename}"; image_links[index]=relative
+        source_sections.extend([f"### 图片 {index}：{filename}", "", f"![图片 {index}]({relative})", "", image.ocr_text or f"OCR {image.ocr_status}", ""])
     source_path = folder / "source.md"
     existing = source_path.read_text(encoding="utf-8") if source_path.exists() else ""
     start=f"<!-- NOTE:{note.id}:START -->"; end=f"<!-- NOTE:{note.id}:END -->"; section=f"{start}\n"+"\n".join(source_sections)+f"\n{end}"
@@ -42,7 +44,8 @@ def archive_task_result(root: Path, started_at: datetime, task_id: int, note: No
 
     markdown = [f"# 活动抽取结果（任务 {task_id}）", ""]
     for item in activities:
-        markdown.extend([f"## {item.name}", "", f"- 状态：{item.status}", f"- 时间：{item.start_time.isoformat()}", f"- 地点：{item.location}", f"- 费用：{item.price}", f"- 类型：{item.type}", f"- 来源图片：{','.join(map(str, item.source_image_indexes or []))}", f"- 原文链接：{item.source_url}", f"- 简介：{item.summary}", ""])
+        linked_images=[f"[来源图片 {index}]({image_links[index]})" if index in image_links else f"来源图片 {index}" for index in (item.source_image_indexes or [])]
+        markdown.extend([f"## {item.name}", "", f"- 状态：{item.status}", f"- 时间：{item.start_time.isoformat()}", f"- 地点：{item.location}", f"- 费用：{item.price}", f"- 类型：{item.type}", f"- 来源图片：{'、'.join(linked_images)}", f"- 原文链接：{item.source_url}", f"- 简介：{item.summary}", ""])
     (folder / "activities.md").write_text("\n".join(markdown), encoding="utf-8")
 
     workbook = Workbook(); sheet = workbook.active; sheet.title = "活动"

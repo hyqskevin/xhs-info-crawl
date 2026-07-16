@@ -198,7 +198,8 @@ def test_filter_recent_notes_excludes_old_notes():
 - 归档目录为 `data/archive/2026-07-16/task-{task_id}/`。
 - `images/` 包含 16 张原图。
 - `source.md` 包含原文链接和逐图 OCR 文字。
-- `activities.md` 包含 3 个活动，`activities.xlsx` 包含表头和 3 行数据。
+- `source.md` 使用相对路径嵌入全部归档图片，例如 `![图片 1](images/note-id_01.jpg)`。
+- `activities.md` 包含 3 个活动，并按 `source_image_indexes` 添加可点击的来源图片链接；`activities.xlsx` 包含表头和 3 行数据。
 - 数据库生成 3 条活动，每条 `source_url` 均为原文链接。
 
 ```python

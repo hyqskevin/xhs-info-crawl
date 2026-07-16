@@ -36,8 +36,12 @@ def test_archive_places_source_images_markdown_and_xlsx_under_date_task_folder(t
 
     assert folder == tmp_path / "archive" / "2026-07-16" / "task-9"
     assert (folder / "images" / "note-7_01.jpg").exists()
-    assert note.source_url in (folder / "source.md").read_text(encoding="utf-8")
-    assert "滨江音乐会" in (folder / "activities.md").read_text(encoding="utf-8")
+    source_markdown=(folder / "source.md").read_text(encoding="utf-8")
+    activities_markdown=(folder / "activities.md").read_text(encoding="utf-8")
+    assert note.source_url in source_markdown
+    assert "![图片 1](images/note-7_01.jpg)" in source_markdown
+    assert "滨江音乐会" in activities_markdown
+    assert "[来源图片 1](images/note-7_01.jpg)" in activities_markdown
     rows = list(load_workbook(folder / "activities.xlsx", read_only=True).active.iter_rows(values_only=True))
     assert len(rows) == 2
     assert rows[1][0] == "滨江音乐会"

@@ -84,6 +84,7 @@
 - When a note is successfully downloaded, the system shall trigger the OCR + field extraction pipeline within 5 minutes.
 - When a note or its images describe multiple concrete activities, the system shall extract an activity array and persist every activity separately instead of collapsing the note into one record.
 - When a crawl task stores source files, the system shall place the note Markdown, extracted-activity Markdown, Excel, and images under `data/archive/YYYY-MM-DD/task-{task_id}/`.
+- The archived Markdown files shall use relative links to the images in the same task folder; each activity shall link only the source images identified by `source_image_indexes`.
 - When an activity record is created or updated, the system shall recalculate duplicate candidates and flag high-confidence duplicates for review.
 - When a user clicks "Generate Weekly Report" in the admin panel, the system shall produce Excel and Markdown files grouped by city and activity type within 30 seconds.
 
