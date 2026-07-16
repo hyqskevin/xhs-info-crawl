@@ -35,18 +35,18 @@
 
 ### Task 4: Scheduling and deduplication
 
-- [ ] Convert task scheduling and deduplication specifications into executable tests. (service core covered; task/dedup APIs pending)
-- [ ] Implement task records, locking, state transitions, retries, similarity scoring, merge, and ignore behavior.
-- [ ] Verify and commit.
+- [x] Convert phase-one task scheduling and deduplication boundaries into executable service/API tests.
+- [x] Implement task records, locking, state transitions, retries, similarity scoring, merge, and ignore behavior.
+- [x] Verify and commit.
 
 ### Task 5: Extraction, OCR, and crawler adapters
 
-- [ ] Convert extraction, OCR, and crawler specifications into executable boundary tests. (core boundary cases covered; full adapter cases pending)
-- [ ] Implement rules-first extraction, MiniMax fallback interface, PaddleOCR adapter, and OpenCLI adapter with typed errors and rate limits.
-- [ ] Verify and commit.
+- [x] Convert phase-one extraction, OCR, and crawler specifications into executable deterministic boundary tests.
+- [x] Implement rules-first extraction, MiniMax fallback interface, PaddleOCR adapter, and OpenCLI adapter with typed errors and rate limits.
+- [x] Verify and commit.
 
 ### Task 6: Vue workflows and Playwright E2E
 
-- [ ] Implement login, activity CRUD, task, review, and report pages using Element Plus.
-- [ ] Add Playwright scenarios for login, manual activity creation/editing, and Markdown/XLSX report generation/download.
-- [ ] Run all backend, frontend, build, and browser suites; produce a case coverage matrix.
+- [x] Implement login, activity CRUD, task, review, report, and settings pages using Element Plus.
+- [x] Add Playwright scenarios for login, activities, task submission, duplicate review, reports, and settings.
+- [x] Run all backend, frontend, build, and browser suites; produce a case coverage matrix.

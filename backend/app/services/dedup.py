@@ -1,5 +1,9 @@
 from difflib import SequenceMatcher
 from typing import Any, Literal
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from app.models.activity import Activity
+from app.models.duplicate import DuplicateCandidate
 
 
 def similarity_score(left: dict[str, Any], right: dict[str, Any]) -> float:
@@ -25,3 +29,22 @@ def merge_activities(left: dict[str, Any], right: dict[str, Any], keep: Literal[
     selected["related_note_ids"] = note_ids
     selected["status"] = "APPROVED"
     return selected
+
+
+def create_duplicate_candidates(db: Session, activity: Activity) -> list[DuplicateCandidate]:
+    """Create review candidates for same-city activities; exact/high matches are surfaced, not silently deleted."""
+    created=[]
+    rows=db.scalars(select(Activity).where(Activity.id != activity.id,Activity.city_code == activity.city_code,Activity.status.notin_(['DELETED','MERGED']))).all()
+    left={c.name:getattr(activity,c.name) for c in activity.__table__.columns}
+    for other in rows:
+        right={c.name:getattr(other,c.name) for c in other.__table__.columns}; score=similarity_score(left,right)
+        if classify_similarity(score)=='distinct': continue
+        a,b=sorted((activity.id,other.id))
+        exists=db.scalar(select(DuplicateCandidate).where(DuplicateCandidate.activity_a_id==a,DuplicateCandidate.activity_b_id==b))
+        if exists: continue
+        matched=[]
+        if activity.city_code==other.city_code: matched.append('city')
+        if activity.start_time.date()==other.start_time.date(): matched.append('date')
+        candidate=DuplicateCandidate(activity_a_id=a,activity_b_id=b,similarity=score,matched_fields=','.join(matched),status='pending')
+        db.add(candidate); created.append(candidate)
+    return created

@@ -14,9 +14,16 @@ echo "正在检查 OpenCLI 浏览器连接..."
 opencli doctor >/dev/null
 
 echo "正在检查小红书登录态（Cookie 仅由 OpenCLI 从 Chrome 会话中复用，不会输出或保存）..."
-if ! opencli xiaohongshu whoami -f json --window background >/dev/null; then
+set +e
+opencli xiaohongshu whoami -f json --window background >/dev/null
+login_code=$?
+set -e
+if [[ "$login_code" -eq 77 ]]; then
   echo "未登录或登录态已过期。请在当前 Chrome 登录小红书，然后重新运行 make test-opencli。"
   exit 77
+elif [[ "$login_code" -ne 0 ]]; then
+  echo "OpenCLI 浏览器连接失败（错误码 ${login_code}），请检查 daemon、Chrome 扩展和 19825 端口。"
+  exit "$login_code"
 fi
 
 query="${1:-上海 周末活动}"

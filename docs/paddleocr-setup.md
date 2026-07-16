@@ -10,7 +10,7 @@
 
 ```bash
 uv python install 3.11
-uv sync --project backend
+uv sync --project backend --python 3.11 --extra ocr
 uv run --project backend python --version
 ```
 
@@ -25,8 +25,7 @@ uv run --project backend python --version
 先尝试在项目环境安装 PaddlePaddle 与 PaddleOCR：
 
 ```bash
-uv pip install --python backend/.venv/bin/python paddlepaddle==3.2.0
-uv pip install --python backend/.venv/bin/python paddleocr
+uv sync --project backend --python 3.11 --extra ocr
 ```
 
 若 PaddlePaddle 官方没有与你的 macOS 架构匹配的 wheel，优先在 Linux CPU 环境运行 OCR Worker；不要从非官方来源安装未知 wheel。
@@ -73,14 +72,14 @@ PADDLEOCR_MODEL_DIR=./data/models/paddleocr
 ## 安装验证
 
 ```bash
-uv run --project backend python -c "import paddle; print(paddle.__version__)"
-uv run --project backend paddleocr --help
+uv run --project backend --extra ocr python -c "import paddle; print(paddle.__version__)"
+uv run --project backend --extra ocr paddleocr --help
 ```
 
 对一张图片做最小识别：
 
 ```bash
-uv run --project backend paddleocr ocr \
+uv run --project backend --extra ocr paddleocr ocr \
   -i ./path/to/test.jpg \
   --use_doc_orientation_classify false \
   --use_doc_unwarping false \

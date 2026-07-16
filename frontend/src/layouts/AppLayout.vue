@@ -6,10 +6,12 @@ import {
   Document,
   List,
   Setting,
+  SwitchButton,
 } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
+function logout(){localStorage.removeItem('token');location.href='/login'}
 </script>
 
 <template>
@@ -49,7 +51,7 @@ const route = useRoute()
     <ElContainer>
       <ElHeader class="app-header">
         <h1>{{ route.meta.title }}</h1>
-        <ElTag type="success" effect="plain">本地轻量版</ElTag>
+        <div><ElTag type="success" effect="plain">本地轻量版</ElTag><ElButton text :icon="SwitchButton" @click="logout">退出</ElButton></div>
       </ElHeader>
       <ElMain class="app-main">
         <RouterView />

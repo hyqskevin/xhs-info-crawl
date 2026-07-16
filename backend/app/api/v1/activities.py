@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.activity import Activity
 from app.schemas.activity import ActivityCreate, ActivityRead, ActivityUpdate
+from app.services.dedup import create_duplicate_candidates
 
 
 router = APIRouter(prefix="/activities", tags=["activities"])
@@ -68,6 +69,8 @@ def create_activity(payload: ActivityCreate, _: auth, db: database):
     db.add(activity)
     db.commit()
     db.refresh(activity)
+    create_duplicate_candidates(db, activity)
+    db.commit()
     return {"code": 201, "message": "success", "data": serialize(activity)}
 
 

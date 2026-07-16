@@ -26,8 +26,8 @@ set -a
 source "$ROOT_DIR/.env"
 set +a
 
-uv sync --project backend
+uv sync --project backend --python 3.11 --extra ocr
 npm --prefix frontend install
-uv run --project backend python -c "from app.core.config import get_settings; from app.core.database import init_database; get_settings().ensure_runtime_directories(); init_database()"
+uv run --project backend --extra ocr python -c "import os; from app.core.config import get_settings; from app.core.database import SessionLocal,init_database; from app.services.maintenance import create_admin; get_settings().ensure_runtime_directories(); init_database(); db=SessionLocal(); create_admin(db,os.environ['ADMIN_USERNAME'],os.environ['ADMIN_PASSWORD']); db.close()"
 
 echo "初始化完成。使用 make dev-api、make dev-worker、make dev-beat、make dev-web 分别启动服务。"

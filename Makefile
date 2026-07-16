@@ -1,7 +1,13 @@
-.PHONY: init dev-api dev-worker dev-beat dev-web test test-e2e test-opencli build
+.PHONY: init migrate create-admin backup dev-api dev-worker dev-beat dev-web test test-e2e test-opencli build
 
 init:
 	./scripts/init.sh
+migrate:
+	cd backend && uv run alembic upgrade head
+create-admin:
+	./scripts/create-admin.sh
+backup:
+	./scripts/backup.sh
 
 dev-api:
 	./scripts/dev-api.sh

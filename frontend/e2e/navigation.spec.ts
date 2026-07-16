@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('token', 'e2e-token'))
   await page.route('**/api/v1/health', async (route) => {
     await route.fulfill({
       status: 200,
@@ -8,6 +9,11 @@ test.beforeEach(async ({ page }) => {
       body: JSON.stringify({ code: 200, message: 'success', data: { status: 'ok', database: 'sqlite' } }),
     })
   })
+  await page.route('**/api/v1/activities**', (route) => route.fulfill({ json: { data: { items: [] }, pagination: { total: 0 } } }))
+  await page.route('**/api/v1/duplicates**', (route) => route.fulfill({ json: { data: { items: [] } } }))
+  await page.route('**/api/v1/tasks**', (route) => route.fulfill({ json: { data: { items: [] } } }))
+  await page.route('**/api/v1/reports**', (route) => route.fulfill({ json: { data: [] } }))
+  await page.route('**/api/v1/settings/**', (route) => route.fulfill({ json: { data: [] } }))
 })
 
 test('dashboard renders service state without emoji icons', async ({ page }) => {

@@ -27,6 +27,17 @@ class GenerateRequest(BaseModel):
 def select_activities(db: Session, cities: list[str]) -> list[Activity]:
     return list(db.scalars(select(Activity).where(Activity.city_code.in_(cities), Activity.status == "APPROVED")).all())
 
+@router.get("")
+def list_reports(_: Annotated[dict[str,str],Depends(get_current_user)],db:Annotated[Session,Depends(get_db)]):
+    rows=db.scalars(select(WeeklyReport).order_by(WeeklyReport.id.desc())).all()
+    return {'code':200,'message':'success','data':[{'id':x.id,'week':x.week,'cities':json.loads(x.cities),'activity_count':x.activity_count,'status':x.status,'created_at':x.created_at.isoformat()} for x in rows]}
+
+@router.get("/{report_id}")
+def get_report(report_id:int,_:Annotated[dict[str,str],Depends(get_current_user)],db:Annotated[Session,Depends(get_db)]):
+    report=db.get(WeeklyReport,report_id)
+    if not report: raise HTTPException(404,'周报不存在')
+    return {'code':200,'message':'success','data':{'id':report.id,'week':report.week,'cities':json.loads(report.cities),'activity_count':report.activity_count,'status':report.status,'content':report.content}}
+
 
 @router.post("/generate")
 def generate_report(payload: GenerateRequest, _: Annotated[dict[str, str], Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):

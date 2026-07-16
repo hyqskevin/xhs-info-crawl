@@ -18,13 +18,13 @@
 
 | 待办 | 负责人 | 说明 |
 |------|--------|------|
-| 提供 MiniMax API Key | 用户 | 用于字段提取 |
+| 轮换 MiniMax API Key | 用户 | 当前密钥曾在聊天中明文发送，验收后应在控制台轮换 |
 | 确认城市列表 | 用户 | 第一版 1-3 个城市 |
 | 初始化关键词词库 | 用户 | 10-20 个核心关键词 |
 | 准备小红书账号 | 用户 | 用于 Chrome 登录 |
 | 确认服务器资源 | 用户 | CPU/内存/磁盘是否足够 |
-| 阶段一工程搭建 | 开发 | Vue、FastAPI、Celery、SQLite、本地文件和 filesystem broker |
-| 阶段一导出 | 开发 | 同时生成 Excel 和 Markdown |
+| 阶段一工程搭建 | 已完成 | Vue、FastAPI、Celery、SQLite、本地文件和 filesystem broker |
+| 阶段一导出 | 已完成 | 同时生成 Excel 和 Markdown |
 | 阶段二基础设施升级 | 开发 | PostgreSQL、Redis、MinIO、Docker Compose |
-| OpenCLI 命令验证 | 开发 | 验证 search/download/note 命令输出 |
-| 数据库迁移脚本 | 开发 | 初始化表结构 |
+| OpenCLI 命令验证 | 已完成 | 已验证 whoami、search、download 和 note 命令接口 |
+| 数据库迁移脚本 | 已完成 | Alembic 初始化迁移已提供 |

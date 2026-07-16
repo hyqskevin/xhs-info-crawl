@@ -10,6 +10,8 @@
 - Connectivity：通过
 - `xiaohongshu whoami`：登录成功
 - Cookie：由 OpenCLI 扩展从当前 Chrome 会话中复用；项目未读取、打印或持久化 Cookie 明文
+- 2026-07-16 最终复测：登录检查通过，只读搜索“上海 周末活动”返回 3 条近一周笔记。
+- 复测期间发现旧 daemon 占用 19825 但无响应；重启 daemon 后恢复。测试脚本现已区分错误码 69（浏览器连接）和 77（需要登录）。
 - 只读搜索：`上海 周末活动`，限制 3 条，成功返回结果
 
 复测命令：
@@ -30,3 +32,10 @@ make test-opencli
 - API Key：仅保存于被 Git 忽略的 `.env`，本记录不包含 Key
 
 由于 API Key 曾通过聊天传递，建议验证结束后在 MiniMax 控制台轮换密钥，并更新本地 `.env`。
+
+## PaddleOCR
+
+- Python：3.11.15（macOS arm64）
+- 已安装可选依赖：`paddleocr 3.7.0`、`paddlepaddle 3.3.1`
+- 业务适配器为 Celery Worker 内惰性单例；首次导入/首次模型下载可能较慢。
+- 确定性自动化测试使用假 OCR 引擎，不依赖网络下载模型；真实图片验收需将 `OCR_ENABLED=true` 并在首次运行时保持网络可用。

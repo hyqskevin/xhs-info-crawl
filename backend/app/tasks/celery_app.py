@@ -16,7 +16,7 @@ def create_celery_app(settings: Settings) -> Celery:
             "data_folder_out": str(queue_folder),
             "data_folder_processed": str(processed_folder),
         },
-        imports=("app.tasks.health",),
+        imports=("app.tasks.health", "app.tasks.crawl_task"),
         timezone=settings.celery_timezone,
         enable_utc=True,
         task_serializer="json",

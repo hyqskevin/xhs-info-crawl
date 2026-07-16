@@ -20,7 +20,7 @@
 | 6 | 活动 CRUD API | `test-activity-crud-api.md` | 10 | P0:7, P1:3 |
 | 7 | 任务调度 | `test-task-scheduling.md` | 10 | P0:6, P1:4 |
 | 8 | 周报生成 | `test-report-generation.md` | 9 | P0:6, P1:3 |
-| 9 | 前端 UI 与跳转 | `test-frontend-ui-e2e.md` | 13 | 已实现:6, 待实现:7 |
+| 9 | 前端 UI 与跳转 | `test-frontend-ui-e2e.md` | 13 | 已实现:13 |
 
 **总计：72 个测试用例**
 

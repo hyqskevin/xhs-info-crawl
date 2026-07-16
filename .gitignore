@@ -12,6 +12,7 @@ frontend/playwright-report/
 *.tsbuildinfo
 data/*
 !data/.gitkeep
+control/
 __pycache__/
 *.py[cod]
 *.log
