@@ -26,7 +26,7 @@
 | 术语 | 定义 |
 |------|------|
 | 笔记 | 小红书单篇帖子（Post/Note） |
-| 活动 | 从一篇或多篇笔记中提取出的本地活动信息 |
+| 活动 | 从一篇或多篇笔记中提取出的单个具体活动；一篇合集笔记可以拆出多条活动 |
 | 关键词词库 | 用于搜索的本地活动关键词集合 |
 | 博主白名单 | 重点关注的本地活动博主列表 |
 | 去重候选 | 系统判断可能重复的两条活动记录 |
@@ -82,6 +82,8 @@
 
 - When the scheduled weekly crawl task starts at Monday 02:00, the system shall execute keyword searches for all configured cities and keywords, then download notes and images.
 - When a note is successfully downloaded, the system shall trigger the OCR + field extraction pipeline within 5 minutes.
+- When a note or its images describe multiple concrete activities, the system shall extract an activity array and persist every activity separately instead of collapsing the note into one record.
+- When a crawl task stores source files, the system shall place the note Markdown, extracted-activity Markdown, Excel, and images under `data/archive/YYYY-MM-DD/task-{task_id}/`.
 - When an activity record is created or updated, the system shall recalculate duplicate candidates and flag high-confidence duplicates for review.
 - When a user clicks "Generate Weekly Report" in the admin panel, the system shall produce Excel and Markdown files grouped by city and activity type within 30 seconds.
 

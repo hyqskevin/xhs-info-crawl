@@ -17,6 +17,12 @@ class OpenCLIAdapter:
         try: return json.loads(output)
         except json.JSONDecodeError: return output
     def check_login(self): return self.run(['xiaohongshu','whoami','-f','json','--window','background'])
+    @staticmethod
+    def normalize_note(value:Any)->dict[str,Any]:
+        if isinstance(value,dict): return value
+        if isinstance(value,list) and all(isinstance(row,dict) and 'field' in row for row in value):
+            return {str(row['field']):row.get('value') for row in value}
+        raise OpenCLIError(f'unexpected note response: {type(value).__name__}')
     def _state(self)->str: return str(self.run(['browser',self.session,'state']))
     def _click_text_ref(self,state:str,text:str) -> None:
         match=re.search(rf'\[(\d+)\]<(?:div|span|button)[^>]*>[^\n]*{re.escape(text)}',state)
@@ -47,7 +53,7 @@ class OpenCLIAdapter:
             self.run(['browser',self.session,'scroll','down','--amount',str(self.settings.xhs_scroll_pixels)])
             self.run(['browser',self.session,'wait','time','1'])
         self.run(['browser',self.session,'close'])
-        return self.run(['xiaohongshu','note',url,'-f','json','--window','background'])
+        return self.normalize_note(self.run(['xiaohongshu','note',url,'-f','json','--window','background']))
     def download(self,url:str,output_dir:Path)->list[Path]:
         self.check_login(); output_dir.mkdir(parents=True,exist_ok=True)
         before={path.resolve() for path in output_dir.rglob('*') if path.is_file()}

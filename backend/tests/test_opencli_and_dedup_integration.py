@@ -6,6 +6,10 @@ from app.models.duplicate import DuplicateCandidate
 from app.services.dedup import create_duplicate_candidates
 from app.services.opencli_adapter import OpenCLIAdapter
 
+def test_note_field_value_rows_are_normalized_to_object():
+    rows=[{'field':'title','value':'活动标题'},{'field':'content','value':'活动正文'},{'field':'likes','value':12}]
+    assert OpenCLIAdapter.normalize_note(rows)=={'title':'活动标题','content':'活动正文','likes':12}
+
 def test_download_checks_login_and_returns_new_images(tmp_path:Path,monkeypatch):
     adapter=OpenCLIAdapter(Settings(project_root=tmp_path)); calls=[]
     def run(args):

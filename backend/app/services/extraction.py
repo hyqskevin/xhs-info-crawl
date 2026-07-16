@@ -22,3 +22,28 @@ def extract_activity_fields(text: str, now: datetime, llm: LLM | None) -> dict[s
         result.update({key: value for key, value in llm(text).items() if value is not None})
     result["status"] = "RAW" if result.get("start_time") and result.get("location") else "NEEDS_REVIEW"
     return result
+
+
+def extract_activities(text: str, now: datetime, llm: LLM | None) -> list[dict[str, Any]]:
+    """Extract every concrete activity; retain a rules-only single result when no LLM is configured."""
+    if llm is None:
+        result = extract_activity_fields(text, now, None)
+        result["source_image_indexes"] = []
+        return [result]
+    payload = llm(text)
+    rows = payload.get("activities") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError("MiniMax multi-activity response must contain an activities array")
+    normalized = []
+    for row in rows:
+        if not isinstance(row, dict) or not str(row.get("name") or "").strip():
+            continue
+        item = dict(row)
+        item["name"] = str(item["name"]).strip()
+        item["source_image_indexes"] = sorted({int(value) for value in item.get("source_image_indexes", []) if str(value).isdigit()})
+        confidence=item.get("confidence",0)
+        if isinstance(confidence,str): confidence={"high":0.9,"medium":0.6,"low":0.3}.get(confidence.lower(),0)
+        item["confidence"] = max(0.0,min(1.0,float(confidence or 0)))
+        item["status"] = "RAW" if item.get("start_time") and item.get("location") else "NEEDS_REVIEW"
+        normalized.append(item)
+    return normalized

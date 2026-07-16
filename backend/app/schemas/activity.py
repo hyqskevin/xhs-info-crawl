@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ActivityCreate(BaseModel):
@@ -33,5 +33,7 @@ class ActivityUpdate(BaseModel):
 class ActivityRead(ActivityCreate):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    note_id: int | None = None
+    source_image_indexes: list[int] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

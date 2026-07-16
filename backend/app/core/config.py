@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     minimax_base_url: str = "https://api.minimaxi.com/v1"
     minimax_model: str = "MiniMax-M3"
     minimax_chat_path: str = "/text/chatcompletion_v2"
+    minimax_timeout_seconds: int = 180
     ocr_enabled: bool = False
     ocr_language: str = "ch"
     ocr_min_confidence: float = 0.5
@@ -56,6 +57,7 @@ class Settings(BaseSettings):
     data_dir_setting: Path = Field(Path("./data"), validation_alias="DATA_DIR")
     image_dir_setting: Path = Field(Path("./data/images"), validation_alias="IMAGE_DIR")
     export_dir_setting: Path = Field(Path("./data/exports"), validation_alias="EXPORT_DIR")
+    archive_dir_setting: Path = Field(Path("./data/archive"), validation_alias="ARCHIVE_DIR")
     celery_folder_setting: Path = Field(Path("./data/celery"), validation_alias="CELERY_FOLDER")
 
     def resolve_project_path(self, path: Path) -> Path:
@@ -83,6 +85,11 @@ class Settings(BaseSettings):
 
     @computed_field
     @property
+    def archive_dir(self) -> Path:
+        return self.resolve_project_path(self.archive_dir_setting)
+
+    @computed_field
+    @property
     def celery_folder(self) -> Path:
         return self.resolve_project_path(self.celery_folder_setting)
 
@@ -102,6 +109,7 @@ class Settings(BaseSettings):
             self.sqlite_path.parent,
             self.image_dir,
             self.export_dir,
+            self.archive_dir,
             self.celery_folder / "queue",
             self.celery_folder / "processed",
         ):

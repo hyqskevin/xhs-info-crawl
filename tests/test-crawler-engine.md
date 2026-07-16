@@ -187,6 +187,19 @@ def test_filter_recent_notes_excludes_old_notes():
 - 笔记详情更新到数据库（title, content, likes, collects, comments）
 - 3 张图片通过统一 Storage 接口保存，返回 storage_key；阶段一写入本地目录，阶段二写入 MinIO
 - 3 条 `note_images` 记录创建，ocr_status = "pending"
+- 图片、`source.md`、`activities.md` 与 `activities.xlsx` 最终位于同一个 `data/archive/YYYY-MM-DD/task-{task_id}/` 目录。
+
+### TC-CRAWL-003A：日期归档与多活动导出
+
+**Given**：任务在 2026-07-16 执行，一篇笔记识别出 3 个活动和 16 张图片。
+
+**Then**：
+
+- 归档目录为 `data/archive/2026-07-16/task-{task_id}/`。
+- `images/` 包含 16 张原图。
+- `source.md` 包含原文链接和逐图 OCR 文字。
+- `activities.md` 包含 3 个活动，`activities.xlsx` 包含表头和 3 行数据。
+- 数据库生成 3 条活动，每条 `source_url` 均为原文链接。
 
 ```python
 def test_download_note_details_stores_all_data(

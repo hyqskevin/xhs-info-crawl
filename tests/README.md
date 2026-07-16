@@ -14,7 +14,7 @@
 |------|------|------|--------|------------|
 | 1 | 爬虫引擎 | `test-crawler-engine.md` | 10 | P0:6, P1:4 |
 | 2 | OCR 图片识别 | `test-ocr.md` | 6 | P0:4, P1:1, P2:1 |
-| 3 | 字段提取管道 | `test-extraction-pipeline.md` | 8 | P0:6, P1:2 |
+| 3 | 字段提取管道 | `test-extraction-pipeline.md` | 9 | P0:7, P1:2 |
 | 4 | 活动去重 | `test-activity-dedup.md` | 9 | P0:7, P1:2 |
 | 5 | 认证与用户管理 | `test-auth.md` | 10 | P0:7, P1:2, P2:1 |
 | 6 | 活动 CRUD API | `test-activity-crud-api.md` | 10 | P0:7, P1:3 |
@@ -22,7 +22,7 @@
 | 8 | 周报生成 | `test-report-generation.md` | 9 | P0:6, P1:3 |
 | 9 | 前端 UI 与跳转 | `test-frontend-ui-e2e.md` | 13 个编号 / 28 个浏览器场景 / 12 个组件模块场景 | 已实现:13 |
 
-**总计：72 个测试用例**
+**总计：73 个测试规格编号**
 
 可执行实现与最新运行结果见 `EXECUTION_STATUS.md`。本文件及各 `test-*.md` 是测试规格，不等同于全部已经实现的自动化代码。
 

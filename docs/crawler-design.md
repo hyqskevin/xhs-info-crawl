@@ -101,6 +101,31 @@ def run_keyword_crawl(task_id: int, city_code: str, keyword: str):
 
 ## 笔记详情下载
 
+### 日期任务归档
+
+阶段一本地文件统一按任务开始日期归档，不再把图片和导出文件分散保存：
+
+```text
+data/archive/YYYY-MM-DD/task-{task_id}/
+├── source.md
+├── activities.md
+├── activities.xlsx
+└── images/
+```
+
+- `source.md` 保存笔记标题、正文、原文链接及逐图 OCR 文字。
+- `activities.md` 与 `activities.xlsx` 每一项/每一行对应一个具体活动。
+- 图片保留原文件名；数据库 `note_images.storage_key` 保存相对 `data/` 的路径。
+- 同一任务抓取多篇笔记时，图片文件名必须包含笔记 ID，避免冲突。
+
+### 一篇笔记拆分多个活动
+
+PaddleOCR 对每张图片逐字识别后，系统以 `[IMAGE n]` 标记合并标题、正文和 OCR 文本。MiniMax-M3 必须返回 `activities` 数组；每个元素包含活动名称、时间、地点、费用、类型、摘要、置信度和 `source_image_indexes`。每个具体活动独立写入 `activities`，并共同保留原始笔记 `source_url`。
+
+缺少时间或地点的条目仍然入库并标记 `NEEDS_REVIEW`；不得把整篇合集笔记降维为一条活动。
+
+长 OCR 文本的 M3 推理超时由 `.env` 的 `MINIMAX_TIMEOUT_SECONDS` 控制，阶段一默认 180 秒。
+
 ```python
 def download_note_details(note_id: int, note_url: str):
     # 1. 调用 OpenCLI 获取笔记详情

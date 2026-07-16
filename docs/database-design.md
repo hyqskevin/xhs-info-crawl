@@ -37,6 +37,7 @@
 ┌────────────────────────────────────────────────────────────┐
 │                        activities                            │
 │  id, note_id, name, city_code, start_time, end_time,        │
+│  source_image_indexes, source_url,                           │
 │  location, price, type, source_url, summary, status,         │
 │  confidence, created_at, updated_at                          │
 └──────────────────────┬─────────────────────────────────────┘
@@ -166,6 +167,7 @@
 | id | SERIAL PK | 主键 |
 | note_id | INT FK | 主来源笔记 |
 | related_note_ids | INT[] | 关联笔记 ID 列表 |
+| source_image_indexes | JSON/INT[] | 提供该活动信息的归档图片序号 |
 | name | VARCHAR(256) | 活动名称 |
 | city_code | VARCHAR(32) FK | 城市 |
 | start_time | TIMESTAMP | 活动开始时间 |

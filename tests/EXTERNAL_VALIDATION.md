@@ -39,3 +39,12 @@ make test-opencli
 - 已安装可选依赖：`paddleocr 3.7.0`、`paddlepaddle 3.3.1`
 - 业务适配器为 Celery Worker 内惰性单例；首次导入/首次模型下载可能较慢。
 - 确定性自动化测试使用假 OCR 引擎，不依赖网络下载模型；真实图片验收需将 `OCR_ENABLED=true` 并在首次运行时保持网络可用。
+- 真实全链路任务 2：下载 16 张图片，PaddleOCR 16/16 成功，OCR 总文本 5683 字符。
+
+## 多活动抽取与日期归档
+
+- 真实笔记：1 篇上海周末活动合集。
+- MiniMax-M3：通过 Function Calling 从标题、正文和 16 张图片 OCR 文本中拆出 14 个具体活动。
+- SQLite：14 条 `activities`，均关联同一 `note_id`、保留原文 `source_url`，并包含 `source_image_indexes`。
+- 归档：`data/archive/2026-07-16/task-2/`，包含 16 张图片、`source.md`、`activities.md` 和 `activities.xlsx`。
+- Excel 数据行：14；Markdown 活动小节：14。

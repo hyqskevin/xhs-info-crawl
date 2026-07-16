@@ -5,7 +5,7 @@
 ## 当前结果
 
 ```text
-后端：66 passed, 1 skipped
+后端：71 passed, 1 skipped
 前端组件/模块：12 passed（11 个测试文件）
 前端 Playwright（Google Chrome）：28 passed
 生产构建：passed
@@ -27,6 +27,7 @@
 | 前端浏览器 E2E | 28 条场景：登录校验/成功/失败/守卫、仪表盘、5 个菜单跳转、活动新增/编辑/审核/删除/筛选/分页/详情、任务防重复/状态/日志、去重双栏/合并/忽略、周报生成/预览/MD/XLSX 下载、城市/关键词/博主配置与 OpenCLI 成功/认证失败 | `frontend/e2e/navigation.spec.ts`、`frontend/e2e/business.spec.ts`、`frontend/e2e/documented-flows.spec.ts` |
 | MiniMax | 国内官方端点配置、鉴权头、模型、JSON 解析与错误处理 | `backend/tests/test_minimax.py` |
 | OpenCLI 登录门禁 | `whoami` 必须先于 search；77 时停止 | `backend/tests/test_pipeline_services.py`、`scripts/test-opencli.sh` |
+| 多活动与日期归档 | 一篇笔记拆分多活动、来源图片编号、原文链接、日期/任务目录、MD/XLSX/图片同目录 | `backend/tests/test_multi_activity_archive.py` |
 
 ## 阶段一剩余增强项
 

@@ -281,23 +281,29 @@ def test_activity_type_classification(name, content, expected_type):
 
 ---
 
-## TC-EXTRACT-008: 完整管道 - 从笔记到活动
+## TC-EXTRACT-008: 完整管道 - 从笔记到多个具体活动
 
 **优先级**: P0
 **类型**: 集成测试
 **被测函数**: `process_note_to_activity(note_id)`
 
 ### Given
-- 一篇笔记，包含标题、正文、3 张图片的 OCR 文字
-- 所有文字合并后包含完整活动信息
+- 一篇合集笔记，包含标题、正文、3 张图片的 OCR 文字
+- 图片分别描述音乐会、市集和讲座
 
 ### When
-调用 `process_note_to_activity(note_id)`
+调用 `process_note_to_activities(note_id)`
 
 ### Then
-- 创建一条 activity 记录
-- 所有字段正确填充
-- status = "RAW"
+- 创建 3 条 activity 记录，不创建“合集笔记”占位活动
+- 每条记录写入 `note_id`、原文 `source_url` 和 `source_image_indexes`
+- 信息完整的记录为 `RAW`，缺少时间或地点的记录为 `NEEDS_REVIEW`
+
+## TC-EXTRACT-009: MiniMax-M3 多活动结构化输出
+
+**Given**：标题、正文和带 `[IMAGE n]` 标记的 OCR 文本包含多个活动。
+
+**Then**：MiniMax-M3 返回 `{ "activities": [...] }`；系统拒绝非数组根结构，并对每个元素单独校验和归一化。
 - confidence >= 0.5
 
 ```python
