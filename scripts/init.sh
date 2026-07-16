@@ -13,6 +13,19 @@ if [[ ! -f .env ]]; then
   echo "已创建 .env，请按需填写 SECRET_KEY、OPENCLI_CDP_ENDPOINT 和 MINIMAX_API_KEY。"
 fi
 
+while IFS= read -r line; do
+  if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+    key="${line%%=*}"
+    if ! grep -q "^${key}=" .env; then
+      printf '\n%s\n' "$line" >> .env
+    fi
+  fi
+done < .env.example
+
+set -a
+source "$ROOT_DIR/.env"
+set +a
+
 uv sync --project backend
 npm --prefix frontend install
 uv run --project backend python -c "from app.core.config import get_settings; from app.core.database import init_database; get_settings().ensure_runtime_directories(); init_database()"

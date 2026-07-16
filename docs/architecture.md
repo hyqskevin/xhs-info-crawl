@@ -90,8 +90,8 @@ xhs-info-crawl/
 - `storage/` 统一提供保存、读取、删除和生成访问地址能力；数据库只保存对象键或相对路径。
 - `tasks/` 统一任务派发与 Celery 配置；业务服务不得感知 broker URL。
 - 所有本地路径和连接信息都由环境变量或配置对象提供，不在业务代码中硬编码。
+- 所有环境相关和可部署调整的变量统一定义在根目录 `.env`；`.env.example` 必须列出完整变量及安全示例值。前端仅通过 `VITE_*` 读取允许暴露到浏览器的变量。
 
 ## 并发约束
 
 阶段一 SQLite 和 filesystem broker 面向单机低频批处理，Celery Worker 默认低并发运行，写事务保持短小，任务必须幂等。阶段二切换 PostgreSQL 与 Redis 后再提高 Worker 并发度。
-

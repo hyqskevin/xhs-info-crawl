@@ -22,3 +22,17 @@ def test_ensure_runtime_directories_creates_required_folders(tmp_path: Path) -> 
     assert settings.export_dir.is_dir()
     assert (settings.celery_folder / "queue").is_dir()
     assert (settings.celery_folder / "processed").is_dir()
+
+
+def test_runtime_paths_can_be_overridden_from_environment(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("DATA_DIR", "./runtime")
+    monkeypatch.setenv("IMAGE_DIR", "./assets/images")
+    monkeypatch.setenv("EXPORT_DIR", "./deliverables")
+    monkeypatch.setenv("CELERY_FOLDER", "./runtime/tasks")
+
+    settings = Settings(project_root=tmp_path)
+
+    assert settings.data_dir == tmp_path / "runtime"
+    assert settings.image_dir == tmp_path / "assets" / "images"
+    assert settings.export_dir == tmp_path / "deliverables"
+    assert settings.celery_folder == tmp_path / "runtime" / "tasks"

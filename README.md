@@ -20,6 +20,8 @@ make init
 
 该命令安装前后端依赖、创建 `.env`、建立 `data/` 运行目录并初始化 SQLite。阶段一不需要 Docker、PostgreSQL、Redis 或 MinIO。
 
+所有可调整的运行变量统一维护在根目录 `.env`。首次初始化会从 `.env.example` 复制；后端、Celery、前端及启动脚本均读取该文件。不要把真实密钥提交到 Git。
+
 ## 启动
 
 分别打开四个终端运行：

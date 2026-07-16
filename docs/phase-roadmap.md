@@ -81,6 +81,8 @@ Vue 管理端
 
 阶段一禁止在业务服务中硬编码 SQLite 文件路径、本地图片绝对路径或 filesystem broker 目录。相关差异必须集中在配置、数据库、storage 和 task-dispatcher 边界中。
 
+根目录 `.env` 是两阶段统一配置入口，`.env.example` 必须覆盖全部环境相关和可部署调整的变量。前端只能使用 `VITE_*` 变量，服务端密钥不得进入前端构建产物。
+
 ## 工程目录
 
 ```text

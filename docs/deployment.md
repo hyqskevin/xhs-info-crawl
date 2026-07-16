@@ -28,18 +28,9 @@ data/celery/queue/
 
 ### 阶段一环境变量
 
-```bash
-APP_ENV=development
-SECRET_KEY=replace_me
-JWT_EXPIRE_HOURS=24
-DATABASE_URL=sqlite:///./data/app.db
-CELERY_BROKER_URL=filesystem://
-CELERY_BROKER_FOLDER=./data/celery
-LOCAL_IMAGE_DIR=./data/images
-EXPORT_DIR=./data/exports
-OPENCLI_CDP_ENDPOINT=http://localhost:9222
-MINIMAX_API_KEY=
-```
+根目录 `.env` 是阶段一唯一运行配置入口。API、Celery、前端和启动脚本均加载该文件；新增可配置项时必须同步更新 `.env.example`，不得在代码或脚本中新增环境相关硬编码。
+
+完整变量清单以仓库根目录 `.env.example` 为准，包括应用、API/前端端口、CORS、数据库、本地目录、Celery、定时任务、抓取限制和外部服务配置。`make init` 会在保留 `.env` 已有值的前提下补充后来新增的变量。
 
 ## 阶段二：完整技术栈部署
 

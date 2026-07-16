@@ -17,7 +17,7 @@ def create_celery_app(settings: Settings) -> Celery:
             "data_folder_processed": str(processed_folder),
         },
         imports=("app.tasks.health",),
-        timezone="Asia/Shanghai",
+        timezone=settings.celery_timezone,
         enable_utc=True,
         task_serializer="json",
         accept_content=["json"],
@@ -25,7 +25,11 @@ def create_celery_app(settings: Settings) -> Celery:
         beat_schedule={
             "weekly-crawl": {
                 "task": "app.tasks.health.ping",
-                "schedule": crontab(minute=0, hour=2, day_of_week=1),
+                "schedule": crontab(
+                    minute=settings.weekly_crawl_minute,
+                    hour=settings.weekly_crawl_hour,
+                    day_of_week=settings.weekly_crawl_day_of_week,
+                ),
             }
         },
     )

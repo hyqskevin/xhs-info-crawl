@@ -4,4 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-exec npm --prefix frontend run dev -- --host 127.0.0.1
+set -a
+source "$ROOT_DIR/.env"
+set +a
+
+exec npm --prefix frontend run dev -- --host "$WEB_HOST" --port "$WEB_PORT"
