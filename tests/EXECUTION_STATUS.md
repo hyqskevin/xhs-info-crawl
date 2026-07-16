@@ -6,7 +6,7 @@
 
 ```text
 后端：66 passed, 1 skipped
-前端组件：1 passed
+前端组件/模块：12 passed（11 个测试文件）
 前端 Playwright（Google Chrome）：28 passed
 生产构建：passed
 ```
@@ -23,7 +23,7 @@
 | 处理服务 | 去重评分与合并、规则/LLM 提取、OCR 成功/空/失败/批量/置信度、OpenCLI 错误映射与近 7 天过滤、任务锁 | `backend/tests/test_pipeline_services.py` |
 | E2E | 登录→创建活动→审核→筛选→生成周报→下载 MD/XLSX | `backend/tests/test_e2e_workflow.py` |
 | 脚手架 | 配置、SQLite、本地存储、Celery filesystem broker、健康检查、`.env`、启动脚本 | `backend/tests/test_*.py` |
-| 前端 | 仪表盘组件与后端健康状态 | `frontend/src/views/DashboardView.spec.ts` |
+| 前端组件/模块 | App、布局、7 个页面组件、路由守卫、HTTP Token 请求头 | `frontend/src/**/*.spec.ts`，共 11 个文件、12 条场景 |
 | 前端浏览器 E2E | 28 条场景：登录校验/成功/失败/守卫、仪表盘、5 个菜单跳转、活动新增/编辑/审核/删除/筛选/分页/详情、任务防重复/状态/日志、去重双栏/合并/忽略、周报生成/预览/MD/XLSX 下载、城市/关键词/博主配置与 OpenCLI 成功/认证失败 | `frontend/e2e/navigation.spec.ts`、`frontend/e2e/business.spec.ts`、`frontend/e2e/documented-flows.spec.ts` |
 | MiniMax | 国内官方端点配置、鉴权头、模型、JSON 解析与错误处理 | `backend/tests/test_minimax.py` |
 | OpenCLI 登录门禁 | `whoami` 必须先于 search；77 时停止 | `backend/tests/test_pipeline_services.py`、`scripts/test-opencli.sh` |

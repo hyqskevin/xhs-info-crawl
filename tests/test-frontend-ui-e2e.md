@@ -7,7 +7,25 @@
 - 前端接口通过 Playwright route mock 或真实 FastAPI 测试环境提供
 - UI 禁止使用 Emoji 图标，菜单图标必须来自 `@element-plus/icons-vue`
 
-## 已实现用例与浏览器覆盖
+## 双层覆盖矩阵
+
+每个实际使用的 Vue 组件必须有 Vitest 组件测试；每个可访问页面必须有 Playwright 浏览器功能测试。公共根组件、布局、路由和 HTTP 客户端不单独对应页面 URL，因此使用模块测试，并由各页面浏览器流程间接验证集成行为。
+
+| 组件/模块 | Vitest 文件 | Chrome 功能场景 |
+|---|---|---|
+| `App.vue` | `src/App.spec.ts` | 所有路由页面启动均覆盖 |
+| `AppLayout.vue` | `src/layouts/AppLayout.spec.ts` | TC-UI-002～006 菜单跳转 |
+| `LoginView.vue` | `src/views/LoginView.spec.ts` | TC-UI-007 |
+| `DashboardView.vue` | `src/views/DashboardView.spec.ts` | TC-UI-001 |
+| `ActivitiesView.vue` | `src/views/ActivitiesView.spec.ts` | TC-UI-008～009 |
+| `TasksView.vue` | `src/views/TasksView.spec.ts` | TC-UI-010 |
+| `DuplicatesView.vue` | `src/views/DuplicatesView.spec.ts` | TC-UI-011 |
+| `ReportsView.vue` | `src/views/ReportsView.spec.ts` | TC-UI-012 |
+| `SettingsView.vue` | `src/views/SettingsView.spec.ts` | TC-UI-013 |
+| 路由守卫 | `src/router/index.spec.ts` | TC-UI-007 未登录/已登录跳转 |
+| HTTP 鉴权 | `src/api/http.spec.ts` | 登录后全部业务请求 |
+
+未被路由或其他组件引用的 `PlaceholderView.vue` 已删除，不作为产品组件保留。
 
 ### TC-UI-001：仪表盘加载
 
@@ -82,7 +100,7 @@
 - `frontend/e2e/documented-flows.spec.ts`：校验、异常、分页、防重复、双栏、下载等完整分支。
 - `frontend/e2e/navigation.spec.ts`：仪表盘、Emoji 禁止规则与菜单跳转。
 
-当前共有 13 个文档用例编号，对应 28 条可独立执行的 Chrome 浏览器场景。
+当前共有 13 个文档用例编号，对应 28 条可独立执行的 Chrome 浏览器场景；组件/模块层共有 11 个 Vitest 文件、12 条场景。
 
 ## 运行
 
