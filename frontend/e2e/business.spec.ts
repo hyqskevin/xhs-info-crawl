@@ -72,6 +72,7 @@ test.describe('已登录业务流程', () => {
 
   test('TC-UI-011 合并重复活动', async ({ page }) => {
     let merged = false
+    await page.route('**/api/v1/activities/*', (route) => route.fulfill({ json: response({ id: 10, name: '活动', start_time: '2026-07-18T10:00:00Z', location: '静安' }) }))
     await page.route('**/api/v1/duplicates**', async (route) => {
       if (route.request().method() === 'POST') {
         merged = true
