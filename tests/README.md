@@ -23,6 +23,8 @@
 
 **总计：72 个测试用例**
 
+可执行实现与最新运行结果见 `EXECUTION_STATUS.md`。本文件及各 `test-*.md` 是测试规格，不等同于全部已经实现的自动化代码。
+
 ## 分阶段执行
 
 - 阶段一执行除 Flower 之外的核心契约，并使用 SQLite、本地文件系统和 Celery filesystem broker；报告测试必须覆盖 `.xlsx` 与 `.md` 双格式。

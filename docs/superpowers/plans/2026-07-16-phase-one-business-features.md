@@ -17,31 +17,31 @@
 
 ### Task 1: Authentication and database models
 
-- [ ] Convert TC-AUTH-001 through TC-AUTH-009 into pytest tests; mark optional refresh TC-AUTH-010 skipped.
-- [ ] Verify RED, then implement users, JWT, password hashing, dependencies, and login API.
-- [ ] Verify authentication tests and commit.
+- [x] Convert TC-AUTH-001 through TC-AUTH-009 into pytest tests; mark optional refresh TC-AUTH-010 skipped.
+- [x] Verify RED, then implement users, JWT, password hashing, dependencies, and login API.
+- [x] Verify authentication tests and commit.
 
 ### Task 2: Activity CRUD API
 
-- [ ] Convert TC-ACT-001 through TC-ACT-010 into real SQLite API tests.
-- [ ] Verify RED, then implement activity model, schemas, filters, state validation, and CRUD routes.
-- [ ] Verify activity tests and commit.
+- [x] Convert TC-ACT-001 through TC-ACT-010 into real SQLite API tests.
+- [x] Verify RED, then implement activity model, schemas, filters, state validation, and CRUD routes.
+- [x] Verify activity tests and commit.
 
 ### Task 3: Markdown and Excel reports
 
-- [ ] Convert TC-REPORT-001 through TC-REPORT-009 into service/API tests.
-- [ ] Verify RED, then implement report persistence, Markdown/XLSX generation, regeneration, and downloads.
-- [ ] Verify report tests and commit.
+- [x] Convert TC-REPORT-001 through TC-REPORT-009 into service/API tests.
+- [x] Verify RED, then implement report persistence, Markdown/XLSX generation, regeneration, and downloads.
+- [x] Verify report tests and commit.
 
 ### Task 4: Scheduling and deduplication
 
-- [ ] Convert task scheduling and deduplication specifications into executable tests.
+- [ ] Convert task scheduling and deduplication specifications into executable tests. (service core covered; task/dedup APIs pending)
 - [ ] Implement task records, locking, state transitions, retries, similarity scoring, merge, and ignore behavior.
 - [ ] Verify and commit.
 
 ### Task 5: Extraction, OCR, and crawler adapters
 
-- [ ] Convert extraction, OCR, and crawler specifications into executable boundary tests.
+- [ ] Convert extraction, OCR, and crawler specifications into executable boundary tests. (core boundary cases covered; full adapter cases pending)
 - [ ] Implement rules-first extraction, MiniMax fallback interface, PaddleOCR adapter, and OpenCLI adapter with typed errors and rate limits.
 - [ ] Verify and commit.
 
