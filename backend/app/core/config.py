@@ -49,6 +49,9 @@ class Settings(BaseSettings):
 
     @property
     def effective_database_url(self) -> str:
+        if self.database_url and self.database_url.startswith("sqlite:///./"):
+            relative_path = self.database_url.removeprefix("sqlite:///./")
+            return f"sqlite:///{(self.project_root / relative_path).resolve()}"
         return self.database_url or f"sqlite:///{self.sqlite_path}"
 
     def ensure_runtime_directories(self) -> None:
