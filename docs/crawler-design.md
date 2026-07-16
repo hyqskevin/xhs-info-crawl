@@ -43,6 +43,18 @@ opencli xiaohongshu search --keyword "上海 周末活动" --limit 10 -f json
 
 ## 抓取流程
 
+### 登录态与 Cookie 前置检查
+
+每次搜索、笔记详情或图片下载前必须先调用 `opencli xiaohongshu whoami -f json`。OpenCLI 通过浏览器扩展从当前 Chrome 会话中获取并复用 Cookie；应用不得读取、打印、写入日志、写入数据库或保存 Cookie 明文。
+
+若检查返回错误码 77 / `AUTH_REQUIRED`：
+
+1. 当前抓取任务切换为 `PAUSED`。
+2. 停止后续搜索、详情和下载命令。
+3. 管理端提示用户在当前 Chrome 登录小红书。
+4. 用户登录后点击“测试连接”或“重试”，系统重新执行 `whoami`。
+5. 仅当登录检查通过后才恢复爬虫流程。
+
 ```python
 def run_keyword_crawl(task_id: int, city_code: str, keyword: str):
     # 1. 调用 OpenCLI 搜索

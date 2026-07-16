@@ -15,6 +15,7 @@
 | 接口文档 | `api-doc.md` | REST API 定义 |
 | 数据库设计 | `database-design.md` | 表结构与 ER 图 |
 | 爬虫设计 | `crawler-design.md` | OpenCLI 爬虫设计 |
+| PaddleOCR 配置 | `paddleocr-setup.md` | 本地 CPU/GPU 安装、环境变量与验证 |
 | 技术栈与架构 | `architecture.md` | 两阶段技术选型、工程边界与目录结构 |
 | 分阶段交付 | `phase-roadmap.md` | 阶段一本地轻量版、阶段二完整技术栈及迁移边界 |
 | 安全与高并发 | `security.md` | 安全、合规、稳定性 |

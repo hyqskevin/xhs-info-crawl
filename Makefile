@@ -1,4 +1,4 @@
-.PHONY: init dev-api dev-worker dev-beat dev-web test build
+.PHONY: init dev-api dev-worker dev-beat dev-web test test-e2e test-opencli build
 
 init:
 	./scripts/init.sh
@@ -18,6 +18,12 @@ dev-web:
 test:
 	uv run --project backend pytest backend/tests -q
 	npm --prefix frontend test -- --run
+
+test-e2e:
+	npm --prefix frontend run test:e2e
+
+test-opencli:
+	./scripts/test-opencli.sh
 
 build:
 	npm --prefix frontend run build

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.crawler import AuthenticationRequired, OpenCLIError, OpenCLITimeout, filter_recent_notes, map_opencli_error
+from app.services.crawler import AuthenticationRequired, OpenCLIError, OpenCLITimeout, check_login, filter_recent_notes, map_opencli_error, search_notes
 from app.services.dedup import classify_similarity, merge_activities, similarity_score
 from app.services.extraction import extract_activity_fields
 from app.services.ocr import OCRService
@@ -61,6 +61,35 @@ def test_crawler_filters_recent_notes_and_maps_typed_errors() -> None:
     assert isinstance(map_opencli_error(75), OpenCLITimeout)
     assert isinstance(map_opencli_error(77), AuthenticationRequired)
     assert isinstance(map_opencli_error(78), OpenCLIError)
+
+
+def test_crawler_checks_login_before_search_and_pauses_on_auth_error() -> None:
+    calls: list[list[str]] = []
+
+    def runner(command: list[str]) -> dict[str, object]:
+        calls.append(command)
+        return {"ok": False, "error": {"exitCode": 77, "code": "AUTH_REQUIRED"}}
+
+    with pytest.raises(AuthenticationRequired):
+        search_notes("上海 周末活动", 3, runner)
+    assert len(calls) == 1
+    assert calls[0][1:3] == ["xiaohongshu", "whoami"]
+
+
+def test_crawler_searches_only_after_login_check_passes() -> None:
+    calls: list[list[str]] = []
+
+    def runner(command: list[str]) -> dict[str, object]:
+        calls.append(command)
+        if command[2] == "whoami":
+            return {"ok": True, "data": {"logged_in": True}}
+        return {"ok": True, "data": [{"title": "周末活动"}]}
+
+    assert check_login(runner) is True
+    result = search_notes("上海 周末活动", 3, runner)
+    assert result == [{"title": "周末活动"}]
+    assert calls[-2][2] == "whoami"
+    assert calls[-1][2] == "search"
 
 
 def test_task_lock_prevents_concurrent_runs_and_releases() -> None:

@@ -29,6 +29,26 @@ def mock_minio():
         yield mock
 ```
 
+## 登录态前置门禁（所有爬虫案例共用）
+
+- 所有搜索、详情和下载操作前必须先执行 `opencli xiaohongshu whoami -f json`。
+- OpenCLI 通过浏览器扩展从当前 Chrome 登录会话复用 Cookie；系统不得打印、返回或持久化 Cookie 明文。
+- 登录检查返回错误码 77 / `AUTH_REQUIRED` 时，任务立即进入 `PAUSED`，前端提示“请在 Chrome 登录小红书后重试”。
+- 登录失败后禁止继续执行搜索、详情或下载命令。
+- 用户完成登录后，通过“测试连接”或“重试任务”重新执行登录检查；只有检查通过才继续爬虫操作。
+
+### TC-CRAWL-000：登录态检查与 Cookie 复用
+
+**Given**：Chrome 已连接 OpenCLI 扩展；登录态可能有效或过期。
+
+**When**：准备执行任意爬虫操作。
+
+**Then**：
+
+- 先执行 `whoami`；成功时才执行目标命令。
+- 错误码 77 时任务暂停，目标命令调用次数为 0。
+- 不记录 Cookie 明文，仅由 OpenCLI 在内存中复用浏览器会话。
+
 ---
 
 ## TC-CRAWL-001: 关键词搜索 - 正常流程

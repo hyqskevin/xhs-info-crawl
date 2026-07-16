@@ -88,6 +88,7 @@
 #### Unwanted（异常处理）
 
 - If the 小红书 login session expires (OpenCLI returns authentication error), the system shall pause the crawl task and send an alert to the administrator.
+- Before every OpenCLI search, note-detail, or download operation, the system shall run a login check and reuse the Cookie from the connected Chrome session without logging or persisting Cookie plaintext. On error code 77, it shall pause and wait for the user to log in before retrying.
 - If OCR fails on an image, the system shall mark the image as "OCR_FAILED" and continue processing other images from the same note.
 - If the field extraction pipeline fails to identify a required field (e.g., event time), the system shall mark the activity as "NEEDS_REVIEW" and include it in the admin review queue.
 - If a duplicate candidate confidence score is between 0.4 and 0.7, the system shall place it in the manual review queue instead of auto-merging.

@@ -5,8 +5,9 @@
 ## 当前结果
 
 ```text
-后端：47 passed, 1 skipped
-前端：1 passed
+后端：54 passed, 1 skipped
+前端组件：1 passed
+前端 Playwright：6 passed
 生产构建：passed
 ```
 
@@ -23,6 +24,9 @@
 | E2E | 登录→创建活动→审核→筛选→生成周报→下载 MD/XLSX | `backend/tests/test_e2e_workflow.py` |
 | 脚手架 | 配置、SQLite、本地存储、Celery filesystem broker、健康检查、`.env`、启动脚本 | `backend/tests/test_*.py` |
 | 前端 | 仪表盘组件与后端健康状态 | `frontend/src/views/DashboardView.spec.ts` |
+| 前端浏览器 E2E | 仪表盘、Element Plus 菜单按钮和 5 个路由跳转 | `frontend/e2e/navigation.spec.ts` |
+| MiniMax | 国内官方端点配置、鉴权头、模型、JSON 解析与错误处理 | `backend/tests/test_minimax.py` |
+| OpenCLI 登录门禁 | `whoami` 必须先于 search；77 时停止 | `backend/tests/test_pipeline_services.py`、`scripts/test-opencli.sh` |
 
 ## 尚未完成
 
@@ -32,7 +36,7 @@
 - PaddleOCR 大图片预处理的真实适配器案例。
 - MiniMax HTTP 客户端失败与结构化响应案例。
 - Vue 登录、活动管理、任务、去重审核和周报页面。
-- Playwright 浏览器 E2E；当前 E2E 为真实 FastAPI + SQLite 的 API 业务闭环测试。
+- Playwright 的业务表单 E2E 尚待对应 Vue 页面实现；当前已覆盖管理端外壳、菜单按钮和路由跳转。
 
 ## 运行命令
 
@@ -40,4 +44,5 @@
 uv run --project backend pytest backend/tests -q
 npm --prefix frontend test -- --run
 npm --prefix frontend run build
+npm --prefix frontend run test:e2e
 ```
