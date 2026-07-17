@@ -36,7 +36,13 @@ class OpenCLIAdapter:
                 f'opencli 内部命令超时（exit 75）：{stderr}；可调大 .env 中的 OPENCLI_BROWSER_COMMAND_TIMEOUT'
             )
         if result.returncode:
-            raise OpenCLIError(result.stderr.strip() or output)
+            stderr = result.stderr.strip() or output
+            # opencli 在 url/参数为空时返回 "✖ Missing url"
+            if 'Missing url' in stderr:
+                raise OpenCLIError(
+                    f'opencli 缺少 url 参数：{args}；请检查笔记/博主链接是否为空'
+                )
+            raise OpenCLIError(stderr)
         try:
             return json.loads(output)
         except json.JSONDecodeError:
@@ -60,6 +66,8 @@ class OpenCLIAdapter:
             if self.run(['browser',self.session,'eval',probe]): return
         raise OpenCLIError('filter option not found: 最新')
     def search_recent(self,query:str,recent_filter:str='一周内')->list[dict[str,Any]]:
+        if not query or not query.strip():
+            raise OpenCLIError(f'search_recent: 查询关键词为空（query={query!r}）')
         self.check_login(); url=f'https://www.xiaohongshu.com/search_result?keyword={quote_plus(query)}'
         self.run(['browser',self.session,'open',url,'--window','background']); self.run(['browser',self.session,'wait','time','2'])
         self._open_filter_panel(); self._click_filter_option('最新')
@@ -75,6 +83,8 @@ class OpenCLIAdapter:
             previous=len(items); self.run(['browser',self.session,'scroll','down','--amount',str(self.settings.xhs_scroll_pixels)]); self.run(['browser',self.session,'wait','time','1'])
         self.run(['browser',self.session,'close']); return items[:self.settings.xhs_search_target_count]
     def note(self,url:str)->dict[str,Any]:
+        if not url or not url.strip():
+            raise OpenCLIError(f'note: 笔记 url 为空，无法抓取详情')
         self.check_login()
         self.run(['browser',self.session,'open',url,'--window','background']); self.run(['browser',self.session,'wait','time','2'])
         previous=0; stagnant=0
@@ -88,6 +98,8 @@ class OpenCLIAdapter:
         self.run(['browser',self.session,'close'])
         return self.normalize_note(self.run(['xiaohongshu','note',url,'-f','json','--window','background']))
     def blogger_notes(self,profile_url:str)->list[dict[str,Any]]:
+        if not profile_url or not profile_url.strip():
+            raise OpenCLIError(f'blogger_notes: 博主 profile_url 为空，跳过该博主')
         self.check_login(); self.run(['browser',self.session,'open',profile_url,'--window','background']); self.run(['browser',self.session,'wait','time','2'])
         script=r"""(() => Array.from(document.querySelectorAll('a[href*="/explore/"]')).map(a => ({title:(a.textContent||'博主笔记').trim(),url:new URL(a.getAttribute('href'),location.origin).href})).filter((x,i,all)=>all.findIndex(y=>y.url===x.url)===i))()"""
         items=[]; previous=0; stagnant=0
@@ -99,6 +111,8 @@ class OpenCLIAdapter:
             previous=len(items); self.run(['browser',self.session,'scroll','down','--amount',str(self.settings.xhs_scroll_pixels)]); self.run(['browser',self.session,'wait','time','1'])
         self.run(['browser',self.session,'close']); return items[:self.settings.xhs_search_target_count]
     def download(self,url:str,output_dir:Path)->list[Path]:
+        if not url or not url.strip():
+            raise OpenCLIError(f'download: 笔记 url 为空，无法下载图片')
         self.check_login(); output_dir.mkdir(parents=True,exist_ok=True)
         before={path.resolve() for path in output_dir.rglob('*') if path.is_file()}
         self.run(['xiaohongshu','download',url,'--output',str(output_dir),'-f','json','--window','background'])

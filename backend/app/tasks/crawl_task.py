@@ -73,20 +73,24 @@ def finish_stop_if_requested(db, task_id: int) -> bool:
 
 
 def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAdapter, settings) -> bool:
-    if prepare_existing_note(db, item["url"]):
+    note_url = (item.get("url") or "").strip()
+    if not note_url:
+        log(db, task.id, "WARNING", f"跳过笔记：url 为空 title={item.get('title', '')!r}")
+        return False
+    if prepare_existing_note(db, note_url):
         return False
 
     attempts = settings.pipeline_stage_max_retries
     delay = settings.pipeline_stage_retry_delay_seconds
     started_at = task.started_at or datetime.now(timezone.utc)
-    set_progress(db, task, "DOWNLOADING", item.get("title") or item["url"])
-    detail = run_stage(lambda: adapter.note(item["url"]), attempts, delay)
+    set_progress(db, task, "DOWNLOADING", item.get("title") or note_url)
+    detail = run_stage(lambda: adapter.note(note_url), attempts, delay)
     note = Note(
         task_id=task.id,
-        platform_note_id=item["url"].split("/")[-1].split("?")[0],
+        platform_note_id=note_url.split("/")[-1].split("?")[0],
         title=item.get("title", ""),
         content=detail.get("content", ""),
-        source_url=item["url"],
+        source_url=note_url,
         city_code=city,
         status="DOWNLOADED",
         raw_data=detail,
@@ -95,7 +99,7 @@ def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAda
     db.flush()
     folder = archive_task_folder(settings.archive_dir, started_at, task.id)
     download_dir = folder / ".downloads" / note.platform_note_id
-    images = run_stage(lambda: adapter.download(item["url"], download_dir), attempts, delay)
+    images = run_stage(lambda: adapter.download(note_url, download_dir), attempts, delay)
     task.downloaded_notes += 1
     db.commit()
 
@@ -213,7 +217,11 @@ def run_crawl(self, task_id: int):
                 if blogger_ids:
                     bloggers = list(db.scalars(select(Blogger).where(Blogger.id.in_(blogger_ids), Blogger.city_code == city.code, Blogger.enabled.is_(True))).all())
                     for blogger in bloggers:
-                        results.extend((city.code, item) for item in adapter.blogger_notes(blogger.profile_url))
+                        profile_url = (blogger.profile_url or "").strip()
+                        if not profile_url:
+                            log(db, task.id, "WARNING", f"跳过博主：profile_url 为空 id={blogger.id} name={blogger.name!r}")
+                            continue
+                        results.extend((city.code, item) for item in adapter.blogger_notes(profile_url))
         else:
             for city_code in requested_cities:
                 for keyword in task.params.get("keywords", []):

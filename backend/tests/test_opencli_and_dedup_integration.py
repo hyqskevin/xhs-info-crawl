@@ -1,5 +1,6 @@
 from datetime import datetime,timezone
 from pathlib import Path
+import subprocess
 from app.core.config import Settings
 from app.models.activity import Activity
 from app.models.duplicate import DuplicateCandidate
@@ -9,6 +10,66 @@ from app.services.opencli_adapter import OpenCLIAdapter
 def test_note_field_value_rows_are_normalized_to_object():
     rows=[{'field':'title','value':'活动标题'},{'field':'content','value':'活动正文'},{'field':'likes','value':12}]
     assert OpenCLIAdapter.normalize_note(rows)=={'title':'活动标题','content':'活动正文','likes':12}
+
+def test_note_rejects_empty_url(tmp_path:Path,monkeypatch):
+    from app.services.crawler import OpenCLIError
+    adapter=OpenCLIAdapter(Settings(project_root=tmp_path))
+    called=False
+    def run(args):
+        nonlocal called; called=True; return {}
+    monkeypatch.setattr(adapter,'run',run)
+    for bad in ['', None, '   ']:
+        try:
+            adapter.note(bad)
+        except OpenCLIError as exc:
+            assert '笔记 url 为空' in str(exc)
+        else:
+            raise AssertionError(f'expected OpenCLIError for url={bad!r}')
+    assert called is False, 'run() should not be invoked when url is empty'
+
+def test_blogger_notes_rejects_empty_profile_url(tmp_path:Path,monkeypatch):
+    from app.services.crawler import OpenCLIError
+    adapter=OpenCLIAdapter(Settings(project_root=tmp_path))
+    called=False
+    def run(args):
+        nonlocal called; called=True; return []
+    monkeypatch.setattr(adapter,'run',run)
+    for bad in ['', None, '   ']:
+        try:
+            adapter.blogger_notes(bad)
+        except OpenCLIError as exc:
+            assert 'profile_url 为空' in str(exc)
+        else:
+            raise AssertionError(f'expected OpenCLIError for profile_url={bad!r}')
+    assert called is False
+
+def test_download_rejects_empty_url(tmp_path:Path,monkeypatch):
+    from app.services.crawler import OpenCLIError
+    adapter=OpenCLIAdapter(Settings(project_root=tmp_path))
+    called=False
+    def run(args):
+        nonlocal called; called=True; return {}
+    monkeypatch.setattr(adapter,'run',run)
+    try:
+        adapter.download('', tmp_path/'out')
+    except OpenCLIError as exc:
+        assert '笔记 url 为空' in str(exc)
+    else:
+        raise AssertionError('expected OpenCLIError for empty url')
+    assert called is False
+
+def test_run_translates_missing_url_error(tmp_path:Path,monkeypatch):
+    from app.services.crawler import OpenCLIError
+    adapter=OpenCLIAdapter(Settings(project_root=tmp_path))
+    fake_result = type('R', (), {'stdout': '', 'stderr': '✖  Missing url\n', 'returncode': 1})()
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: fake_result)
+    try:
+        adapter.run(['browser', adapter.session, 'open', '', '--window', 'background'])
+    except OpenCLIError as exc:
+        msg = str(exc)
+        assert 'Missing url' in msg or '缺少 url' in msg
+    else:
+        raise AssertionError('expected OpenCLIError for missing url from opencli')
 
 def test_download_checks_login_and_returns_new_images(tmp_path:Path,monkeypatch):
     adapter=OpenCLIAdapter(Settings(project_root=tmp_path)); calls=[]
