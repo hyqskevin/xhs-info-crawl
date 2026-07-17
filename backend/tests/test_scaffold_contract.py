@@ -1,6 +1,9 @@
 import os
 from pathlib import Path
 
+from app.core.config import Settings
+from app.models.task import CrawlTask
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -51,8 +54,17 @@ def test_environment_example_contains_phase_one_settings() -> None:
         "XHS_DETAIL_SCROLL_MAX_ROUNDS=8",
         "XHS_SCROLL_PIXELS=800",
         "XHS_SCROLL_STAGNANT_ROUNDS=2",
+        "PIPELINE_STAGE_MAX_RETRIES=2",
+        "PIPELINE_STAGE_RETRY_DELAY_SECONDS=2",
     ):
         assert key in content
+
+
+def test_pipeline_progress_fields_and_retry_settings_exist() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.pipeline_stage_max_retries == 2
+    assert settings.pipeline_stage_retry_delay_seconds == 2
+    assert {"current_stage", "downloaded_notes", "ocr_notes", "extracted_notes", "current_note"}.issubset(CrawlTask.__table__.columns.keys())
 
 
 def test_runtime_scripts_load_root_environment_file() -> None:

@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     xhs_detail_scroll_max_rounds: int = 8
     xhs_scroll_pixels: int = 800
     xhs_scroll_stagnant_rounds: int = 2
+    pipeline_stage_max_retries: int = 2
+    pipeline_stage_retry_delay_seconds: float = 2
     data_dir_setting: Path = Field(Path("./data"), validation_alias="DATA_DIR")
     image_dir_setting: Path = Field(Path("./data/images"), validation_alias="IMAGE_DIR")
     export_dir_setting: Path = Field(Path("./data/exports"), validation_alias="EXPORT_DIR")
