@@ -5,7 +5,7 @@
 ## 当前结果
 
 ```text
-后端：73 passed, 1 skipped
+后端：75 passed, 1 skipped
 前端组件/模块：13 passed（11 个测试文件）
 前端 Playwright（Google Chrome）：28 passed
 生产构建：passed
@@ -26,7 +26,7 @@
 | 前端组件/模块 | App、布局、7 个页面组件、路由守卫、HTTP Token 请求头 | `frontend/src/**/*.spec.ts`，共 11 个文件、12 条场景 |
 | 前端浏览器 E2E | 登录校验/成功/失败/守卫、菜单跳转、仪表盘配置化抓取、活动无新增入口/编辑审核/删除/城市与日期筛选/分页/详情、纯监控任务日志、去重处理后移除、周报、城市组合配置与 OpenCLI | `frontend/e2e/navigation.spec.ts`、`frontend/e2e/business.spec.ts`、`frontend/e2e/documented-flows.spec.ts` |
 | MiniMax | 国内官方端点配置、鉴权头、模型、JSON 解析与错误处理 | `backend/tests/test_minimax.py` |
-| OpenCLI 登录门禁 | `whoami` 必须先于 search；77 时停止 | `backend/tests/test_pipeline_services.py`、`scripts/test-opencli.sh` |
+| OpenCLI 登录与筛选 | `whoami` 必须先于 search；77 时停止；用稳定 CSS/DOM 选择器操作“最新”和时间范围，不依赖动态数字引用 | `backend/tests/test_pipeline_services.py`、`backend/tests/test_opencli_and_dedup_integration.py`、`scripts/test-opencli.sh` |
 | 多活动与日期归档 | 一篇笔记拆分多活动、来源图片编号、原文链接、日期/任务目录、MD/XLSX/图片同目录 | `backend/tests/test_multi_activity_archive.py` |
 
 ## 阶段一剩余增强项

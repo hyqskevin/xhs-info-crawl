@@ -26,14 +26,50 @@ def test_search_recent_uses_city_recent_filter(tmp_path:Path,monkeypatch):
     def run(args):
         calls.append(args)
         if args[:2]==['xiaohongshu','whoami']: return {'logged_in':True}
-        if args[:3]==['browser',adapter.session,'state']:
-            return '[1]<button>筛选\n[2]<span>最新\n[3]<span>半年内'
+        if args[:3]==['browser',adapter.session,'eval'] and 'optionExists' in args[3]: return True
+        if args[:3]==['browser',adapter.session,'eval'] and 'targetText' in args[3]: return True
         if args[:3]==['browser',adapter.session,'eval']: return []
         return {'ok':True}
     monkeypatch.setattr(adapter,'run',run)
     assert adapter.search_recent('宁波 活动','半年内') == []
-    click_refs=[args[3] for args in calls if args[:3]==['browser',adapter.session,'click']]
-    assert click_refs == ['1','2','3']
+    assert ['browser',adapter.session,'click','.search-layout__top .filter'] in calls
+    option_scripts=[args[3] for args in calls if args[:3]==['browser',adapter.session,'eval'] and 'targetText' in args[3]]
+    assert any('最新' in script for script in option_scripts)
+    assert any('半年内' in script for script in option_scripts)
+
+def test_search_recent_uses_stable_dom_selectors_for_xhs_filters(tmp_path:Path,monkeypatch):
+    adapter=OpenCLIAdapter(Settings(project_root=tmp_path)); calls=[]
+    def run(args):
+        calls.append(args)
+        if args[:2]==['xiaohongshu','whoami']: return {'logged_in':True}
+        if args[:3]==['browser',adapter.session,'eval'] and 'optionExists' in args[3]: return True
+        if args[:3]==['browser',adapter.session,'eval'] and 'targetText' in args[3]: return True
+        if args[:3]==['browser',adapter.session,'eval']: return []
+        return {'ok':True}
+    monkeypatch.setattr(adapter,'run',run)
+
+    assert adapter.search_recent('宁波 活动','一周内') == []
+
+    assert ['browser',adapter.session,'click','.search-layout__top .filter'] in calls
+    option_scripts=[args[3] for args in calls if args[:3]==['browser',adapter.session,'eval'] and 'targetText' in args[3]]
+    assert any('最新' in script for script in option_scripts)
+    assert any('一周内' in script for script in option_scripts)
+
+def test_search_recent_retries_until_filter_panel_is_really_open(tmp_path:Path,monkeypatch):
+    adapter=OpenCLIAdapter(Settings(project_root=tmp_path)); calls=[]; probes=iter([False,True])
+    def run(args):
+        calls.append(args)
+        if args[:2]==['xiaohongshu','whoami']: return {'logged_in':True}
+        if args[:3]==['browser',adapter.session,'eval'] and 'optionExists' in args[3]: return next(probes)
+        if args[:3]==['browser',adapter.session,'eval'] and 'targetText' in args[3]: return True
+        if args[:3]==['browser',adapter.session,'eval']: return []
+        return {'ok':True}
+    monkeypatch.setattr(adapter,'run',run)
+
+    assert adapter.search_recent('宁波 展览','一周内') == []
+
+    filter_clicks=[args for args in calls if args==['browser',adapter.session,'click','.search-layout__top .filter']]
+    assert len(filter_clicks) == 2
 
 def test_duplicate_candidates_are_created_once(db_session):
     when=datetime(2026,7,18,10,tzinfo=timezone.utc)

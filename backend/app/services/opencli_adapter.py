@@ -1,5 +1,4 @@
 import json
-import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -23,16 +22,22 @@ class OpenCLIAdapter:
         if isinstance(value,list) and all(isinstance(row,dict) and 'field' in row for row in value):
             return {str(row['field']):row.get('value') for row in value}
         raise OpenCLIError(f'unexpected note response: {type(value).__name__}')
-    def _state(self)->str: return str(self.run(['browser',self.session,'state']))
-    def _click_text_ref(self,state:str,text:str) -> None:
-        match=re.search(rf'\[(\d+)\]<(?:div|span|button)[^>]*>[^\n]*{re.escape(text)}',state)
-        if not match: raise OpenCLIError(f'filter option not found: {text}')
-        self.run(['browser',self.session,'click',match.group(1)])
+    def _click_filter_option(self,text:str) -> None:
+        target=json.dumps(text,ensure_ascii=False)
+        script=f"""(() => {{ const targetText={target}; const span=[...document.querySelectorAll('.filter .tags span')].find(e=>e.textContent?.trim()===targetText); const option=span?.closest('.tags'); if(!option) return false; option.click(); return true }})()"""
+        if not self.run(['browser',self.session,'eval',script]): raise OpenCLIError(f'filter option not found: {text}')
+    def _open_filter_panel(self) -> None:
+        probe="""(() => { const optionExists=[...document.querySelectorAll('.filter .tags span')].some(e=>e.textContent?.trim()==='最新'); return optionExists })()"""
+        for _ in range(3):
+            self.run(['browser',self.session,'click','.search-layout__top .filter'])
+            self.run(['browser',self.session,'wait','time','1'])
+            if self.run(['browser',self.session,'eval',probe]): return
+        raise OpenCLIError('filter option not found: 最新')
     def search_recent(self,query:str,recent_filter:str='一周内')->list[dict[str,Any]]:
         self.check_login(); url=f'https://www.xiaohongshu.com/search_result?keyword={quote_plus(query)}'
         self.run(['browser',self.session,'open',url,'--window','background']); self.run(['browser',self.session,'wait','time','2'])
-        state=self._state(); self._click_text_ref(state,'筛选'); self.run(['browser',self.session,'wait','time','1']); state=self._state(); self._click_text_ref(state,'最新')
-        if recent_filter != '不限': self._click_text_ref(state,recent_filter)
+        self._open_filter_panel(); self._click_filter_option('最新')
+        if recent_filter != '不限': self._click_filter_option(recent_filter)
         self.run(['browser',self.session,'wait','time','2'])
         script=r"""(() => Array.from(document.querySelectorAll('section')).map(s => { const links=[...s.querySelectorAll('a[href*="/search_result/"]')]; const title=s.querySelector('a[href*="/search_result/"] span')?.textContent?.trim(); const time=[...s.querySelectorAll('div')].map(x=>x.textContent?.trim()).find(x=>/^(\d+分钟前|\d+小时前|\d+天前|\d{2}-\d{2})$/.test(x||'')); return title&&links[0]?{title,url:new URL(links[0].getAttribute('href'),location.origin).href,published_text:time||''}:null }).filter(Boolean))()"""
         previous=0; stagnant=0; items=[]
