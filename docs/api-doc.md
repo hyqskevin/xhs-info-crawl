@@ -116,7 +116,13 @@
 ### GET /api/v1/activities/:id
 
 - 描述：活动详情
-- 响应：包含活动字段、原始笔记、图片 OCR 结果
+- 响应：包含活动字段、原始笔记 `note`、来源图片 `images` 和图片 OCR 状态
+
+### GET /api/v1/activities/:id/images/:image_id
+
+- 描述：读取该活动来源笔记的本地归档图片
+- 鉴权：必须携带 Bearer Token；图片必须属于活动关联笔记，且文件路径必须位于 `DATA_DIR` 内
+- 响应：图片二进制；不存在、归属不符或路径越界返回 `404`
 
 ### PUT /api/v1/activities/:id
 
@@ -211,9 +217,15 @@
 
 ### POST /api/v1/tasks/:id/restart
 
-- 描述：按原参数继续失败任务，沿用原任务 ID，并跳过已经成功提取的笔记
-- 限制：仅 `FAILED` 状态可调用；存在其他运行中任务时返回 `409`
-- 进度字段：`total_notes`、`downloaded_notes`、`ocr_notes`、`extracted_notes`、`failed_notes`、`current_stage`、`current_note`
+- 描述：按原参数继续失败或已停止任务，沿用原任务 ID，并跳过已经成功提取的笔记
+- 限制：仅 `FAILED`、`STOPPED` 状态可调用；存在其他运行中或正在停止任务时返回 `409`
+- 进度字段：`total_notes`、`downloaded_notes`、`ocr_notes`、`extracted_notes`、`failed_notes`、`skipped_notes`、`current_stage`、`current_note`
+
+### POST /api/v1/tasks/:id/stop
+
+- 描述：安全停止等待中或运行中的任务
+- `PENDING` 立即变为 `STOPPED`；`RUNNING` 先变为 `STOP_REQUESTED`，当前笔记结束后变为 `STOPPED`
+- 已成功处理、归档的数据全部保留；重复请求 `STOP_REQUESTED` 幂等返回
 
 ## 配置接口
 

@@ -121,6 +121,7 @@
 | extracted_notes | INT DEFAULT 0 | 已完成活动提取与归档的笔记数 |
 | success_notes | INT DEFAULT 0 | 成功处理数 |
 | failed_notes | INT DEFAULT 0 | 失败数 |
+| skipped_notes | INT DEFAULT 0 | 标题未包含对应关键词而跳过的笔记数 |
 | current_stage | VARCHAR(32) NULL | 当前阶段：SEARCHING / DOWNLOADING / OCR / EXTRACTING / ARCHIVING |
 | current_note | TEXT NULL | 当前处理的笔记标题或来源链接 |
 | started_at | TIMESTAMP | 开始时间 |
@@ -128,6 +129,8 @@
 | error_message | TEXT | 错误信息 |
 | created_at | TIMESTAMP | 创建时间 |
 | updated_at | TIMESTAMP | 更新时间 |
+
+任务状态新增 `STOP_REQUESTED`（当前笔记结束后停止）和 `STOPPED`（已安全停止，可继续抓取）。
 
 ### notes
 

@@ -172,6 +172,9 @@ def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAda
 def run_crawl(self, task_id: int):
     db = SessionLocal()
     task = db.get(CrawlTask, task_id)
+    if task is None or task.status == "STOPPED":
+        db.close()
+        return
     settings = get_settings()
     adapter = OpenCLIAdapter(settings)
     try:

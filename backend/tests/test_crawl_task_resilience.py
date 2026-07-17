@@ -203,3 +203,26 @@ def test_worker_finishes_current_note_then_stops_before_the_next(db_session, mon
     assert task.extracted_notes == 1
     messages = list(db_session.scalars(select(TaskLog.message).where(TaskLog.task_id == task.id)))
     assert "任务已安全停止" in messages
+
+
+def test_worker_does_not_restart_a_pending_task_that_was_already_stopped(db_session, monkeypatch):
+    task = CrawlTask(type="mixed", status="STOPPED", params={"city": "nb", "keywords": ["活动"], "recent_filter": "一周内", "blogger_ids": []})
+    db_session.add(task); db_session.commit()
+    searched = []
+
+    class FakeAdapter:
+        def __init__(self, _settings):
+            pass
+
+        def search_recent(self, *_args):
+            searched.append(True)
+            return []
+
+    monkeypatch.setattr(crawl_task, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(crawl_task, "OpenCLIAdapter", FakeAdapter)
+
+    crawl_task.run_crawl.run(task.id)
+
+    task = db_session.get(CrawlTask, task.id)
+    assert task.status == "STOPPED"
+    assert searched == []

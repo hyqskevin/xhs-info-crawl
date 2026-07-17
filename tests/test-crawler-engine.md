@@ -478,6 +478,14 @@ def test_weekly_search_limit_enforced(mock_db_session):
 
 对应自动化：`backend/tests/test_crawl_task_resilience.py`。
 
+## TC-CRAWL-013：搜索标题必须包含对应关键词
+
+- 关键词搜索结果记录对应关键词，多关键词命中按 URL 合并。
+- 标题包含任一对应关键词才进入详情下载；不匹配结果增加 `skipped_notes` 并记录日志。
+- 被跳过结果不得调用详情、图片下载、OCR 或 MiniMax；博主结果不执行此过滤。
+
+对应自动化：`backend/tests/test_crawl_task_resilience.py`。
+
 ## 测试运行命令
 
 ```bash

@@ -6,9 +6,9 @@ import { api } from '@/api/client'
 const rows = ref<any[]>([])
 const logs = ref<any[]>([])
 const drawer = ref(false)
-const statusLabels: Record<string, string> = { PENDING: '等待中', RUNNING: '抓取中', DOWNLOADING: '下载中', COMPLETED: '已完成', COMPLETED_WITH_ERRORS: '完成但有错误', FAILED: '失败', PAUSED: '等待登录' }
+const statusLabels: Record<string, string> = { PENDING: '等待中', RUNNING: '抓取中', STOP_REQUESTED: '正在停止', STOPPED: '已停止', DOWNLOADING: '下载中', COMPLETED: '已完成', COMPLETED_WITH_ERRORS: '完成但有错误', FAILED: '失败', PAUSED: '等待登录' }
 const stageLabels: Record<string, string> = { SEARCHING: '搜索笔记', DOWNLOADING: '下载笔记', OCR: 'OCR 识别', EXTRACTING: '提取活动', ARCHIVING: '归档结果' }
-function progress(row:any){return row.total_notes?Math.round((row.success_notes+row.failed_notes)*100/row.total_notes):0}
+function progress(row:any){return row.total_notes?Math.round(((row.extracted_notes||0)+(row.failed_notes||0)+(row.skipped_notes||0))*100/row.total_notes):0}
 
 async function load() { rows.value = (await api.tasks()).data.data.items }
 async function show(id: number) { logs.value = (await api.logs(id)).data.data; drawer.value = true }
@@ -28,6 +28,7 @@ onMounted(load)
       <ElTableColumn prop="ocr_notes" label="OCR 完成" width="100" />
       <ElTableColumn prop="extracted_notes" label="提取完成" width="100" />
       <ElTableColumn prop="failed_notes" label="失败" width="90" />
+      <ElTableColumn prop="skipped_notes" label="已跳过" width="90" />
       <ElTableColumn label="进度" width="160"><template #default="scope"><ElProgress :percentage="progress(scope.row)" /></template></ElTableColumn>
       <ElTableColumn prop="created_at" label="创建时间" min-width="180" />
       <ElTableColumn prop="error_message" label="错误" min-width="220" show-overflow-tooltip />

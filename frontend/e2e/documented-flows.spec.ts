@@ -121,6 +121,25 @@ test.describe('TC-UI-008/009 活动管理完整流程', () => {
     await expect.poll(() => ids).toEqual([1, 2])
     await expect(page.getByText('已删除 2 条活动')).toBeVisible()
   })
+
+  test('宽版活动详情在表格下展示来源页面图片并支持预览', async ({ page }) => {
+    const detail = { ...activity, note: { id: 7, title: '宁波活动图集', content: '页面正文', source_url: 'https://example.com/note/7', status: 'PROCESSED' }, images: [{ id: 11, url: '/activities/1/images/11' }, { id: 12, url: '/activities/1/images/12' }] }
+    await page.route('**/api/v1/activities**', (route) => {
+      const pathname = new URL(route.request().url()).pathname
+      if (pathname.endsWith('/activities/1')) return route.fulfill({ json: response(detail) })
+      return route.fulfill({ json: { ...response({ items: [activity] }), pagination: { total: 1 } } })
+    })
+    await page.route('**/api/v1/activities/1/images/**', (route) => route.fulfill({ body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'), contentType: 'image/png' }))
+    await page.goto('/activities')
+    await page.getByRole('button', { name: '详情' }).click()
+
+    await expect(page.locator('.el-drawer')).toHaveCSS('width', /70%|[7-9][0-9]{2}px/)
+    await expect(page.getByText('宁波活动图集')).toBeVisible()
+    await expect(page.getByRole('heading', { name: '来源页面图片' })).toBeVisible()
+    await expect(page.locator('.source-image-grid .el-image')).toHaveCount(2)
+    await page.locator('.source-image-grid .el-image').first().click()
+    await expect(page.locator('.el-image-viewer__wrapper')).toBeVisible()
+  })
 })
 
 test.describe('TC-UI-010 任务完整流程', () => {
@@ -179,6 +198,36 @@ test.describe('TC-UI-010 任务完整流程', () => {
     await page.getByRole('button', { name: '继续抓取' }).click()
     await expect.poll(() => restarted).toBe(true)
     await expect(page.getByText('任务已继续抓取')).toBeVisible()
+  })
+
+  test('仪表盘确认后安全停止运行任务并展示跳过计数', async ({ page }) => {
+    let stopped = false
+    const runningTask = { id: 4, status: 'RUNNING', total_notes: 20, downloaded_notes: 8, ocr_notes: 7, extracted_notes: 5, success_notes: 5, failed_notes: 1, skipped_notes: 4, current_stage: 'OCR', current_note: '周末活动', progress_percent: 50, error_message: null }
+    await page.route('**/api/v1/dashboard/summary**', (route) => route.fulfill({ json: response({ last_task: runningTask }) }))
+    await page.route('**/api/v1/tasks/4/stop', (route) => {
+      stopped = true
+      return route.fulfill({ status: 202, json: response({ ...runningTask, status: 'STOP_REQUESTED' }) })
+    })
+    await page.goto('/dashboard')
+    await expect(page.getByText('已跳过').locator('..').getByText('4')).toBeVisible()
+    await page.getByRole('button', { name: '停止抓取' }).click()
+    await page.getByRole('button', { name: '确定' }).click()
+    await expect.poll(() => stopped).toBe(true)
+    await expect(page.getByText('已请求安全停止')).toBeVisible()
+  })
+
+  test('已停止任务可以按原任务继续抓取', async ({ page }) => {
+    let restarted = false
+    const stoppedTask = { id: 4, status: 'STOPPED', total_notes: 20, downloaded_notes: 8, ocr_notes: 7, extracted_notes: 5, success_notes: 5, failed_notes: 0, skipped_notes: 4, current_stage: null, current_note: null, progress_percent: 45, error_message: null }
+    await page.route('**/api/v1/dashboard/summary**', (route) => route.fulfill({ json: response({ last_task: stoppedTask }) }))
+    await page.route('**/api/v1/tasks/4/restart', (route) => {
+      restarted = true
+      return route.fulfill({ status: 202, json: response({ ...stoppedTask, status: 'PENDING' }) })
+    })
+    await page.goto('/dashboard')
+    await expect(page.getByText('已停止')).toBeVisible()
+    await page.getByRole('button', { name: '继续抓取' }).click()
+    await expect.poll(() => restarted).toBe(true)
   })
 })
 

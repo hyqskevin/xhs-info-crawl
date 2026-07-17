@@ -396,6 +396,15 @@ def test_flower_monitoring_accessible():
 
 > 阶段一不再对整批 Celery 任务进行 300 秒自动重试；`TC-TASK-004` 的整批自动重试方案属于旧设计。阶段一仅对单笔记各处理阶段按 `.env` 重试，整批失败由管理员显式续跑。
 
+## TC-TASK-012：安全停止与停止后续跑
+
+- `PENDING` 停止后立即为 `STOPPED`；`RUNNING` 先为 `STOP_REQUESTED`。
+- 当前笔记完成后不再开始下一篇，状态最终为 `STOPPED`，成功数据保留。
+- `STOP_REQUESTED` 重复停止保持幂等；完成等终态停止返回 `409`。
+- `STOPPED` 与 `FAILED` 均可沿用原任务 ID 继续抓取。
+
+对应自动化：`backend/tests/test_config_task_duplicate_api.py`、`backend/tests/test_crawl_task_resilience.py`。
+
 ## 测试运行命令
 
 ```bash
