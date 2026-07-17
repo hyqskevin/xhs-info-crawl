@@ -2,7 +2,7 @@ import { http } from './http'
 export const api={
   login:(username:string,password:string)=>http.post('/auth/login',{username,password}),
   dashboard:()=>http.get('/dashboard/summary'),
-  activities:(params={})=>http.get('/activities',{params}),activity:(id:number)=>http.get(`/activities/${id}`),updateActivity:(id:number,data:object)=>http.put(`/activities/${id}`,data),deleteActivity:(id:number)=>http.delete(`/activities/${id}`),deleteActivities:(ids:number[])=>http.delete('/activities/batch',{data:{ids}}),
+  activities:(params={})=>http.get('/activities',{params}),activity:(id:number)=>http.get(`/activities/${id}`),activityImage:(activityId:number,imageId:number)=>http.get(`/activities/${activityId}/images/${imageId}`,{responseType:'blob'}),updateActivity:(id:number,data:object)=>http.put(`/activities/${id}`,data),deleteActivity:(id:number)=>http.delete(`/activities/${id}`),deleteActivities:(ids:number[])=>http.delete('/activities/batch',{data:{ids}}),
   tasks:()=>http.get('/tasks'),createTask:(data:object)=>http.post('/tasks/crawl',data),restartTask:(id:number)=>http.post(`/tasks/${id}/restart`),stopTask:(id:number)=>http.post(`/tasks/${id}/stop`),logs:(id:number)=>http.get(`/tasks/${id}/logs`),
   duplicates:()=>http.get('/duplicates'),merge:(id:number,keep='a')=>http.post(`/duplicates/${id}/merge`,{keep}),ignore:(id:number)=>http.post(`/duplicates/${id}/ignore`),
   reports:()=>http.get('/reports'),generateReport:(data:object)=>http.post('/reports/generate',data),report:(id:number)=>http.get(`/reports/${id}`),downloadReport:(id:number,format:'md'|'xlsx')=>http.get(`/reports/${id}/download`,{params:{format},responseType:'blob'}),

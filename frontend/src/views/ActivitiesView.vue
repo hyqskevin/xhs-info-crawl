@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Delete, Edit, Refresh, Search, View } from '@element-plus/icons-vue'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 
@@ -10,6 +10,8 @@ const total = ref(0)
 const dialog = ref(false)
 const drawer = ref(false)
 const detail = ref<any>({})
+const imageUrls = ref<string[]>([])
+const imagesLoading = ref(false)
 const editingId = ref<number | null>(null)
 const selectedRows = ref<any[]>([])
 const batchDeleting = ref(false)
@@ -18,6 +20,7 @@ const form = reactive<any>({})
 const statusLabels: Record<string, string> = { NEEDS_REVIEW: '待完善', RAW: '待审核', APPROVED: '已通过', PUBLISHED: '已发布' }
 const statusTypes: Record<string, string> = { NEEDS_REVIEW: 'warning', RAW: 'primary', APPROVED: 'success', PUBLISHED: 'info' }
 const cityNames = computed(() => Object.fromEntries(cities.value.map((city) => [city.code, city.name])))
+const detailDrawerSize = computed(() => window.innerWidth < 768 ? '95%' : '70%')
 
 function queryParams() {
   return {
@@ -84,8 +87,27 @@ async function batchRemove() {
   }
 }
 
-async function show(id: number) { detail.value = (await api.activity(id)).data.data; drawer.value = true }
+function releaseImages() {
+  imageUrls.value.forEach((url) => URL.revokeObjectURL(url))
+  imageUrls.value = []
+}
+
+async function show(id: number) {
+  releaseImages()
+  detail.value = (await api.activity(id)).data.data
+  drawer.value = true
+  imagesLoading.value = true
+  try {
+    const responses = await Promise.all((detail.value.images || []).map((image: any) => api.activityImage(id, image.id)))
+    imageUrls.value = responses.map((response: any) => URL.createObjectURL(response.data))
+  } catch {
+    ElMessage.error('部分来源图片加载失败')
+  } finally {
+    imagesLoading.value = false
+  }
+}
 onMounted(initialize)
+onUnmounted(releaseImages)
 </script>
 
 <template>
@@ -129,12 +151,33 @@ onMounted(initialize)
     <template #footer><ElButton @click="dialog = false">取消</ElButton><ElButton type="primary" @click="save">保存</ElButton></template>
   </ElDialog>
 
-  <ElDrawer v-model="drawer" title="活动详情">
-    <ElDescriptions :column="1" border><ElDescriptionsItem label="名称">{{ detail.name }}</ElDescriptionsItem><ElDescriptionsItem label="时间">{{ formatTime(detail.start_time) }}</ElDescriptionsItem><ElDescriptionsItem label="地点">{{ detail.location }}</ElDescriptionsItem><ElDescriptionsItem label="费用">{{ detail.price }}</ElDescriptionsItem><ElDescriptionsItem label="状态">{{ statusLabels[detail.status] || detail.status }}</ElDescriptionsItem><ElDescriptionsItem label="摘要">{{ detail.summary }}</ElDescriptionsItem></ElDescriptions>
+  <ElDrawer v-model="drawer" title="活动详情" :size="detailDrawerSize" @closed="releaseImages">
+    <ElDescriptions :column="1" border>
+      <ElDescriptionsItem label="名称">{{ detail.name }}</ElDescriptionsItem>
+      <ElDescriptionsItem label="时间">{{ formatTime(detail.start_time) }}</ElDescriptionsItem>
+      <ElDescriptionsItem label="地点">{{ detail.location }}</ElDescriptionsItem>
+      <ElDescriptionsItem label="费用">{{ detail.price }}</ElDescriptionsItem>
+      <ElDescriptionsItem label="状态">{{ statusLabels[detail.status] || detail.status }}</ElDescriptionsItem>
+      <ElDescriptionsItem label="摘要">{{ detail.summary }}</ElDescriptionsItem>
+      <ElDescriptionsItem label="原文标题">{{ detail.note?.title || '-' }}</ElDescriptionsItem>
+      <ElDescriptionsItem label="原文链接"><ElLink v-if="detail.note?.source_url" :href="detail.note.source_url" type="primary" target="_blank">查看小红书原文</ElLink><span v-else>-</span></ElDescriptionsItem>
+    </ElDescriptions>
+    <section class="source-images">
+      <h3>来源页面图片</h3>
+      <ElSkeleton v-if="imagesLoading" :rows="4" animated />
+      <div v-else-if="imageUrls.length" class="source-image-grid">
+        <ElImage v-for="(url, index) in imageUrls" :key="url" :src="url" :preview-src-list="imageUrls" :initial-index="index" fit="cover" lazy />
+      </div>
+      <ElEmpty v-else description="暂无来源图片" />
+    </section>
   </ElDrawer>
 </template>
 
 <style scoped>
 .filters-toolbar { flex-wrap: wrap; }
 .filter-item { width: 180px; }
+.source-images { margin-top: 24px; }
+.source-images h3 { margin: 0 0 14px; color: var(--el-text-color-primary); }
+.source-image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
+.source-image-grid :deep(.el-image) { width: 100%; height: 220px; border-radius: var(--el-border-radius-base); background: var(--el-fill-color-light); }
 </style>

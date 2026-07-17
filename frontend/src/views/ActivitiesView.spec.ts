@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import ElementPlus, { ElMessageBox, ElPagination, ElTable } from 'element-plus'
+import ElementPlus, { ElDrawer, ElEmpty, ElImage, ElMessageBox, ElPagination, ElTable } from 'element-plus'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import ActivitiesView from './ActivitiesView.vue'
@@ -7,7 +7,8 @@ import ActivitiesView from './ActivitiesView.vue'
 const mocks = vi.hoisted(() => ({
   activities: vi.fn().mockResolvedValue({ data: { data: { items: [{ id: 1, name: '周末艺术展', city_code: 'shanghai', start_time: '2026-07-18T10:00:00Z', location: '静安', status: 'RAW' }] }, pagination: { page: 1, page_size: 20, total: 41 } } }),
   settings: vi.fn().mockResolvedValue({ data: { data: [{ id: 1, name: '上海', code: 'shanghai', enabled: true }] } }),
-  activity: vi.fn(),
+  activity: vi.fn().mockResolvedValue({ data: { data: { id: 1, name: '周末艺术展', city_code: 'shanghai', start_time: '2026-07-18T10:00:00Z', location: '静安', status: 'RAW', note: { id: 7, title: '宁波活动图集', content: '页面正文', source_url: 'https://xhs/note-7', status: 'PROCESSED' }, images: [{ id: 11, url: '/activities/1/images/11' }, { id: 12, url: '/activities/1/images/12' }] } } }),
+  activityImage: vi.fn().mockResolvedValue({ data: new Blob(['image']) }),
   updateActivity: vi.fn(),
   deleteActivity: vi.fn(),
   deleteActivities: vi.fn().mockResolvedValue({ data: { data: { deleted_count: 1, deleted_ids: [1] } } }),
@@ -45,5 +46,39 @@ describe('ActivitiesView', () => {
 
     expect(mocks.deleteActivities).toHaveBeenCalledWith([1])
     expect(mocks.activities).toHaveBeenCalledTimes(2)
+  })
+
+  it('opens a wide detail drawer with source note images and releases blob URLs', async () => {
+    const createObjectURL = vi.fn().mockReturnValueOnce('blob:first').mockReturnValueOnce('blob:second')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    const wrapper = mount(ActivitiesView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((item) => item.text().includes('详情'))!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.getComponent(ElDrawer).props('size')).toBe('70%')
+    expect(wrapper.text()).toContain('宁波活动图集')
+    expect(wrapper.text()).toContain('来源页面图片')
+    expect(wrapper.findAllComponents(ElImage)).toHaveLength(2)
+    expect(mocks.activityImage.mock.calls).toEqual([[1, 11], [1, 12]])
+    expect(createObjectURL).toHaveBeenCalledTimes(2)
+
+    wrapper.getComponent(ElDrawer).vm.$emit('closed')
+    await flushPromises()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:first')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:second')
+  })
+
+  it('shows an Element Plus empty state when the source note has no images', async () => {
+    mocks.activity.mockResolvedValueOnce({ data: { data: { id: 1, name: '周末艺术展', city_code: 'shanghai', start_time: '2026-07-18T10:00:00Z', location: '静安', status: 'RAW', note: { id: 7, title: '无图笔记', content: '', source_url: 'https://xhs/no-image', status: 'PROCESSED' }, images: [] } } })
+    const wrapper = mount(ActivitiesView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    await wrapper.findAll('button').find((item) => item.text().includes('详情'))!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.getComponent(ElEmpty).props('description')).toBe('暂无来源图片')
   })
 })
