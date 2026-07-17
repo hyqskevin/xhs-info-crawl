@@ -6,6 +6,47 @@ from typing import Any, Callable
 LLM = Callable[[str], dict[str, Any]]
 
 
+def normalize_activity_datetime(value: Any, now: datetime) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    text = str(value).strip()
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).isoformat()
+    except ValueError:
+        pass
+    match = re.fullmatch(r"(?:(20\d{2})[-/.年])?(\d{1,2})(?:[-/.]|月)(\d{1,2})(?:日)?(?:[ T]?(\d{1,2})(?::(\d{1,2}))?)?", text)
+    if not match:
+        return None
+    try:
+        return datetime(
+            int(match.group(1) or now.year),
+            int(match.group(2)),
+            int(match.group(3)),
+            int(match.group(4) or 0),
+            int(match.group(5) or 0),
+        ).isoformat()
+    except ValueError:
+        return None
+
+
+def normalize_activity_row(row: dict[str, Any], now: datetime) -> dict[str, Any]:
+    item = dict(row)
+    item["name"] = str(item.get("name") or "").strip()
+    item["start_time"] = normalize_activity_datetime(item.get("start_time"), now)
+    item["end_time"] = normalize_activity_datetime(item.get("end_time"), now)
+    if item["start_time"] and item["end_time"] and datetime.fromisoformat(item["end_time"]) < datetime.fromisoformat(item["start_time"]):
+        item["end_time"] = None
+    item["source_image_indexes"] = sorted({int(value) for value in item.get("source_image_indexes", []) if str(value).isdigit()})
+    confidence = item.get("confidence", 0)
+    if isinstance(confidence, str):
+        confidence = {"high": 0.9, "medium": 0.6, "low": 0.3}.get(confidence.lower(), 0)
+    item["confidence"] = max(0.0, min(1.0, float(confidence or 0)))
+    item["status"] = "RAW" if item.get("start_time") and item.get("location") else "NEEDS_REVIEW"
+    return item
+
+
 def extract_activity_fields(text: str, now: datetime, llm: LLM | None) -> dict[str, Any]:
     iso = re.search(r"(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?", text)
     cn = re.search(r"(\d{1,2})月(\d{1,2})日(?:\s*(\d{1,2}):(\d{2}))?", text)
@@ -20,8 +61,7 @@ def extract_activity_fields(text: str, now: datetime, llm: LLM | None) -> dict[s
     result: dict[str, Any] = {"name": text.strip()[:30] or None, "start_time": start_time, "location": location_match.group(1) if location_match else None, "price": price_match.group(1) if price_match else None, "type": kind}
     if (not result["start_time"] or not result["location"]) and llm:
         result.update({key: value for key, value in llm(text).items() if value is not None})
-    result["status"] = "RAW" if result.get("start_time") and result.get("location") else "NEEDS_REVIEW"
-    return result
+    return normalize_activity_row(result, now)
 
 
 def extract_activities(text: str, now: datetime, llm: LLM | None) -> list[dict[str, Any]]:
@@ -38,12 +78,5 @@ def extract_activities(text: str, now: datetime, llm: LLM | None) -> list[dict[s
     for row in rows:
         if not isinstance(row, dict) or not str(row.get("name") or "").strip():
             continue
-        item = dict(row)
-        item["name"] = str(item["name"]).strip()
-        item["source_image_indexes"] = sorted({int(value) for value in item.get("source_image_indexes", []) if str(value).isdigit()})
-        confidence=item.get("confidence",0)
-        if isinstance(confidence,str): confidence={"high":0.9,"medium":0.6,"low":0.3}.get(confidence.lower(),0)
-        item["confidence"] = max(0.0,min(1.0,float(confidence or 0)))
-        item["status"] = "RAW" if item.get("start_time") and item.get("location") else "NEEDS_REVIEW"
-        normalized.append(item)
+        normalized.append(normalize_activity_row(row, now))
     return normalized

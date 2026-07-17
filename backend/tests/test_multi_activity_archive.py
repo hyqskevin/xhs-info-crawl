@@ -25,6 +25,19 @@ def test_extract_activities_returns_every_llm_activity_with_source_images():
     assert all(item["status"] == "RAW" for item in result)
 
 
+def test_llm_partial_dates_are_normalized_without_crashing():
+    result = extract_activities("活动", datetime(2026, 7, 17), lambda _: {"activities": [
+        {"name": "春日市集", "start_time": "4/5", "end_time": "非法日期", "location": "月湖公园", "source_image_indexes": [1]},
+        {"name": "无效日期活动", "start_time": "2/30", "location": "文化广场", "source_image_indexes": []},
+    ]})
+
+    assert result[0]["start_time"] == "2026-04-05T00:00:00"
+    assert result[0]["end_time"] is None
+    assert result[0]["status"] == "RAW"
+    assert result[1]["start_time"] is None
+    assert result[1]["status"] == "NEEDS_REVIEW"
+
+
 def test_archive_places_source_images_markdown_and_xlsx_under_date_task_folder(tmp_path: Path):
     note = Note(id=7, task_id=9, platform_note_id="note-7", title="上海周末合集", content="原文正文", source_url="https://www.xiaohongshu.com/explore/note-7", city_code="shanghai", status="OCR_DONE", raw_data={})
     image_file = tmp_path / "download.jpg"
