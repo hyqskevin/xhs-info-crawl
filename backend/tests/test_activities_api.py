@@ -5,7 +5,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token
+from app.api.v1 import activities as activities_api
 from app.models.activity import Activity
+from app.models.note import Note, NoteImage
 
 
 @pytest.fixture
@@ -53,6 +55,36 @@ def test_get_activity_detail_and_not_found(client: TestClient, db_session: Sessi
     db_session.commit()
     assert client.get(f"/api/v1/activities/{activity.id}", headers=headers).json()["data"]["name"] == "活动1"
     assert client.get("/api/v1/activities/99999", headers=headers).status_code == 404
+
+
+def test_activity_detail_returns_note_and_protected_source_images(client: TestClient, db_session: Session, headers: dict[str, str], tmp_path, monkeypatch) -> None:
+    image_dir = tmp_path / "archive"
+    image_dir.mkdir()
+    first_file = image_dir / "first.jpg"
+    second_file = image_dir / "second.jpg"
+    first_file.write_bytes(b"first-image")
+    second_file.write_bytes(b"second-image")
+    outside_file = tmp_path.parent / "outside.jpg"
+    outside_file.write_bytes(b"outside")
+    note = Note(task_id=1, platform_note_id="note-images", title="宁波活动图集", content="页面正文", source_url="https://xhs/note-images", city_code="nb", status="PROCESSED", raw_data={})
+    db_session.add(note); db_session.flush()
+    activity = Activity(name="图集活动", note_id=note.id, city_code="nb", start_time=datetime(2026, 7, 20, tzinfo=timezone.utc), location="宁波", type="展览", status="RAW")
+    first = NoteImage(note_id=note.id, storage_key="archive/first.jpg", ocr_status="success", ocr_text="图片一")
+    second = NoteImage(note_id=note.id, storage_key="archive/second.jpg", ocr_status="disabled", ocr_text="")
+    outside = NoteImage(note_id=note.id, storage_key="../outside.jpg", ocr_status="success", ocr_text="越界")
+    db_session.add_all([activity, first, second, outside]); db_session.commit()
+    monkeypatch.setattr(activities_api, "get_settings", lambda: type("Settings", (), {"data_dir": tmp_path})(), raising=False)
+
+    detail = client.get(f"/api/v1/activities/{activity.id}", headers=headers)
+
+    assert detail.status_code == 200
+    assert detail.json()["data"]["note"] == {"id": note.id, "title": "宁波活动图集", "content": "页面正文", "source_url": "https://xhs/note-images", "status": "PROCESSED"}
+    assert [image["id"] for image in detail.json()["data"]["images"]] == [first.id, second.id, outside.id]
+    image_url = detail.json()["data"]["images"][0]["url"]
+    assert client.get(f"/api/v1{image_url}", headers=headers).content == b"first-image"
+    assert client.get(f"/api/v1{image_url}").status_code == 401
+    assert client.get(f"/api/v1/activities/{activity.id}/images/99999", headers=headers).status_code == 404
+    assert client.get(f"/api/v1/activities/{activity.id}/images/{outside.id}", headers=headers).status_code == 404
 
 
 def test_update_activity_and_reject_invalid_status_transition(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:

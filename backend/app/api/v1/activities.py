@@ -5,10 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from fastapi.responses import FileResponse
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.activity import Activity
+from app.models.note import Note, NoteImage
 from app.schemas.activity import ActivityRead, ActivityUpdate
 
 
@@ -77,9 +80,41 @@ def batch_delete_activities(payload: BatchDeleteRequest, _: auth, db: database):
 
 @router.get("/{activity_id}")
 def get_activity(activity_id: int, _: auth, db: database):
-    data = serialize(find_activity(db, activity_id))
-    data.update({"note": None, "images": []})
+    activity = find_activity(db, activity_id)
+    data = serialize(activity)
+    note = db.get(Note, activity.note_id) if activity.note_id else None
+    images = list(db.scalars(select(NoteImage).where(NoteImage.note_id == note.id).order_by(NoteImage.id)).all()) if note else []
+    data.update({
+        "note": {
+            "id": note.id,
+            "title": note.title,
+            "content": note.content,
+            "source_url": note.source_url,
+            "status": note.status,
+        } if note else None,
+        "images": [{
+            "id": image.id,
+            "ocr_status": image.ocr_status,
+            "ocr_text": image.ocr_text,
+            "url": f"/activities/{activity.id}/images/{image.id}",
+        } for image in images],
+    })
     return {"code": 200, "message": "success", "data": data}
+
+
+@router.get("/{activity_id}/images/{image_id}")
+def get_activity_image(activity_id: int, image_id: int, _: auth, db: database):
+    activity = find_activity(db, activity_id)
+    if activity.note_id is None:
+        raise HTTPException(status_code=404, detail="图片不存在")
+    image = db.scalar(select(NoteImage).where(NoteImage.id == image_id, NoteImage.note_id == activity.note_id))
+    if image is None or not image.storage_key:
+        raise HTTPException(status_code=404, detail="图片不存在")
+    data_root = get_settings().data_dir.resolve()
+    image_path = (data_root / image.storage_key).resolve()
+    if not image_path.is_relative_to(data_root) or not image_path.is_file():
+        raise HTTPException(status_code=404, detail="图片不存在")
+    return FileResponse(image_path)
 
 
 @router.put("/{activity_id}")
