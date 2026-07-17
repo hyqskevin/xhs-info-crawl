@@ -48,3 +48,14 @@ make test-opencli
 - SQLite：14 条 `activities`，均关联同一 `note_id`、保留原文 `source_url`，并包含 `source_image_indexes`。
 - 归档：`data/archive/2026-07-16/task-2/`，包含 16 张图片、`source.md`、`activities.md` 和 `activities.xlsx`。
 - Excel 数据行：14；Markdown 活动小节：14。
+
+## 登录续跑与活动日期窗口（2026-07-17）
+
+- SQLite 已从迁移 `0005` 升级到 `0006`；`activities.start_time` 支持未知日期，`crawl_tasks` 增加 `skipped_activities`。
+- 首次清理扫描 131 条爬虫活动，删除 64 条明确结束或完全超过未来 60 天窗口的活动，保留 67 条；受影响任务 1、4 的活动导出已重建。
+- 幂等复跑结果：`scanned=67 deleted=0 retained=67`；任务 1 曾存在两个日期归档目录，两个目录的 `activities.md/xlsx` 均已重建，`source.md` 和来源图片保留。
+- 当前可见活动不存在“已结束且早于 2026-07-17”或“开始时间晚于 2026-09-15 23:59:59”的记录；仍在进行中的跨期活动允许保留。
+- Chrome 登录页启动服务真实执行成功，打开地址为 `https://www.xiaohongshu.com/explore`；服务不读取或返回 Cookie。
+- 任务 4 仍保持 `PAUSED`，已有进度为发现 102、下载/OCR/提取各 19；等待用户完成 Chrome 登录后从仪表盘点击“检测登录并继续”。
+- Celery worker 已从仓库根目录重启，确认读取根目录 `.env`：MiniMax 已配置、活动窗口为 60 天、登录地址正确。
+- 自动化结果：后端 107 passed / 1 skipped，前端组件 22 passed，生产构建成功，Google Chrome E2E 37 passed。
