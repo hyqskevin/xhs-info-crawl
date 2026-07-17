@@ -1,20 +1,46 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 from app.core.config import Settings
-from app.services.crawler import AuthenticationRequired, OpenCLIError
+from app.services.crawler import AuthenticationRequired, OpenCLITimeout, OpenCLIError
 
 class OpenCLIAdapter:
-    def __init__(self, settings:Settings, session:str='xhs-crawler') -> None: self.settings=settings; self.session=session
+    def __init__(self,settings:Settings,session:str='xhs-crawler') -> None: self.settings=settings; self.session=session
+    def _command_timeout(self) -> int:
+        # Python 层超时 = opencli 内部超时 + 60 秒缓冲，避免被自身 subprocess 抢先 kill
+        try:
+            inner = int(os.environ.get('OPENCLI_BROWSER_COMMAND_TIMEOUT', '60'))
+        except (TypeError, ValueError):
+            inner = 60
+        return max(inner + 60, 120)
     def run(self,args:list[str]) -> Any:
-        result=subprocess.run(['opencli',*args],capture_output=True,text=True,timeout=120)
-        output=result.stdout.strip()
-        if result.returncode==77: raise AuthenticationRequired('请在 Chrome 登录小红书后重试')
-        if result.returncode: raise OpenCLIError(result.stderr.strip() or output)
-        try: return json.loads(output)
-        except json.JSONDecodeError: return output
+        try:
+            result = subprocess.run(
+                ['opencli', *args],
+                capture_output=True,
+                text=True,
+                timeout=self._command_timeout(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise OpenCLITimeout(f'opencli 命令执行超过 {self._command_timeout()}s 被强制终止: {args}')
+        output = result.stdout.strip()
+        if result.returncode == 77:
+            raise AuthenticationRequired('请在 Chrome 登录小红书后重试')
+        if result.returncode == 75:
+            # opencli 内部命令超时；提示用户调大 OPENCLI_BROWSER_COMMAND_TIMEOUT
+            stderr = result.stderr.strip() or output
+            raise OpenCLITimeout(
+                f'opencli 内部命令超时（exit 75）：{stderr}；可调大 .env 中的 OPENCLI_BROWSER_COMMAND_TIMEOUT'
+            )
+        if result.returncode:
+            raise OpenCLIError(result.stderr.strip() or output)
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError:
+            return output
     def check_login(self): return self.run(['xiaohongshu','whoami','-f','json','--window','background'])
     @staticmethod
     def normalize_note(value:Any)->dict[str,Any]:
