@@ -92,7 +92,7 @@ def test_failed_task_restarts_with_same_id_and_preserves_completed_progress(clie
 
 
 def test_dashboard_summary_contains_latest_task_progress(client: TestClient, db_session: Session, headers):
-    task = CrawlTask(type='mixed', status='RUNNING', params={}, total_notes=20, downloaded_notes=8, ocr_notes=7, extracted_notes=5, success_notes=5, failed_notes=1, current_stage='OCR', current_note='周末活动')
+    task = CrawlTask(type='mixed', status='RUNNING', params={}, total_notes=20, downloaded_notes=8, ocr_notes=7, extracted_notes=5, success_notes=5, failed_notes=1, skipped_notes=4, current_stage='OCR', current_note='周末活动')
     db_session.add(task); db_session.commit()
 
     latest = client.get('/api/v1/dashboard/summary', headers=headers).json()['data']['last_task']
@@ -100,8 +100,9 @@ def test_dashboard_summary_contains_latest_task_progress(client: TestClient, db_
     assert latest == pytest.approx({
         'id': task.id, 'status': 'RUNNING', 'total_notes': 20, 'downloaded_notes': 8,
         'ocr_notes': 7, 'extracted_notes': 5, 'success_notes': 5, 'failed_notes': 1,
+        'skipped_notes': 4,
         'current_stage': 'OCR', 'current_note': '周末活动', 'error_message': None,
-        'progress_percent': 30.0,
+        'progress_percent': 50.0,
     })
 
 
