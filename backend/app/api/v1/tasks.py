@@ -8,6 +8,9 @@ from app.core.database import get_db
 from app.core.security import require_admin
 from app.models.task import CrawlTask,TaskLog
 from app.models.config import Blogger, City, Keyword
+from app.core.config import get_settings
+from app.services.crawler import AuthenticationRequired
+from app.services.opencli_adapter import OpenCLIAdapter
 router=APIRouter(prefix='/tasks',tags=['tasks']); Admin=Annotated[dict,Depends(require_admin)]; DB=Annotated[Session,Depends(get_db)]
 class CrawlIn(BaseModel):
     type: str = 'mixed'
@@ -40,13 +43,19 @@ def crawl(payload:CrawlIn,_:Admin,db:DB):
 def restart(task_id:int,_:Admin,db:DB):
     task=db.get(CrawlTask,task_id)
     if not task: raise HTTPException(404,'任务不存在')
-    if task.status not in ['FAILED','STOPPED']: raise HTTPException(409,'仅失败或已停止任务可以继续抓取')
+    if task.status not in ['FAILED','STOPPED','PAUSED']: raise HTTPException(409,'仅失败、已停止或等待登录任务可以继续抓取')
     running=db.scalar(select(CrawlTask).where(CrawlTask.id!=task_id,CrawlTask.status.in_(['PENDING','RUNNING','STOP_REQUESTED','SEARCH_DONE','DOWNLOADING','PROCESSING','DEDUPING'])))
     if running: raise HTTPException(409,'TASK_IN_PROGRESS')
     city_code=task.params.get('city')
     city=db.scalar(select(City).where(City.code==city_code,City.enabled.is_(True)))
     if not city: raise HTTPException(422,'原任务城市已停用')
-    task.status='PENDING';task.failed_notes=0;task.error_message=None;task.current_stage=None;task.current_note=None;task.finished_at=None
+    if task.status == 'PAUSED':
+        try:
+            OpenCLIAdapter(get_settings()).check_login()
+        except AuthenticationRequired as exc:
+            raise HTTPException(409,'AUTH_REQUIRED') from exc
+    if task.status == 'FAILED': task.failed_notes=0
+    task.status='PENDING';task.error_message=None;task.current_stage=None;task.current_note=None;task.finished_at=None
     db.add(TaskLog(task_id=task.id,level='INFO',message='任务继续抓取',created_at=datetime.now(timezone.utc)))
     db.commit();db.refresh(task)
     from app.tasks.crawl_task import run_crawl

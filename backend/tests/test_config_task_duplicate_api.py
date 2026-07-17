@@ -8,6 +8,7 @@ from app.core.security import create_access_token
 from app.models.activity import Activity
 from app.models.duplicate import DuplicateCandidate
 from app.models.task import CrawlTask, TaskLog
+from app.services.crawler import AuthenticationRequired
 
 
 @pytest.fixture
@@ -125,6 +126,53 @@ def test_stopped_task_can_restart_with_same_id(client: TestClient, db_session: S
     assert queued == [task.id]
 
 
+def test_paused_task_stays_paused_when_login_check_fails(client: TestClient, db_session: Session, headers, monkeypatch):
+    city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'keywords': ['活动'], 'recent_filter': '一周内'}, headers=headers).json()['data']
+    task = CrawlTask(type='mixed', status='PAUSED', params={'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一周内', 'blogger_ids': []}, total_notes=100, downloaded_notes=19, ocr_notes=19, extracted_notes=19, success_notes=19, error_message='请登录')
+    db_session.add(task); db_session.commit()
+
+    def require_login(_self):
+        raise AuthenticationRequired('请登录')
+
+    monkeypatch.setattr('app.api.v1.tasks.OpenCLIAdapter.check_login', require_login)
+
+    response = client.post(f'/api/v1/tasks/{task.id}/restart', headers=headers)
+
+    assert response.status_code == 409
+    assert response.json()['message'] == 'AUTH_REQUIRED'
+    db_session.refresh(task)
+    assert task.status == 'PAUSED'
+    assert task.downloaded_notes == 19
+
+
+def test_paused_task_reuses_id_started_at_and_progress_after_login(client: TestClient, db_session: Session, headers, monkeypatch):
+    city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'keywords': ['活动'], 'recent_filter': '一周内'}, headers=headers).json()['data']
+    started_at = datetime(2026, 7, 17, 1, tzinfo=timezone.utc)
+    task = CrawlTask(type='mixed', status='PAUSED', params={'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一周内', 'blogger_ids': []}, total_notes=100, downloaded_notes=19, ocr_notes=19, extracted_notes=19, success_notes=19, failed_notes=2, started_at=started_at, error_message='请登录')
+    db_session.add(task); db_session.commit(); queued = []
+    monkeypatch.setattr('app.api.v1.tasks.OpenCLIAdapter.check_login', lambda _self: {'logged_in': True})
+    monkeypatch.setattr('app.tasks.crawl_task.run_crawl.delay', lambda task_id: queued.append(task_id))
+
+    response = client.post(f'/api/v1/tasks/{task.id}/restart', headers=headers)
+
+    assert response.status_code == 202
+    assert response.json()['data']['id'] == task.id
+    assert response.json()['data']['downloaded_notes'] == 19
+    assert response.json()['data']['failed_notes'] == 2
+    db_session.refresh(task)
+    assert task.started_at == started_at.replace(tzinfo=None)
+    assert queued == [task.id]
+
+
+def test_open_login_endpoint_returns_configured_url(client: TestClient, headers, monkeypatch):
+    monkeypatch.setattr('app.api.v1.settings.open_xhs_login', lambda _settings: 'https://www.xiaohongshu.com/explore')
+
+    response = client.post('/api/v1/settings/opencli/open-login', headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()['data']['url'] == 'https://www.xiaohongshu.com/explore'
+
+
 def test_dashboard_summary_contains_latest_task_progress(client: TestClient, db_session: Session, headers):
     task = CrawlTask(type='mixed', status='RUNNING', params={}, total_notes=20, downloaded_notes=8, ocr_notes=7, extracted_notes=5, success_notes=5, failed_notes=1, skipped_notes=4, current_stage='OCR', current_note='周末活动')
     db_session.add(task); db_session.commit()
@@ -134,7 +182,7 @@ def test_dashboard_summary_contains_latest_task_progress(client: TestClient, db_
     assert latest == pytest.approx({
         'id': task.id, 'status': 'RUNNING', 'total_notes': 20, 'downloaded_notes': 8,
         'ocr_notes': 7, 'extracted_notes': 5, 'success_notes': 5, 'failed_notes': 1,
-        'skipped_notes': 4,
+        'skipped_notes': 4, 'skipped_activities': 0,
         'current_stage': 'OCR', 'current_note': '周末活动', 'error_message': None,
         'progress_percent': 50.0,
     })

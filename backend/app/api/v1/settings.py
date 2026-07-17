@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.core.security import require_admin
 from app.models.config import Blogger, City, Keyword
 from app.services.opencli_adapter import OpenCLIAdapter
+from app.services.browser_launcher import BrowserLaunchError, open_xhs_login
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 Admin = Annotated[dict[str, str], Depends(require_admin)]
@@ -125,6 +126,16 @@ def opencli_test(_: Admin):
         data = OpenCLIAdapter(get_settings()).check_login()
         return {"code": 200, "message": "连接正常", "data": data}
     except Exception as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@router.post("/opencli/open-login")
+def open_login(_: Admin):
+    settings = get_settings()
+    try:
+        url = open_xhs_login(settings)
+        return {"code": 200, "message": "已打开 Chrome 小红书登录页", "data": {"url": url}}
+    except BrowserLaunchError as exc:
         raise HTTPException(503, str(exc)) from exc
 
 

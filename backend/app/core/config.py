@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     weekly_crawl_hour: int = 2
     weekly_crawl_minute: int = 0
     opencli_cdp_endpoint: str = "http://localhost:9222"
+    xhs_login_url: str = "https://www.xiaohongshu.com/explore"
+    xhs_login_browser: str = "Google Chrome"
     search_interval_min: int = 10
     search_interval_max: int = 15
     search_limit: int = 50
