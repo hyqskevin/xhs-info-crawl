@@ -64,6 +64,11 @@ def test_generate_persists_and_regenerates_single_report(client: TestClient, db_
     assert second.json()["data"]["activity_count"] == 1
 
 
+def test_report_generation_requires_exactly_one_city(client: TestClient, headers: dict[str, str]) -> None:
+    assert client.post("/api/v1/reports/generate", json={"week": "2026-W29", "cities": []}, headers=headers).status_code == 422
+    assert client.post("/api/v1/reports/generate", json={"week": "2026-W29", "cities": ["nb", "shanghai"]}, headers=headers).status_code == 422
+
+
 def test_download_report_returns_markdown_and_excel(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
     db_session.add(activity(1))
     db_session.commit()

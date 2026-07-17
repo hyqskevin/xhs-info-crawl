@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 
 class GenerateRequest(BaseModel):
     week: str
-    cities: list[str]
+    cities: list[str] = Field(min_length=1, max_length=1)
 
 
 def select_activities(db: Session, cities: list[str]) -> list[Activity]:
