@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import ElementPlus, { ElSelect } from 'element-plus'
+import ElementPlus, { ElMessageBox, ElSelect } from 'element-plus'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import DashboardView from './DashboardView.vue'
@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   createTask: vi.fn().mockResolvedValue({ data: { data: { id: 3 } } }),
   dashboard: vi.fn().mockResolvedValue({ data: { data: { last_task: { id: 4, status: 'FAILED', total_notes: 113, downloaded_notes: 5, ocr_notes: 5, extracted_notes: 5, success_notes: 5, failed_notes: 1, current_stage: null, current_note: null, error_message: 'bad date', progress_percent: 5.3 } } } }),
   restartTask: vi.fn().mockResolvedValue({ data: { data: { id: 4, status: 'PENDING' } } }),
+  stopTask: vi.fn().mockResolvedValue({ data: { data: { id: 4, status: 'STOP_REQUESTED' } } }),
 }))
 vi.mock('@/api/client', () => ({ api: mocks }))
 
@@ -47,6 +48,32 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('提取完成5')
     const restart = wrapper.findAll('button').find((button) => button.text().includes('继续抓取'))!
     await restart.trigger('click')
+    await flushPromises()
+    expect(mocks.restartTask).toHaveBeenCalledWith(4)
+  })
+
+  it('shows skipped progress and safely stops a running task', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    mocks.dashboard.mockResolvedValueOnce({ data: { data: { last_task: { id: 4, status: 'RUNNING', total_notes: 20, downloaded_notes: 8, ocr_notes: 7, extracted_notes: 5, success_notes: 5, failed_notes: 1, skipped_notes: 4, current_stage: 'OCR', current_note: '周末活动', error_message: null, progress_percent: 50 } } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已跳过4')
+    const stop = wrapper.findAll('button').find((button) => button.text().includes('停止抓取'))!
+    await stop.trigger('click')
+    await flushPromises()
+
+    expect(ElMessageBox.confirm).toHaveBeenCalled()
+    expect(mocks.stopTask).toHaveBeenCalledWith(4)
+  })
+
+  it('allows a stopped task to continue', async () => {
+    mocks.dashboard.mockResolvedValueOnce({ data: { data: { last_task: { id: 4, status: 'STOPPED', total_notes: 20, downloaded_notes: 8, ocr_notes: 7, extracted_notes: 5, success_notes: 5, failed_notes: 0, skipped_notes: 4, current_stage: null, current_note: null, error_message: null, progress_percent: 45 } } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已停止')
+    await wrapper.findAll('button').find((button) => button.text().includes('继续抓取'))!.trigger('click')
     await flushPromises()
     expect(mocks.restartTask).toHaveBeenCalledWith(4)
   })

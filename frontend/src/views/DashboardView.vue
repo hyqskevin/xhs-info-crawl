@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Connection, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { getHealth } from '@/api/health'
 import { api } from '@/api/client'
 
@@ -11,6 +11,7 @@ const cities = ref<any[]>([])
 const bloggers = ref<any[]>([])
 const submitting = ref(false)
 const restarting = ref(false)
+const stopping = ref(false)
 const lastTask = ref<any>(null)
 let pollTimer: ReturnType<typeof setInterval> | undefined
 const form = reactive({ city: '', keywords: [] as string[], recent_filter: '一周内', blogger_ids: [] as number[] })
@@ -18,7 +19,7 @@ const recentFilters = ['不限', '一天内', '一周内', '半年内']
 const selectedCity = computed(() => cities.value.find((city) => city.code === form.city))
 const cityKeywords = computed(() => selectedCity.value?.keywords || [])
 const cityBloggers = computed(() => bloggers.value.filter((blogger) => blogger.city_code === form.city && blogger.enabled))
-const statusLabels: Record<string, string> = { PENDING: '等待中', RUNNING: '抓取中', COMPLETED: '已完成', COMPLETED_WITH_ERRORS: '完成但有错误', FAILED: '失败', PAUSED: '等待登录' }
+const statusLabels: Record<string, string> = { PENDING: '等待中', RUNNING: '抓取中', STOP_REQUESTED: '正在停止', STOPPED: '已停止', COMPLETED: '已完成', COMPLETED_WITH_ERRORS: '完成但有错误', FAILED: '失败', PAUSED: '等待登录' }
 const stageLabels: Record<string, string> = { SEARCHING: '搜索笔记', DOWNLOADING: '下载笔记', OCR: 'OCR 识别', EXTRACTING: '提取活动', ARCHIVING: '归档结果' }
 
 watch(() => form.city, () => {
@@ -73,6 +74,19 @@ async function restart() {
   } finally { restarting.value = false }
 }
 
+async function stop() {
+  if (!lastTask.value) return
+  await ElMessageBox.confirm('当前笔记完成后停止，已处理数据会保留。确认停止抓取？', '安全停止', { type: 'warning' })
+  stopping.value = true
+  try {
+    await api.stopTask(lastTask.value.id)
+    ElMessage.success('已请求安全停止')
+    await loadLatestTask()
+  } catch (error:any) {
+    ElMessage.error(error.response?.data?.detail || '停止任务失败')
+  } finally { stopping.value = false }
+}
+
 onMounted(initialize)
 onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 </script>
@@ -104,10 +118,12 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
         <div><span>OCR 完成</span><strong>{{ lastTask.ocr_notes }}</strong></div>
         <div><span>提取完成</span><strong>{{ lastTask.extracted_notes }}</strong></div>
         <div><span>失败</span><strong>{{ lastTask.failed_notes }}</strong></div>
+        <div><span>已跳过</span><strong>{{ lastTask.skipped_notes || 0 }}</strong></div>
       </div>
       <ElProgress :percentage="lastTask.progress_percent || 0" :indeterminate="lastTask.progress_percent == null && ['PENDING','RUNNING'].includes(lastTask.status)" />
       <ElAlert v-if="lastTask.error_message" :title="lastTask.error_message" type="error" :closable="false" />
-      <ElButton v-if="lastTask.status === 'FAILED'" type="primary" :icon="RefreshRight" :loading="restarting" @click="restart">继续抓取</ElButton>
+      <ElButton v-if="['FAILED','STOPPED'].includes(lastTask.status)" type="primary" :icon="RefreshRight" :loading="restarting" @click="restart">继续抓取</ElButton>
+      <ElButton v-if="['PENDING','RUNNING','STOP_REQUESTED'].includes(lastTask.status)" type="danger" :loading="stopping || lastTask.status === 'STOP_REQUESTED'" :disabled="lastTask.status === 'STOP_REQUESTED'" @click="stop">停止抓取</ElButton>
     </ElCard>
 
     <ElCard shadow="never" class="status-card"><div class="status-card__content"><ElIcon :size="28" color="var(--el-color-primary)"><Connection /></ElIcon><div><strong>后端服务</strong><p>{{ status === 'ok' ? '服务运行正常' : status === 'loading' ? '正在检查服务' : '服务暂不可用' }}</p></div><ElTag :type="status === 'ok' ? 'success' : status === 'loading' ? 'info' : 'danger'">{{ database }}</ElTag></div></ElCard>
