@@ -38,6 +38,15 @@ def test_llm_partial_dates_are_normalized_without_crashing():
     assert result[1]["status"] == "NEEDS_REVIEW"
 
 
+def test_llm_date_with_ambiguous_chinese_time_is_rejected_safely():
+    result = extract_activities("活动", datetime(2026, 7, 17), lambda _: {"activities": [
+        {"name": "晚间活动", "start_time": "2026-07-18T晚间", "location": "文化广场", "source_image_indexes": []},
+    ]})[0]
+
+    assert result["start_time"] is None
+    assert result["status"] == "NEEDS_REVIEW"
+
+
 def test_archive_places_source_images_markdown_and_xlsx_under_date_task_folder(tmp_path: Path):
     note = Note(id=7, task_id=9, platform_note_id="note-7", title="上海周末合集", content="原文正文", source_url="https://www.xiaohongshu.com/explore/note-7", city_code="shanghai", status="OCR_DONE", raw_data={})
     image_file = tmp_path / "download.jpg"

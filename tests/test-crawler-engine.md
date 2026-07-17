@@ -462,6 +462,22 @@ def test_weekly_search_limit_enforced(mock_db_session):
 
 ---
 
+## TC-CRAWL-011：模型日期归一化与模糊时间降级
+
+- `4/5`、`4月5日` 等明确日期按任务当前年份归一化为 ISO 8601。
+- `2026-07-18T晚间`、自由文本和非法日历日期不得直接调用 `fromisoformat`。
+- 无法确定具体时间时 `start_time=null`，活动保留并标记 `NEEDS_REVIEW`。
+
+对应自动化：`backend/tests/test_multi_activity_archive.py`。
+
+## TC-CRAWL-012：单篇失败隔离与旧任务续跑
+
+- 下载、OCR、提取阶段按环境变量配置重试，超过次数仅将当前笔记计入失败。
+- 当前笔记残缺数据清理后继续下一篇；认证错误例外，必须暂停整批任务。
+- 旧任务中已有活动的 `OCR_DONE` 笔记视为完成并改为 `PROCESSED`；没有活动的残缺笔记清理后重试。
+
+对应自动化：`backend/tests/test_crawl_task_resilience.py`。
+
 ## 测试运行命令
 
 ```bash

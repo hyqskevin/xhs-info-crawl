@@ -42,9 +42,23 @@ def cleanup_incomplete_note(db, source_url: str) -> None:
     db.commit()
 
 
+def prepare_existing_note(db, source_url: str) -> bool:
+    """Return True when a note is already complete; remove partial legacy rows otherwise."""
+    note = db.scalar(select(Note).where(Note.source_url == source_url))
+    if note is None:
+        return False
+    has_activity = db.scalar(select(Activity.id).where(Activity.note_id == note.id).limit(1)) is not None
+    if note.status == "PROCESSED" or has_activity:
+        if note.status != "PROCESSED":
+            note.status = "PROCESSED"
+            db.commit()
+        return True
+    cleanup_incomplete_note(db, source_url)
+    return False
+
+
 def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAdapter, settings) -> bool:
-    existing = db.scalar(select(Note).where(Note.source_url == item["url"], Note.status == "PROCESSED"))
-    if existing:
+    if prepare_existing_note(db, item["url"]):
         return False
 
     attempts = settings.pipeline_stage_max_retries

@@ -5,6 +5,9 @@ const response = (data: unknown) => ({ code: 200, message: 'success', data })
 test('TC-UI-007 登录成功并进入仪表盘', async ({ page }) => {
   await page.route('**/api/v1/auth/login', (route) => route.fulfill({ json: response({ access_token: 'token' }) }))
   await page.route('**/api/v1/health', (route) => route.fulfill({ json: response({ status: 'ok', database: 'sqlite' }) }))
+  await page.route('**/api/v1/settings/cities**', (route) => route.fulfill({ json: response([]) }))
+  await page.route('**/api/v1/settings/bloggers**', (route) => route.fulfill({ json: response([]) }))
+  await page.route('**/api/v1/dashboard/summary**', (route) => route.fulfill({ json: response({ last_task: null }) }))
   await page.goto('/login')
   await page.getByPlaceholder('密码').fill('admin123')
   await page.getByRole('button', { name: '登录' }).click()
@@ -17,6 +20,7 @@ test.describe('已登录业务流程', () => {
     await page.addInitScript(() => localStorage.setItem('token', 'e2e-token'))
     await page.route('**/api/v1/settings/cities**', (route) => route.fulfill({ json: response([{ id: 1, name: '上海', code: 'shanghai', keywords: ['周末活动'], recent_filter: '一周内', enabled: true }]) }))
     await page.route('**/api/v1/settings/bloggers**', (route) => route.fulfill({ json: response([{ id: 9, username: '活动博主', city_code: 'shanghai', enabled: true }]) }))
+    await page.route('**/api/v1/dashboard/summary**', (route) => route.fulfill({ json: response({ last_task: null }) }))
   })
 
   test('TC-UI-008 活动只来自抓取且支持按时间筛选', async ({ page }) => {
@@ -97,7 +101,7 @@ test.describe('已登录业务流程', () => {
         return route.fulfill({ json: response({ id: 1 }) })
       }
       if (/\/reports\/1$/.test(url.pathname)) return route.fulfill({ json: response({ content: '# 上海周末活动' }) })
-      return route.fulfill({ json: response([{ id: 1, week: '2026-W29', cities: 'shanghai', activity_count: 2, status: 'GENERATED' }]) })
+      return route.fulfill({ json: response([{ id: 1, week: '2026-W29', cities: ['shanghai'], activity_count: 2, status: 'GENERATED' }]) })
     })
     await page.goto('/reports')
     await page.getByRole('button', { name: '生成周报' }).click()
@@ -127,5 +131,22 @@ test.describe('已登录业务流程', () => {
     await expect.poll(() => cityCreated).toBe(true)
     await page.getByRole('button', { name: '测试 OpenCLI' }).click()
     await expect(page.getByText('OpenCLI 登录与连接正常')).toBeVisible()
+  })
+
+  test('TC-UI-014 批量删除当前页活动', async ({ page }) => {
+    let deletedIds: number[] = []
+    const items = [1, 2].map((id) => ({ id, name: `活动 ${id}`, city_code: 'shanghai', start_time: '2026-07-18T10:00:00Z', location: '静安', status: 'RAW' }))
+    await page.route('**/api/v1/activities**', async (route) => {
+      if (route.request().method() === 'DELETE') {
+        deletedIds = route.request().postDataJSON().ids
+        return route.fulfill({ json: response({ deleted_count: deletedIds.length }) })
+      }
+      return route.fulfill({ json: { ...response({ items }), pagination: { total: 2 } } })
+    })
+    await page.goto('/activities')
+    await page.locator('.el-table__header .el-checkbox').click()
+    await page.getByRole('button', { name: '批量删除' }).click()
+    await page.getByRole('button', { name: '确定' }).click()
+    await expect.poll(() => deletedIds).toEqual([1, 2])
   })
 })

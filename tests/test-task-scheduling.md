@@ -385,6 +385,17 @@ def test_flower_monitoring_accessible():
 
 ---
 
+## TC-TASK-011：细化进度与失败任务续跑
+
+- 任务持久化发现、下载、OCR、提取和失败计数，并记录当前阶段与当前笔记。
+- 单篇处理失败不终止剩余笔记；完成时使用 `COMPLETED_WITH_ERRORS`。
+- 仅 `FAILED` 任务允许调用 `POST /tasks/{id}/restart`，沿用原任务 ID 和成功进度，清零本轮失败计数后重新入队。
+- 仪表盘摘要返回上述字段和 `progress_percent`。
+
+对应自动化：`backend/tests/test_task_restart.py`、`backend/tests/test_dashboard_api.py`、`backend/tests/test_crawl_task_resilience.py`。
+
+> 阶段一不再对整批 Celery 任务进行 300 秒自动重试；`TC-TASK-004` 的整批自动重试方案属于旧设计。阶段一仅对单笔记各处理阶段按 `.env` 重试，整批失败由管理员显式续跑。
+
 ## 测试运行命令
 
 ```bash

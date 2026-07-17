@@ -84,10 +84,10 @@ test.describe('TC-UI-008/009 活动管理完整流程', () => {
       return route.fulfill({ json: { ...response({ items: [activity] }), pagination: { total: 1 } } })
     })
     await page.goto('/activities')
-    await page.getByRole('button', { name: '删除' }).click()
+    await page.getByRole('button', { name: '删除', exact: true }).click()
     await page.getByRole('button', { name: '取消' }).click()
     expect(deletes).toBe(0)
-    await page.getByRole('button', { name: '删除' }).click()
+    await page.getByRole('button', { name: '删除', exact: true }).click()
     await page.getByRole('button', { name: '确定' }).click()
     await expect.poll(() => deletes).toBe(1)
     await expect(page.getByText('已删除')).toBeVisible()
@@ -103,6 +103,24 @@ test.describe('TC-UI-008/009 活动管理完整流程', () => {
     await page.getByRole('button', { name: '下一页' }).click()
     await expect.poll(() => pages).toContain('2')
   })
+
+  test('勾选多条活动后批量删除', async ({ page }) => {
+    let ids: number[] = []
+    const second = { ...activity, id: 2, name: '上海周末市集' }
+    await page.route('**/api/v1/activities**', async (route) => {
+      if (route.request().method() === 'DELETE') {
+        ids = route.request().postDataJSON().ids
+        return route.fulfill({ json: response({ deleted_count: ids.length }) })
+      }
+      return route.fulfill({ json: { ...response({ items: [activity, second] }), pagination: { total: 2 } } })
+    })
+    await page.goto('/activities')
+    await page.locator('.el-table__header .el-checkbox').click()
+    await page.getByRole('button', { name: '批量删除' }).click()
+    await page.getByRole('button', { name: '确定' }).click()
+    await expect.poll(() => ids).toEqual([1, 2])
+    await expect(page.getByText('已删除 2 条活动')).toBeVisible()
+  })
 })
 
 test.describe('TC-UI-010 任务完整流程', () => {
@@ -110,6 +128,7 @@ test.describe('TC-UI-010 任务完整流程', () => {
     await authenticated(page)
     await page.route('**/api/v1/settings/cities**', (route) => route.fulfill({ json: response([{ id: 1, name: '上海', code: 'shanghai', keywords: ['周末活动'], recent_filter: '一周内', enabled: true }]) }))
     await page.route('**/api/v1/settings/bloggers**', (route) => route.fulfill({ json: response([]) }))
+    await page.route('**/api/v1/dashboard/summary**', (route) => route.fulfill({ json: response({ last_task: null }) }))
   })
 
   test('提交期间禁用按钮以防重复点击', async ({ page }) => {
@@ -145,6 +164,22 @@ test.describe('TC-UI-010 任务完整流程', () => {
     await expect(page.locator('.el-drawer__title', { hasText: '任务日志' })).toBeVisible()
     await expect(page.getByText(/请在 Chrome 登录小红书后重试/)).toBeVisible()
   })
+
+  test('仪表盘展示细化进度并可继续失败任务', async ({ page }) => {
+    let restarted = false
+    const failedTask = { id: 4, status: 'FAILED', total_notes: 113, downloaded_notes: 8, ocr_notes: 7, extracted_notes: 5, failed_notes: 1, current_stage: null, current_note: null, progress_percent: 4, error_message: '单条笔记解析失败' }
+    await page.route('**/api/v1/dashboard/summary**', (route) => route.fulfill({ json: response({ last_task: failedTask }) }))
+    await page.route('**/api/v1/tasks/4/restart', async (route) => {
+      restarted = true
+      return route.fulfill({ status: 202, json: response({ ...failedTask, status: 'PENDING' }) })
+    })
+    await page.goto('/dashboard')
+    await expect(page.getByText('已下载').locator('..').getByText('8')).toBeVisible()
+    await expect(page.getByText('OCR 完成').locator('..').getByText('7')).toBeVisible()
+    await page.getByRole('button', { name: '继续抓取' }).click()
+    await expect.poll(() => restarted).toBe(true)
+    await expect(page.getByText('任务已继续抓取')).toBeVisible()
+  })
 })
 
 test.describe('TC-UI-011 去重完整流程', () => {
@@ -177,17 +212,24 @@ test.describe('TC-UI-011 去重完整流程', () => {
 })
 
 test.describe('TC-UI-012 周报完整流程', () => {
-  test.beforeEach(async ({ page }) => authenticated(page))
+  test.beforeEach(async ({ page }) => {
+    await authenticated(page)
+    await page.route('**/api/v1/settings/cities**', (route) => route.fulfill({ json: response([{ id: 1, name: '上海', code: 'shanghai', enabled: true }]) }))
+  })
 
-  test('Markdown 和 Excel 按钮打开正确下载地址', async ({ page }) => {
-    const opened: string[] = []
-    await page.addInitScript(() => { window.open = ((url?: string | URL) => { (window as any).__opened = [...((window as any).__opened || []), String(url)]; return null }) as typeof window.open })
-    await page.route('**/api/v1/reports**', (route) => route.fulfill({ json: response([{ id: 3, week: '2026-W29', cities: 'shanghai', activity_count: 2, status: 'GENERATED' }]) }))
+  test('单城市周报使用周选择器且 Markdown 和 Excel 可下载', async ({ page }) => {
+    const downloaded: string[] = []
+    await page.route('**/api/v1/reports**', (route) => route.fulfill({ json: response([{ id: 3, week: '2026-W29', cities: ['shanghai'], activity_count: 2, status: 'GENERATED' }]) }))
+    await page.route('**/api/v1/reports/3/download**', (route) => {
+      downloaded.push(new URL(route.request().url()).searchParams.get('format') || '')
+      return route.fulfill({ body: 'report', headers: { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="report.md"' } })
+    })
     await page.goto('/reports')
+    await expect(page.getByLabel('周次')).toBeVisible()
+    await expect(page.getByRole('combobox', { name: '城市' })).toBeVisible()
     await page.getByRole('button', { name: 'Markdown' }).click()
     await page.getByRole('button', { name: 'Excel' }).click()
-    opened.push(...await page.evaluate(() => (window as any).__opened || []))
-    expect(opened).toEqual(['/api/v1/reports/3/download?format=md', '/api/v1/reports/3/download?format=xlsx'])
+    await expect.poll(() => downloaded).toEqual(['md', 'xlsx'])
   })
 })
 
@@ -239,5 +281,20 @@ test.describe('TC-UI-013 配置中心完整流程', () => {
     await expect.poll(() => deleted).toBe(true)
     await page.getByRole('button', { name: '测试 OpenCLI' }).click()
     await expect(page.getByText('请在 Chrome 登录小红书')).toBeVisible()
+  })
+
+  test('OpenCLI 测试请求期间显示独立旋转图标，结束后显示 Toast', async ({ page }) => {
+    let release: (() => void) | undefined
+    await page.route('**/api/v1/settings/opencli/test', async (route) => {
+      await new Promise<void>((resolve) => { release = resolve })
+      return route.fulfill({ json: response({ logged_in: true }) })
+    })
+    await page.route('**/api/v1/settings/cities**', (route) => route.fulfill({ json: response([]) }))
+    await page.goto('/settings')
+    await page.getByRole('button', { name: '测试 OpenCLI' }).click()
+    await expect(page.getByLabel('OpenCLI 测试中')).toBeVisible()
+    release?.()
+    await expect(page.getByLabel('OpenCLI 测试中')).toHaveCount(0)
+    await expect(page.getByText('OpenCLI 登录与连接正常')).toBeVisible()
   })
 })

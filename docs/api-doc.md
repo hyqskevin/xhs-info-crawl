@@ -127,6 +127,12 @@
 
 - 描述：删除活动
 
+### DELETE /api/v1/activities/batch
+
+- 描述：批量软删除活动管理当前页勾选的数据
+- 请求：`{"ids": [1, 2, 3]}`
+- 响应：`{"deleted_count": 3}`；不存在或已删除的 ID 不重复计数
+
 ## 去重接口
 
 ### GET /api/v1/duplicates
@@ -203,6 +209,12 @@
 
 - 描述：任务执行日志
 
+### POST /api/v1/tasks/:id/restart
+
+- 描述：按原参数继续失败任务，沿用原任务 ID，并跳过已经成功提取的笔记
+- 限制：仅 `FAILED` 状态可调用；存在其他运行中任务时返回 `409`
+- 进度字段：`total_notes`、`downloaded_notes`、`ocr_notes`、`extracted_notes`、`failed_notes`、`current_stage`、`current_note`
+
 ## 配置接口
 
 ### GET /api/v1/settings/cities
@@ -265,9 +277,11 @@
 ```json
 {
   "week": "2025-W29",
-  "cities": ["shanghai", "beijing"]
+  "cities": ["shanghai"]
 }
 ```
+
+- 限制：阶段一只允许选择一个已启用城市，`cities` 数组长度必须为 1；周次由前端周选择器转换为 ISO week。
 
 ### GET /api/v1/reports/:id
 

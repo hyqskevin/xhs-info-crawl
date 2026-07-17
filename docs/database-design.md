@@ -116,8 +116,13 @@
 | status | VARCHAR(32) | 状态 |
 | params | JSONB | 任务参数 |
 | total_notes | INT DEFAULT 0 | 抓取笔记总数 |
+| downloaded_notes | INT DEFAULT 0 | 已完成详情及图片下载的笔记数 |
+| ocr_notes | INT DEFAULT 0 | 已完成 OCR 阶段的笔记数（OCR 关闭时表示已跳过） |
+| extracted_notes | INT DEFAULT 0 | 已完成活动提取与归档的笔记数 |
 | success_notes | INT DEFAULT 0 | 成功处理数 |
 | failed_notes | INT DEFAULT 0 | 失败数 |
+| current_stage | VARCHAR(32) NULL | 当前阶段：SEARCHING / DOWNLOADING / OCR / EXTRACTING / ARCHIVING |
+| current_note | TEXT NULL | 当前处理的笔记标题或来源链接 |
 | started_at | TIMESTAMP | 开始时间 |
 | finished_at | TIMESTAMP | 结束时间 |
 | error_message | TEXT | 错误信息 |
