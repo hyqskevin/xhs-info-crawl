@@ -28,14 +28,17 @@ def test_extract_activities_returns_every_llm_activity_with_source_images():
 def test_llm_partial_dates_are_normalized_without_crashing():
     result = extract_activities("活动", datetime(2026, 7, 17), lambda _: {"activities": [
         {"name": "春日市集", "start_time": "4/5", "end_time": "非法日期", "location": "月湖公园", "source_image_indexes": [1]},
+        {"name": "夏日市集", "start_time": "8/5", "location": "月湖公园", "source_image_indexes": [2]},
         {"name": "无效日期活动", "start_time": "2/30", "location": "文化广场", "source_image_indexes": []},
     ]})
 
-    assert result[0]["start_time"] == "2026-04-05T00:00:00"
+    assert result[0]["start_time"] is None
     assert result[0]["end_time"] is None
-    assert result[0]["status"] == "RAW"
-    assert result[1]["start_time"] is None
-    assert result[1]["status"] == "NEEDS_REVIEW"
+    assert result[0]["status"] == "NEEDS_REVIEW"
+    assert result[1]["start_time"] == "2026-08-05T00:00:00"
+    assert result[1]["status"] == "RAW"
+    assert result[2]["start_time"] is None
+    assert result[2]["status"] == "NEEDS_REVIEW"
 
 
 def test_llm_date_with_ambiguous_chinese_time_is_rejected_safely():

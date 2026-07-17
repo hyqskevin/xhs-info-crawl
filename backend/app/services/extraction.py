@@ -1,12 +1,12 @@
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 
 LLM = Callable[[str], dict[str, Any]]
 
 
-def normalize_activity_datetime(value: Any, now: datetime) -> str | None:
+def normalize_activity_datetime(value: Any, now: datetime, future_window_days: int = 60) -> str | None:
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
@@ -20,22 +20,28 @@ def normalize_activity_datetime(value: Any, now: datetime) -> str | None:
     if not match:
         return None
     try:
-        return datetime(
-            int(match.group(1) or now.year),
+        explicit_year = match.group(1)
+        parsed = datetime(
+            int(explicit_year or now.year),
             int(match.group(2)),
             int(match.group(3)),
             int(match.group(4) or 0),
             int(match.group(5) or 0),
-        ).isoformat()
+        )
+        if not explicit_year and parsed < now.replace(tzinfo=None):
+            parsed = parsed.replace(year=parsed.year + 1)
+        if not explicit_year and parsed > now.replace(tzinfo=None) + timedelta(days=future_window_days):
+            return None
+        return parsed.isoformat()
     except ValueError:
         return None
 
 
-def normalize_activity_row(row: dict[str, Any], now: datetime) -> dict[str, Any]:
+def normalize_activity_row(row: dict[str, Any], now: datetime, future_window_days: int = 60) -> dict[str, Any]:
     item = dict(row)
     item["name"] = str(item.get("name") or "").strip()
-    item["start_time"] = normalize_activity_datetime(item.get("start_time"), now)
-    item["end_time"] = normalize_activity_datetime(item.get("end_time"), now)
+    item["start_time"] = normalize_activity_datetime(item.get("start_time"), now, future_window_days)
+    item["end_time"] = normalize_activity_datetime(item.get("end_time"), now, future_window_days)
     if item["start_time"] and item["end_time"] and datetime.fromisoformat(item["end_time"]) < datetime.fromisoformat(item["start_time"]):
         item["end_time"] = None
     item["source_image_indexes"] = sorted({int(value) for value in item.get("source_image_indexes", []) if str(value).isdigit()})

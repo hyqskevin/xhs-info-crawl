@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -18,11 +19,14 @@ class MiniMaxClient:
     def extract(self, text: str) -> dict[str, Any]:
         return self._request(text, "Extract event fields and return one JSON object.", 1024)
 
-    def extract_many(self, text: str) -> dict[str, Any]:
+    def extract_many(self, text: str, reference: datetime | None = None) -> dict[str, Any]:
+        reference = reference or datetime.now()
         instruction = (
             "Extract every distinct concrete event from the note and OCR text. Return one JSON object with an activities array. "
             "Each activity must contain name, start_time, end_time, location, price, type, summary, confidence, and source_image_indexes. "
-            "Use ISO 8601 date-time strings for start_time and end_time. "
+            f"The reference date is {reference.date().isoformat()} in {self.settings.celery_timezone}. "
+            f"Only extract events intersecting the next {self.settings.activity_future_window_days} days. "
+            "Use ISO 8601 date-time strings for start_time and end_time. Never invent a year that is absent from the source. "
             "Do not create one summary event for the whole note. IMAGE markers identify source image indexes. Use null for unknown values."
         )
         tools=[{"type":"function","function":{"name":"emit_activities","description":"Return every distinct concrete activity found in the note and OCR images.","parameters":{"type":"object","properties":{"activities":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"start_time":{"type":["string","null"]},"end_time":{"type":["string","null"]},"location":{"type":["string","null"]},"price":{"type":["string","null"]},"type":{"type":["string","null"]},"summary":{"type":["string","null"]},"confidence":{"type":["number","string"]},"source_image_indexes":{"type":"array","items":{"type":"integer"}}},"required":["name","start_time","location","source_image_indexes"]}}},"required":["activities"]}}}]
