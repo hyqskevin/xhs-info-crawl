@@ -47,7 +47,7 @@ async function initialize() {
 function applyFilters() { filters.page = 1; load() }
 function resetFilters() { Object.assign(filters, { city: '', status: '', dates: [], page: 1, page_size: 20 }); load() }
 function changePageSize() { filters.page = 1; load() }
-function formatTime(value: string) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-' }
+function formatTime(value: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '待确认' }
 
 function openEdit(row: any) {
   editingId.value = row.id
@@ -57,7 +57,7 @@ function openEdit(row: any) {
 }
 
 async function save() {
-  const data = { ...form, start_time: new Date(form.start_time).toISOString(), end_time: form.end_time ? new Date(form.end_time).toISOString() : null }
+  const data = { ...form, start_time: form.start_time ? new Date(form.start_time).toISOString() : null, end_time: form.end_time ? new Date(form.end_time).toISOString() : null }
   await api.updateActivity(editingId.value!, data)
   dialog.value = false
   ElMessage.success('保存成功')

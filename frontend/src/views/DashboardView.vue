@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Connection, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
+import { Connection, Link, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getHealth } from '@/api/health'
@@ -11,6 +11,7 @@ const cities = ref<any[]>([])
 const bloggers = ref<any[]>([])
 const submitting = ref(false)
 const restarting = ref(false)
+const openingLogin = ref(false)
 const stopping = ref(false)
 const lastTask = ref<any>(null)
 let pollTimer: ReturnType<typeof setInterval> | undefined
@@ -67,11 +68,21 @@ async function restart() {
   restarting.value = true
   try {
     await api.restartTask(lastTask.value.id)
-    ElMessage.success('任务已继续抓取')
+    ElMessage.success(lastTask.value.status === 'PAUSED' ? '登录状态正常，任务已继续抓取' : '任务已继续抓取')
     await loadLatestTask()
   } catch (error:any) {
-    ElMessage.error(error.response?.data?.detail || '任务续跑失败')
+    ElMessage.error(error.response?.data?.message === 'AUTH_REQUIRED' ? '尚未检测到小红书登录状态，请登录后重试' : error.response?.data?.message || error.response?.data?.detail || '任务续跑失败')
   } finally { restarting.value = false }
+}
+
+async function openLogin() {
+  openingLogin.value = true
+  try {
+    await api.openXhsLogin()
+    ElMessage.success('已打开 Chrome 小红书登录页')
+  } catch (error:any) {
+    ElMessage.error(error.response?.data?.message || '无法打开 Chrome 小红书登录页')
+  } finally { openingLogin.value = false }
 }
 
 async function stop() {
@@ -119,10 +130,13 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
         <div><span>提取完成</span><strong>{{ lastTask.extracted_notes }}</strong></div>
         <div><span>失败</span><strong>{{ lastTask.failed_notes }}</strong></div>
         <div><span>已跳过</span><strong>{{ lastTask.skipped_notes || 0 }}</strong></div>
+        <div><span>活动已跳过</span><strong>{{ lastTask.skipped_activities || 0 }}</strong></div>
       </div>
       <ElProgress :percentage="lastTask.progress_percent || 0" :indeterminate="lastTask.progress_percent == null && ['PENDING','RUNNING'].includes(lastTask.status)" />
       <ElAlert v-if="lastTask.error_message" :title="lastTask.error_message" type="error" :closable="false" />
       <ElButton v-if="['FAILED','STOPPED'].includes(lastTask.status)" type="primary" :icon="RefreshRight" :loading="restarting" @click="restart">继续抓取</ElButton>
+      <ElButton v-if="lastTask.status === 'PAUSED'" :icon="Link" :loading="openingLogin" @click="openLogin">打开小红书登录</ElButton>
+      <ElButton v-if="lastTask.status === 'PAUSED'" type="primary" :icon="RefreshRight" :loading="restarting" @click="restart">检测登录并继续</ElButton>
       <ElButton v-if="['PENDING','RUNNING','STOP_REQUESTED'].includes(lastTask.status)" type="danger" :loading="stopping || lastTask.status === 'STOP_REQUESTED'" :disabled="lastTask.status === 'STOP_REQUESTED'" @click="stop">停止抓取</ElButton>
     </ElCard>
 

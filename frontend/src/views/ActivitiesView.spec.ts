@@ -32,6 +32,15 @@ describe('ActivitiesView', () => {
     expect(mocks.activities).toHaveBeenCalledWith(expect.objectContaining({ page: 1, page_size: 20 }))
   })
 
+  it('shows unknown activity dates as pending confirmation', async () => {
+    mocks.activities.mockResolvedValueOnce({ data: { data: { items: [{ id: 2, name: '日期未知活动', city_code: 'shanghai', start_time: null, location: '静安', status: 'NEEDS_REVIEW' }] }, pagination: { page: 1, page_size: 20, total: 1 } } })
+    const wrapper = mount(ActivitiesView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('日期未知活动')
+    expect(wrapper.text()).toContain('待确认')
+  })
+
   it('batch deletes only explicitly selected activities', async () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
     const wrapper = mount(ActivitiesView, { attachTo: document.body, global: { plugins: [ElementPlus] } })

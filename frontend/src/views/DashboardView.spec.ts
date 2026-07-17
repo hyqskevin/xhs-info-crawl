@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   createTask: vi.fn().mockResolvedValue({ data: { data: { id: 3 } } }),
   dashboard: vi.fn().mockResolvedValue({ data: { data: { last_task: { id: 4, status: 'FAILED', total_notes: 113, downloaded_notes: 5, ocr_notes: 5, extracted_notes: 5, success_notes: 5, failed_notes: 1, current_stage: null, current_note: null, error_message: 'bad date', progress_percent: 5.3 } } } }),
   restartTask: vi.fn().mockResolvedValue({ data: { data: { id: 4, status: 'PENDING' } } }),
+  openXhsLogin: vi.fn().mockResolvedValue({ data: { data: { url: 'https://www.xiaohongshu.com/explore' } } }),
   stopTask: vi.fn().mockResolvedValue({ data: { data: { id: 4, status: 'STOP_REQUESTED' } } }),
 }))
 vi.mock('@/api/client', () => ({ api: mocks }))
@@ -74,6 +75,22 @@ describe('DashboardView', () => {
 
     expect(wrapper.text()).toContain('已停止')
     await wrapper.findAll('button').find((button) => button.text().includes('继续抓取'))!.trigger('click')
+    await flushPromises()
+    expect(mocks.restartTask).toHaveBeenCalledWith(4)
+  })
+
+  it('opens Chrome login and resumes a paused task', async () => {
+    mocks.dashboard.mockResolvedValueOnce({ data: { data: { last_task: { id: 4, status: 'PAUSED', total_notes: 102, downloaded_notes: 19, ocr_notes: 19, extracted_notes: 19, success_notes: 19, failed_notes: 0, skipped_notes: 0, skipped_activities: 3, current_stage: 'DOWNLOADING', current_note: '活动笔记', error_message: '请在 Chrome 登录小红书后重试', progress_percent: 18.6 } } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('打开小红书登录')
+    expect(wrapper.text()).toContain('检测登录并继续')
+    expect(wrapper.text()).toContain('活动已跳过3')
+    await wrapper.findAll('button').find((button) => button.text().includes('打开小红书登录'))!.trigger('click')
+    await flushPromises()
+    expect(mocks.openXhsLogin).toHaveBeenCalled()
+    await wrapper.findAll('button').find((button) => button.text().includes('检测登录并继续'))!.trigger('click')
     await flushPromises()
     expect(mocks.restartTask).toHaveBeenCalledWith(4)
   })
