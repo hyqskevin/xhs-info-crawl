@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Edit, Refresh, Search, View } from '@element-plus/icons-vue'
+import { Delete, Edit, Refresh, Search, View } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
@@ -11,6 +11,8 @@ const dialog = ref(false)
 const drawer = ref(false)
 const detail = ref<any>({})
 const editingId = ref<number | null>(null)
+const selectedRows = ref<any[]>([])
+const batchDeleting = ref(false)
 const filters = reactive({ city: '', status: '', dates: [] as string[], page: 1, page_size: 20 })
 const form = reactive<any>({})
 const statusLabels: Record<string, string> = { NEEDS_REVIEW: '待完善', RAW: '待审核', APPROVED: '已通过', PUBLISHED: '已发布' }
@@ -66,6 +68,22 @@ async function remove(id: number) {
   await load()
 }
 
+async function batchRemove() {
+  if (!selectedRows.value.length) return
+  await ElMessageBox.confirm(`确认删除选中的 ${selectedRows.value.length} 条活动？`, '批量删除确认', { type: 'warning' })
+  batchDeleting.value = true
+  try {
+    const response = await api.deleteActivities(selectedRows.value.map((row) => row.id))
+    ElMessage.success(`已删除 ${response.data.data.deleted_count} 条活动`)
+    selectedRows.value = []
+    await load()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail || '批量删除失败')
+  } finally {
+    batchDeleting.value = false
+  }
+}
+
 async function show(id: number) { detail.value = (await api.activity(id)).data.data; drawer.value = true }
 onMounted(initialize)
 </script>
@@ -80,9 +98,11 @@ onMounted(initialize)
       <ElSelect v-model="filters.status" placeholder="审核状态" clearable class="filter-item"><ElOption v-for="(label, value) in statusLabels" :key="value" :label="label" :value="value" /></ElSelect>
       <ElButton :icon="Search" @click="applyFilters">筛选</ElButton>
       <ElButton :icon="Refresh" @click="resetFilters">重置</ElButton>
+      <ElButton type="danger" :icon="Delete" :disabled="!selectedRows.length" :loading="batchDeleting" @click="batchRemove">批量删除</ElButton>
     </div>
 
-    <ElTable :data="rows">
+    <ElTable :data="rows" @selection-change="selectedRows = $event">
+      <ElTableColumn type="selection" width="48" />
       <ElTableColumn prop="name" label="活动名称" min-width="200" show-overflow-tooltip />
       <ElTableColumn label="城市" width="110"><template #default="scope">{{ cityNames[scope.row.city_code] || scope.row.city_code }}</template></ElTableColumn>
       <ElTableColumn label="活动时间" width="190"><template #default="scope">{{ formatTime(scope.row.start_time) }}</template></ElTableColumn>

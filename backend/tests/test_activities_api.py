@@ -74,6 +74,20 @@ def test_delete_activity_is_soft_delete(client: TestClient, db_session: Session,
     assert client.get(f"/api/v1/activities/{activity.id}", headers=headers).status_code == 404
 
 
+def test_batch_delete_activities_is_atomic_soft_delete(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
+    first, second = make_activity(31), make_activity(32)
+    db_session.add_all([first, second]); db_session.commit()
+
+    response = client.request("DELETE", "/api/v1/activities/batch", json={"ids": [first.id, first.id, second.id]}, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["data"]["deleted_count"] == 2
+    db_session.refresh(first); db_session.refresh(second)
+    assert first.status == second.status == "DELETED"
+    assert client.request("DELETE", "/api/v1/activities/batch", json={"ids": [first.id]}, headers=headers).status_code == 404
+    assert client.request("DELETE", "/api/v1/activities/batch", json={"ids": []}, headers=headers).status_code == 422
+
+
 def test_create_activity_manual_is_not_available(client: TestClient, headers: dict[str, str]) -> None:
     response = client.post("/api/v1/activities", json={"name": "新活动", "city_code": "shanghai", "start_time": "2025-08-01T10:00:00Z", "end_time": "2025-08-01T18:00:00Z", "location": "上海中心", "price": "免费", "type": "展览", "source_url": "https://manual.example.com", "summary": "手动录入的活动"}, headers=headers)
     assert response.status_code == 405

@@ -2,6 +2,7 @@ from datetime import date, datetime, time, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,10 @@ from app.schemas.activity import ActivityRead, ActivityUpdate
 router = APIRouter(prefix="/activities", tags=["activities"])
 auth = Annotated[dict[str, str], Depends(get_current_user)]
 database = Annotated[Session, Depends(get_db)]
+
+
+class BatchDeleteRequest(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=100)
 
 
 def serialize(activity: Activity) -> dict[str, object]:
@@ -53,6 +58,21 @@ def list_activities(
     total = db.scalar(select(func.count()).select_from(Activity).where(*filters)) or 0
     items = db.scalars(select(Activity).where(*filters).order_by(Activity.start_time, Activity.id).offset((page - 1) * page_size).limit(page_size)).all()
     return {"code": 200, "message": "success", "data": {"items": [serialize(item) for item in items]}, "pagination": {"page": page, "page_size": page_size, "total": total}}
+
+
+@router.delete("/batch")
+def batch_delete_activities(payload: BatchDeleteRequest, _: auth, db: database):
+    ids = list(dict.fromkeys(payload.ids))
+    activities = list(db.scalars(select(Activity).where(Activity.id.in_(ids), Activity.status.notin_(["DELETED", "MERGED"]))).all())
+    if not activities:
+        raise HTTPException(status_code=404, detail="没有可删除的活动")
+    changed_at = datetime.now(timezone.utc)
+    for activity in activities:
+        activity.status = "DELETED"
+        activity.updated_at = changed_at
+    db.commit()
+    deleted_ids = [activity.id for activity in activities]
+    return {"code": 200, "message": "success", "data": {"deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)}}
 
 
 @router.get("/{activity_id}")
