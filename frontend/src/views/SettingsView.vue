@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Connection, Delete, Edit, Plus } from '@element-plus/icons-vue'
+import { Connection, Delete, Edit, Loading, Plus } from '@element-plus/icons-vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
@@ -9,6 +9,7 @@ const rows = ref<any[]>([])
 const cities = ref<any[]>([])
 const dialog = ref(false)
 const editingId = ref<number | null>(null)
+const testingOpenCLI = ref(false)
 const form = reactive<any>({})
 const recentFilters = ['不限', '一天内', '一周内', '半年内']
 
@@ -51,12 +52,15 @@ async function remove(row: any) {
 }
 
 async function test() {
+  testingOpenCLI.value = true
   try {
     await api.testOpenCLI()
     ElMessage.success('OpenCLI 登录与连接正常')
   } catch (error: any) {
     const reason = error.response?.data?.message || error.response?.data?.detail
     ElMessage.error(reason === 'AUTH_REQUIRED' ? '请在 Chrome 登录小红书' : (reason || '请在 Chrome 登录小红书'))
+  } finally {
+    testingOpenCLI.value = false
   }
 }
 
@@ -71,7 +75,8 @@ onMounted(load)
         <ElRadioButton value="bloggers">博主白名单</ElRadioButton>
       </ElRadioGroup>
       <ElButton type="primary" :icon="Plus" @click="open()">{{ tab === 'cities' ? '新增城市' : '新增博主' }}</ElButton>
-      <ElButton :icon="Connection" @click="test">测试 OpenCLI</ElButton>
+      <ElButton :icon="Connection" :disabled="testingOpenCLI" @click="test">测试 OpenCLI</ElButton>
+      <ElIcon v-if="testingOpenCLI" class="opencli-testing-icon is-loading" aria-label="OpenCLI 测试中"><Loading /></ElIcon>
     </div>
 
     <ElTable v-if="tab === 'cities'" :data="rows">

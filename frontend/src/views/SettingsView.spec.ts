@@ -42,4 +42,20 @@ describe('SettingsView', () => {
     expect(document.body.textContent).toContain('抓取时间范围')
     expect(document.body.textContent).not.toContain('城市代码')
   })
+
+  it('shows a separate loading icon while testing OpenCLI', async () => {
+    let resolveTest!: (value: unknown) => void
+    mocks.testOpenCLI.mockImplementationOnce(() => new Promise((resolve) => { resolveTest = resolve }))
+    const wrapper = mount(SettingsView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    const button = wrapper.findAll('button').find((item) => item.text().includes('测试 OpenCLI'))!
+
+    await button.trigger('click')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.opencli-testing-icon.is-loading').exists()).toBe(true)
+
+    resolveTest({ data: { data: { logged_in: true } } })
+    await flushPromises()
+    expect(wrapper.find('.opencli-testing-icon').exists()).toBe(false)
+  })
 })
