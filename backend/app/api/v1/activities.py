@@ -59,7 +59,7 @@ def list_activities(
     if end_date:
         filters.append(Activity.start_time <= datetime.combine(end_date, time.max, tzinfo=timezone.utc))
     total = db.scalar(select(func.count()).select_from(Activity).where(*filters)) or 0
-    items = db.scalars(select(Activity).where(*filters).order_by(Activity.start_time, Activity.id).offset((page - 1) * page_size).limit(page_size)).all()
+    items = db.scalars(select(Activity).where(*filters).order_by(Activity.start_time.is_(None), Activity.start_time, Activity.id).offset((page - 1) * page_size).limit(page_size)).all()
     return {"code": 200, "message": "success", "data": {"items": [serialize(item) for item in items]}, "pagination": {"page": page, "page_size": page_size, "total": total}}
 
 

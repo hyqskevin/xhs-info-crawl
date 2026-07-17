@@ -7,6 +7,7 @@ from app.models.task import CrawlTask, TaskLog
 from app.tasks.crawl_task import prepare_existing_note
 from app.tasks import crawl_task
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from sqlalchemy import select
 
 
@@ -116,6 +117,59 @@ def test_existing_incomplete_note_is_removed_before_retry(db_session):
 
     assert prepare_existing_note(db_session, note.source_url) is False
     assert db_session.get(Note, note.id) is None
+
+
+def test_one_note_keeps_valid_and_unknown_activities_but_skips_window_outliers(db_session, monkeypatch, tmp_path):
+    task = CrawlTask(
+        type="mixed",
+        status="RUNNING",
+        params={"city": "nb"},
+        started_at=datetime(2026, 7, 17, tzinfo=timezone.utc),
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    class FakeAdapter:
+        def note(self, _url):
+            return {"content": "活动正文"}
+
+        def download(self, _url, _folder):
+            return []
+
+    extracted = [
+        {"name": "有效活动", "start_time": "2026-07-20T10:00:00", "end_time": None, "location": "文化广场", "status": "RAW", "confidence": 0.9, "source_image_indexes": []},
+        {"name": "历史活动", "start_time": "2024-07-20T10:00:00", "end_time": None, "location": "文化广场", "status": "RAW", "confidence": 0.9, "source_image_indexes": []},
+        {"name": "远期活动", "start_time": "2026-10-20T10:00:00", "end_time": None, "location": "文化广场", "status": "RAW", "confidence": 0.9, "source_image_indexes": []},
+        {"name": "日期待确认", "start_time": None, "end_time": None, "location": "文化广场", "status": "NEEDS_REVIEW", "confidence": 0.5, "source_image_indexes": []},
+    ]
+    monkeypatch.setattr(crawl_task, "extract_activities", lambda *_args, **_kwargs: extracted)
+    settings = SimpleNamespace(
+        pipeline_stage_max_retries=1,
+        pipeline_stage_retry_delay_seconds=0,
+        archive_dir=tmp_path / "archive",
+        ocr_enabled=False,
+        minimax_api_key="",
+        activity_future_window_days=60,
+        celery_timezone="Asia/Shanghai",
+    )
+
+    crawl_task.process_note(
+        db_session,
+        task,
+        "nb",
+        {"title": "宁波活动合集", "url": "https://xhs/window-test"},
+        FakeAdapter(),
+        settings,
+    )
+
+    activities = list(db_session.scalars(select(Activity).order_by(Activity.id)))
+    assert [activity.name for activity in activities] == ["有效活动", "日期待确认"]
+    assert activities[1].start_time is None
+    assert activities[1].status == "NEEDS_REVIEW"
+    assert task.skipped_activities == 2
+    messages = list(db_session.scalars(select(TaskLog.message).where(TaskLog.task_id == task.id)))
+    assert any("历史活动" in message and "past" in message for message in messages)
+    assert any("远期活动" in message and "future" in message for message in messages)
 
 
 def test_keyword_search_skips_titles_without_the_corresponding_keyword(db_session, monkeypatch, tmp_path):

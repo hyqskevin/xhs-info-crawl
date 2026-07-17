@@ -12,7 +12,7 @@ class Activity(Base):
     note_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(256))
     city_code: Mapped[str] = mapped_column(String(32), index=True)
-    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     location: Mapped[str] = mapped_column(String(256), default="")
     price: Mapped[str] = mapped_column(String(128), default="")

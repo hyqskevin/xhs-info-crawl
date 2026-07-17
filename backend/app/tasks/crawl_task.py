@@ -10,6 +10,7 @@ from app.models.config import Blogger, City, Keyword
 from app.models.note import Note, NoteImage
 from app.models.task import CrawlTask, TaskLog
 from app.services.archive import archive_task_folder, archive_task_result
+from app.services.activity_window import ActivityWindow
 from app.services.crawler import AuthenticationRequired
 from app.services.dedup import create_duplicate_candidates
 from app.services.extraction import extract_activities
@@ -125,23 +126,29 @@ def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAda
 
     set_progress(db, task, "EXTRACTING", note.title)
     combined = f"标题：{note.title}\n正文：{note.content}\n" + "\n".join(ocr_texts)
-    now = datetime.now()
+    now = started_at.replace(tzinfo=None)
     if settings.minimax_api_key:
         client = MiniMaxClient(settings)
         try:
-            extracted = run_stage(lambda: extract_activities(combined, now, client.extract_many), attempts, delay)
+            extracted = run_stage(lambda: extract_activities(combined, now, lambda text: client.extract_many(text, started_at)), attempts, delay)
         except Exception as exc:
             log(db, task.id, "WARNING", f"MiniMax 提取失败，已降级规则提取：{exc}")
             extracted = extract_activities(combined, now, None)
     else:
         extracted = extract_activities(combined, now, None)
 
+    window = ActivityWindow(started_at, settings.activity_future_window_days, settings.celery_timezone)
     for fields in extracted:
+        window_status = window.classify(fields.get("start_time"), fields.get("end_time"))
+        if window_status in {"past", "future"}:
+            task.skipped_activities += 1
+            log(db, task.id, "INFO", f"活动时间超出有效窗口，已跳过：{fields.get('name') or note.title} 日期={fields.get('start_time')} 原因={window_status}")
+            continue
         activity = Activity(
             note_id=note.id,
             name=fields.get("name") or note.title,
             city_code=city,
-            start_time=datetime.fromisoformat(fields["start_time"]) if fields.get("start_time") else datetime.now(timezone.utc),
+            start_time=datetime.fromisoformat(fields["start_time"]) if fields.get("start_time") else None,
             end_time=datetime.fromisoformat(fields["end_time"]) if fields.get("end_time") else None,
             location=fields.get("location") or "",
             price=fields.get("price") or "",
@@ -182,7 +189,8 @@ def run_crawl(self, task_id: int):
         task.current_stage = "SEARCHING"
         task.current_note = None
         task.error_message = None
-        task.started_at = datetime.now(timezone.utc)
+        if task.started_at is None:
+            task.started_at = datetime.now(timezone.utc)
         db.commit()
         log(db, task.id, "INFO", "login check")
         results: list[tuple[str, dict]] = []

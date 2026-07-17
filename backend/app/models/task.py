@@ -16,6 +16,7 @@ class CrawlTask(Base):
     success_notes: Mapped[int] = mapped_column(Integer, default=0)
     failed_notes: Mapped[int] = mapped_column(Integer, default=0)
     skipped_notes: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_activities: Mapped[int] = mapped_column(Integer, default=0)
     current_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
     current_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

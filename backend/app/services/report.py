@@ -10,14 +10,14 @@ CITY_NAMES = {"shanghai": "上海", "beijing": "北京"}
 
 
 def format_activity_markdown(activity: Activity) -> str:
-    start = activity.start_time.strftime("%Y-%m-%d %H:%M")
+    start = activity.start_time.strftime("%Y-%m-%d %H:%M") if activity.start_time else "待确认"
     end = activity.end_time.strftime("%H:%M") if activity.end_time else ""
     time_text = f"{start} - {end}" if end else start
     return f"#### {activity.name}\n- **时间**：{time_text}\n- **地点**：{activity.location}\n- **费用**：{activity.price}\n- **来源**：[小红书笔记]({activity.source_url})\n- **简介**：{activity.summary}\n"
 
 
 def approved(activities: list[Activity]) -> list[Activity]:
-    return [item for item in activities if item.status == "APPROVED"]
+    return [item for item in activities if item.status == "APPROVED" and item.start_time is not None]
 
 
 def generate_markdown(week: str, cities: list[str], activities: list[Activity]) -> str:
@@ -46,7 +46,7 @@ def generate_xlsx(activities: list[Activity]) -> bytes:
     sheet.title = "活动"
     sheet.append(["活动名称", "城市", "开始时间", "结束时间", "地点", "费用", "类型", "来源", "简介"])
     for item in approved(activities):
-        sheet.append([item.name, CITY_NAMES.get(item.city_code, item.city_code), item.start_time.isoformat(), item.end_time.isoformat() if item.end_time else "", item.location, item.price, item.type, item.source_url, item.summary])
+        sheet.append([item.name, CITY_NAMES.get(item.city_code, item.city_code), item.start_time.isoformat() if item.start_time else "", item.end_time.isoformat() if item.end_time else "", item.location, item.price, item.type, item.source_url, item.summary])
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()

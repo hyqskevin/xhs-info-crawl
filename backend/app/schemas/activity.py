@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ActivityCreate(BaseModel):
     name: str
     city_code: str
-    start_time: datetime
+    start_time: datetime | None = None
     end_time: datetime | None = None
     location: str = ""
     price: str = ""
