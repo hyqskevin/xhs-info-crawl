@@ -217,9 +217,9 @@
 
 ### POST /api/v1/tasks/:id/restart
 
-- 描述：按原参数继续失败或已停止任务，沿用原任务 ID，并跳过已经成功提取的笔记
-- 限制：仅 `FAILED`、`STOPPED` 状态可调用；存在其他运行中或正在停止任务时返回 `409`
-- 进度字段：`total_notes`、`downloaded_notes`、`ocr_notes`、`extracted_notes`、`failed_notes`、`skipped_notes`、`current_stage`、`current_note`
+- 描述：按原参数继续失败、已停止或等待登录任务，沿用原任务 ID，并跳过已经成功提取的笔记
+- 限制：`FAILED`、`STOPPED`、`PAUSED` 可调用；`PAUSED` 会先检测 OpenCLI 登录态，未登录返回 `409/AUTH_REQUIRED` 且保持暂停
+- 进度字段：`total_notes`、`downloaded_notes`、`ocr_notes`、`extracted_notes`、`failed_notes`、`skipped_notes`、`skipped_activities`、`current_stage`、`current_note`
 
 ### POST /api/v1/tasks/:id/stop
 
@@ -228,6 +228,11 @@
 - 已成功处理、归档的数据全部保留；重复请求 `STOP_REQUESTED` 幂等返回
 
 ## 配置接口
+
+### POST /api/v1/settings/opencli/open-login
+
+- 描述：在本机 Chrome 打开 `.env` 配置的 `XHS_LOGIN_URL`，用于恢复 `PAUSED` 抓取任务。
+- 接口不读取、返回或记录 Cookie；浏览器启动失败返回 `503` 和可手动访问的地址。
 
 ### GET /api/v1/settings/cities
 

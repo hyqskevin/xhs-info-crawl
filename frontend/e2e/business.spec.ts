@@ -58,6 +58,13 @@ test.describe('已登录业务流程', () => {
     await expect(page.getByRole('cell', { name: '活动详情' })).toBeVisible()
   })
 
+  test('TC-UI-009A 日期未知活动显示待确认', async ({ page }) => {
+    const unknown = { id: 2, name: '日期未知活动', city_code: 'shanghai', start_time: null, location: '静安', status: 'NEEDS_REVIEW' }
+    await page.route('**/api/v1/activities**', (route) => route.fulfill({ json: { ...response({ items: [unknown] }), pagination: { total: 1 } } }))
+    await page.goto('/activities')
+    await expect(page.getByRole('row', { name: /日期未知活动/ })).toContainText('待确认')
+  })
+
   test('TC-UI-010 提交抓取任务并查看登录提示', async ({ page }) => {
     let submitted = false
     await page.route('**/api/v1/tasks**', async (route) => {

@@ -179,7 +179,7 @@
 | source_image_indexes | JSON/INT[] | 提供该活动信息的归档图片序号 |
 | name | VARCHAR(256) | 活动名称 |
 | city_code | VARCHAR(32) FK | 城市 |
-| start_time | TIMESTAMP | 活动开始时间 |
+| start_time | TIMESTAMP NULL | 活动开始时间；无法可靠确定时为空并标记 `NEEDS_REVIEW` |
 | end_time | TIMESTAMP | 活动结束时间 |
 | location | VARCHAR(256) | 地点 |
 | price | VARCHAR(128) | 费用 |

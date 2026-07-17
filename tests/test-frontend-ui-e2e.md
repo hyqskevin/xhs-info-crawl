@@ -115,6 +115,20 @@
 - 详情表格下展示该笔记全部来源图片；点击缩略图打开 Element Plus 多图预览。
 - 图片请求携带登录 Token；关闭抽屉后释放 Blob URL；无图时显示 Element Plus Empty。
 
+### TC-UI-016：等待登录任务恢复
+
+- `PAUSED` 任务卡展示“打开小红书登录”和“检测登录并继续”，其他状态不展示这组按钮。
+- 打开登录页与检测登录使用独立 Loading，完成后隐藏并显示 Toast。
+- 登录未完成时保持暂停并提示；登录成功后复用原任务继续。
+- 组件测试：`frontend/src/views/DashboardView.spec.ts`。
+- 浏览器功能测试：`frontend/e2e/documented-flows.spec.ts`。
+
+### TC-UI-017：未知活动日期
+
+- 活动列表、详情和编辑区域把空日期显示为“待确认”。
+- 组件测试：`frontend/src/views/ActivitiesView.spec.ts`。
+- 浏览器功能测试：`frontend/e2e/business.spec.ts`。
+
 可执行代码：
 
 - `frontend/e2e/business.spec.ts`：各业务编号主路径。

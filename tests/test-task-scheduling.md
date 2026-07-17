@@ -389,7 +389,7 @@ def test_flower_monitoring_accessible():
 
 - 任务持久化发现、下载、OCR、提取和失败计数，并记录当前阶段与当前笔记。
 - 单篇处理失败不终止剩余笔记；完成时使用 `COMPLETED_WITH_ERRORS`。
-- 仅 `FAILED` 任务允许调用 `POST /tasks/{id}/restart`，沿用原任务 ID 和成功进度，清零本轮失败计数后重新入队。
+- `FAILED`、`STOPPED`、`PAUSED` 允许调用 `POST /tasks/{id}/restart`，沿用原任务 ID 和成功进度；`PAUSED` 必须先通过 OpenCLI 登录检查，失败时保持暂停。
 - 仪表盘摘要返回上述字段和 `progress_percent`。
 
 对应自动化：`backend/tests/test_task_restart.py`、`backend/tests/test_dashboard_api.py`、`backend/tests/test_crawl_task_resilience.py`。

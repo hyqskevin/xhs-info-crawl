@@ -338,3 +338,12 @@ def test_full_pipeline_creates_activity(mock_db):
 pytest tests/test_extraction.py -v
 pytest tests/test_extraction.py --cov=backend.app.services.extraction --cov-report=html
 ```
+# 活动日期有效窗口补充案例
+
+## TC-EXTRACT-DATE-WINDOW：活动日期有效窗口
+
+- 任务参考日与未来第 60 天均允许入库，第 61 天与已结束历史活动跳过。
+- 无年份日期仅在可推断到未来 60 天时补年，不能可靠推断时返回空值。
+- 明确年份绝不擅自改年；明确越界时由窗口校验跳过。
+- 日期为空的活动保存为 `NEEDS_REVIEW`，不回填当前时间，不进入周报。
+- 同一笔记包含有效、历史、远期和未知日期活动时，逐活动隔离，不能中断整篇笔记。
