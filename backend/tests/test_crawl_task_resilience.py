@@ -164,3 +164,42 @@ def test_keyword_search_skips_titles_without_the_corresponding_keyword(db_sessio
     assert task.skipped_notes == 1
     messages = list(db_session.scalars(select(TaskLog.message).where(TaskLog.task_id == task.id)))
     assert any("标题未包含关键词" in message and "https://xhs/unrelated" in message for message in messages)
+
+
+def test_worker_finishes_current_note_then_stops_before_the_next(db_session, monkeypatch):
+    city = City(name="宁波", code="nb", enabled=True, recent_filter="一周内")
+    keyword = Keyword(city_code="nb", word="活动", enabled=True)
+    task = CrawlTask(type="mixed", status="PENDING", params={"city": "nb", "keywords": ["活动"], "recent_filter": "一周内", "blogger_ids": []})
+    db_session.add_all([city, keyword, task]); db_session.commit()
+    processed = []
+
+    class FakeAdapter:
+        def __init__(self, _settings):
+            pass
+
+        def search_recent(self, _query, _recent_filter):
+            return [
+                {"title": "宁波活动一", "url": "https://xhs/1"},
+                {"title": "宁波活动二", "url": "https://xhs/2"},
+            ]
+
+    def fake_process(db, current_task, _city, item, _adapter, _settings):
+        processed.append(item["url"])
+        current_task.extracted_notes += 1
+        current_task.success_notes += 1
+        current_task.status = "STOP_REQUESTED"
+        db.commit()
+        return True
+
+    monkeypatch.setattr(crawl_task, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(crawl_task, "OpenCLIAdapter", FakeAdapter)
+    monkeypatch.setattr(crawl_task, "process_note", fake_process)
+
+    crawl_task.run_crawl.run(task.id)
+
+    task = db_session.get(CrawlTask, task.id)
+    assert processed == ["https://xhs/1"]
+    assert task.status == "STOPPED"
+    assert task.extracted_notes == 1
+    messages = list(db_session.scalars(select(TaskLog.message).where(TaskLog.task_id == task.id)))
+    assert "任务已安全停止" in messages

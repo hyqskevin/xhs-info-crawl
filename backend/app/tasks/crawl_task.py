@@ -17,7 +17,7 @@ from app.services.minimax import MiniMaxClient
 from app.services.ocr import OCRService
 from app.services.opencli_adapter import OpenCLIAdapter
 from app.services.paddleocr_adapter import PaddleOCREngine
-from app.services.pipeline import deduplicate_results, process_with_isolation, run_stage, title_matches_keywords
+from app.services.pipeline import deduplicate_results, run_stage, title_matches_keywords
 from app.tasks.celery_app import celery_app
 
 
@@ -55,6 +55,20 @@ def prepare_existing_note(db, source_url: str) -> bool:
         return True
     cleanup_incomplete_note(db, source_url)
     return False
+
+
+def finish_stop_if_requested(db, task_id: int) -> bool:
+    current = db.get(CrawlTask, task_id)
+    db.refresh(current)
+    if current.status != "STOP_REQUESTED":
+        return False
+    current.status = "STOPPED"
+    current.current_stage = None
+    current.current_note = None
+    current.finished_at = datetime.now(timezone.utc)
+    db.commit()
+    log(db, current.id, "INFO", "任务已安全停止")
+    return True
 
 
 def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAdapter, settings) -> bool:
@@ -219,7 +233,17 @@ def run_crawl(self, task_id: int):
             db.commit()
             log(db, current.id, "ERROR", f"笔记处理失败 [{entry[1]['url']}]：{exc}")
 
-        process_with_isolation(results, processor, on_failure)
+        for entry in results:
+            if finish_stop_if_requested(db, task.id):
+                return
+            try:
+                processor(entry)
+            except AuthenticationRequired:
+                raise
+            except Exception as exc:
+                on_failure(entry, exc)
+        if finish_stop_if_requested(db, task.id):
+            return
         task = db.get(CrawlTask, task.id)
         task.status = "COMPLETED_WITH_ERRORS" if task.failed_notes else "COMPLETED"
         task.current_stage = None

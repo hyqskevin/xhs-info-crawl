@@ -22,7 +22,7 @@ def tasks(_:Admin,db:DB,page:int=1,page_size:Annotated[int,Query(le=100)]=20):
     return {'code':200,'message':'success','data':{'items':[dump(x) for x in rows]},'pagination':{'page':page,'page_size':page_size,'total':total}}
 @router.post('/crawl',status_code=status.HTTP_202_ACCEPTED)
 def crawl(payload:CrawlIn,_:Admin,db:DB):
-    running=db.scalar(select(CrawlTask).where(CrawlTask.status.in_(['PENDING','RUNNING','SEARCH_DONE','DOWNLOADING','PROCESSING','DEDUPING'])))
+    running=db.scalar(select(CrawlTask).where(CrawlTask.status.in_(['PENDING','RUNNING','STOP_REQUESTED','SEARCH_DONE','DOWNLOADING','PROCESSING','DEDUPING'])))
     if running: raise HTTPException(409,'TASK_IN_PROGRESS')
     city=db.scalar(select(City).where(City.code==payload.city,City.enabled.is_(True)))
     if not city: raise HTTPException(422,'请选择已启用的城市')
@@ -40,8 +40,8 @@ def crawl(payload:CrawlIn,_:Admin,db:DB):
 def restart(task_id:int,_:Admin,db:DB):
     task=db.get(CrawlTask,task_id)
     if not task: raise HTTPException(404,'任务不存在')
-    if task.status!='FAILED': raise HTTPException(409,'仅失败任务可以继续抓取')
-    running=db.scalar(select(CrawlTask).where(CrawlTask.id!=task_id,CrawlTask.status.in_(['PENDING','RUNNING','SEARCH_DONE','DOWNLOADING','PROCESSING','DEDUPING'])))
+    if task.status not in ['FAILED','STOPPED']: raise HTTPException(409,'仅失败或已停止任务可以继续抓取')
+    running=db.scalar(select(CrawlTask).where(CrawlTask.id!=task_id,CrawlTask.status.in_(['PENDING','RUNNING','STOP_REQUESTED','SEARCH_DONE','DOWNLOADING','PROCESSING','DEDUPING'])))
     if running: raise HTTPException(409,'TASK_IN_PROGRESS')
     city_code=task.params.get('city')
     city=db.scalar(select(City).where(City.code==city_code,City.enabled.is_(True)))
@@ -51,6 +51,21 @@ def restart(task_id:int,_:Admin,db:DB):
     db.commit();db.refresh(task)
     from app.tasks.crawl_task import run_crawl
     run_crawl.delay(task.id)
+    return {'code':202,'message':'success','data':dump(task)}
+
+@router.post('/{task_id}/stop',status_code=status.HTTP_202_ACCEPTED)
+def stop(task_id:int,_:Admin,db:DB):
+    task=db.get(CrawlTask,task_id)
+    if not task: raise HTTPException(404,'任务不存在')
+    if task.status=='STOP_REQUESTED': return {'code':202,'message':'success','data':dump(task)}
+    if task.status=='PENDING':
+        task.status='STOPPED';task.current_stage=None;task.current_note=None;task.finished_at=datetime.now(timezone.utc)
+    elif task.status=='RUNNING':
+        task.status='STOP_REQUESTED'
+    else:
+        raise HTTPException(409,'仅等待中或抓取中的任务可以停止')
+    db.add(TaskLog(task_id=task.id,level='INFO',message='已请求安全停止',created_at=datetime.now(timezone.utc)))
+    db.commit();db.refresh(task)
     return {'code':202,'message':'success','data':dump(task)}
 @router.get('/{task_id}/logs')
 def logs(task_id:int,_:Admin,db:DB): return {'code':200,'message':'success','data':[dump(x) for x in db.scalars(select(TaskLog).where(TaskLog.task_id==task_id).order_by(TaskLog.id)).all()]}

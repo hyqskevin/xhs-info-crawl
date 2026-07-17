@@ -91,6 +91,40 @@ def test_failed_task_restarts_with_same_id_and_preserves_completed_progress(clie
     assert queued == [task.id]
 
 
+def test_task_stop_transitions_are_safe_and_idempotent(client: TestClient, db_session: Session, headers):
+    pending = CrawlTask(type='mixed', status='PENDING', params={})
+    running = CrawlTask(type='mixed', status='RUNNING', params={})
+    completed = CrawlTask(type='mixed', status='COMPLETED', params={})
+    db_session.add_all([pending, running, completed]); db_session.commit()
+
+    pending_response = client.post(f'/api/v1/tasks/{pending.id}/stop', headers=headers)
+    running_response = client.post(f'/api/v1/tasks/{running.id}/stop', headers=headers)
+    repeated_response = client.post(f'/api/v1/tasks/{running.id}/stop', headers=headers)
+
+    assert pending_response.status_code == 202
+    assert pending_response.json()['data']['status'] == 'STOPPED'
+    assert running_response.status_code == 202
+    assert running_response.json()['data']['status'] == 'STOP_REQUESTED'
+    assert repeated_response.status_code == 202
+    assert repeated_response.json()['data']['status'] == 'STOP_REQUESTED'
+    assert client.post(f'/api/v1/tasks/{completed.id}/stop', headers=headers).status_code == 409
+    assert client.post('/api/v1/tasks/99999/stop', headers=headers).status_code == 404
+
+
+def test_stopped_task_can_restart_with_same_id(client: TestClient, db_session: Session, headers, monkeypatch):
+    city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'keywords': ['活动'], 'recent_filter': '一周内'}, headers=headers).json()['data']
+    task = CrawlTask(type='mixed', status='STOPPED', params={'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一周内', 'blogger_ids': []}, total_notes=10, extracted_notes=3, success_notes=3)
+    db_session.add(task); db_session.commit(); queued = []
+    monkeypatch.setattr('app.tasks.crawl_task.run_crawl.delay', lambda task_id: queued.append(task_id))
+
+    response = client.post(f'/api/v1/tasks/{task.id}/restart', headers=headers)
+
+    assert response.status_code == 202
+    assert response.json()['data']['id'] == task.id
+    assert response.json()['data']['status'] == 'PENDING'
+    assert queued == [task.id]
+
+
 def test_dashboard_summary_contains_latest_task_progress(client: TestClient, db_session: Session, headers):
     task = CrawlTask(type='mixed', status='RUNNING', params={}, total_notes=20, downloaded_notes=8, ocr_notes=7, extracted_notes=5, success_notes=5, failed_notes=1, skipped_notes=4, current_stage='OCR', current_note='周末活动')
     db_session.add(task); db_session.commit()
