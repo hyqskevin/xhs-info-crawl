@@ -73,6 +73,38 @@ def test_dashboard_task_uses_configured_city_keywords_time_and_bloggers(client: 
     assert response.json()['data']['params'] == {'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一天内', 'blogger_ids': [blogger['id']]}
 
 
+def test_failed_task_restarts_with_same_id_and_preserves_completed_progress(client: TestClient, db_session: Session, headers, monkeypatch):
+    city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'keywords': ['活动'], 'recent_filter': '一周内'}, headers=headers).json()['data']
+    task = CrawlTask(type='mixed', status='FAILED', params={'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一周内', 'blogger_ids': []}, total_notes=113, downloaded_notes=5, ocr_notes=5, extracted_notes=5, success_notes=5, failed_notes=1, error_message='bad date')
+    db_session.add(task); db_session.commit(); queued=[]
+    monkeypatch.setattr('app.tasks.crawl_task.run_crawl.delay', lambda task_id: queued.append(task_id))
+
+    response = client.post(f'/api/v1/tasks/{task.id}/restart', headers=headers)
+
+    assert response.status_code == 202
+    assert response.json()['data']['id'] == task.id
+    db_session.refresh(task)
+    assert task.status == 'PENDING'
+    assert task.success_notes == 5
+    assert task.failed_notes == 0
+    assert task.error_message is None
+    assert queued == [task.id]
+
+
+def test_dashboard_summary_contains_latest_task_progress(client: TestClient, db_session: Session, headers):
+    task = CrawlTask(type='mixed', status='RUNNING', params={}, total_notes=20, downloaded_notes=8, ocr_notes=7, extracted_notes=5, success_notes=5, failed_notes=1, current_stage='OCR', current_note='周末活动')
+    db_session.add(task); db_session.commit()
+
+    latest = client.get('/api/v1/dashboard/summary', headers=headers).json()['data']['last_task']
+
+    assert latest == pytest.approx({
+        'id': task.id, 'status': 'RUNNING', 'total_notes': 20, 'downloaded_notes': 8,
+        'ocr_notes': 7, 'extracted_notes': 5, 'success_notes': 5, 'failed_notes': 1,
+        'current_stage': 'OCR', 'current_note': '周末活动', 'error_message': None,
+        'progress_percent': 30.0,
+    })
+
+
 
 def activity(name):
     return Activity(name=name, city_code='shanghai', start_time=datetime(2025, 7, 20, tzinfo=timezone.utc), location='徐汇', type='演出', status='APPROVED')

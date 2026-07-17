@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Annotated, Literal
 from fastapi import APIRouter,Depends,HTTPException,Query,status
 from pydantic import BaseModel
@@ -31,6 +32,23 @@ def crawl(payload:CrawlIn,_:Admin,db:DB):
     if any(blogger_id not in configured_bloggers for blogger_id in payload.blogger_ids): raise HTTPException(422,'博主不属于所选城市')
     if not payload.keywords and not payload.blogger_ids: raise HTTPException(422,'请至少选择一个关键词或博主')
     task=CrawlTask(type=payload.type,status='PENDING',params=payload.model_dump()); db.add(task); db.commit(); db.refresh(task)
+    from app.tasks.crawl_task import run_crawl
+    run_crawl.delay(task.id)
+    return {'code':202,'message':'success','data':dump(task)}
+
+@router.post('/{task_id}/restart',status_code=status.HTTP_202_ACCEPTED)
+def restart(task_id:int,_:Admin,db:DB):
+    task=db.get(CrawlTask,task_id)
+    if not task: raise HTTPException(404,'任务不存在')
+    if task.status!='FAILED': raise HTTPException(409,'仅失败任务可以继续抓取')
+    running=db.scalar(select(CrawlTask).where(CrawlTask.id!=task_id,CrawlTask.status.in_(['PENDING','RUNNING','SEARCH_DONE','DOWNLOADING','PROCESSING','DEDUPING'])))
+    if running: raise HTTPException(409,'TASK_IN_PROGRESS')
+    city_code=task.params.get('city')
+    city=db.scalar(select(City).where(City.code==city_code,City.enabled.is_(True)))
+    if not city: raise HTTPException(422,'原任务城市已停用')
+    task.status='PENDING';task.failed_notes=0;task.error_message=None;task.current_stage=None;task.current_note=None;task.finished_at=None
+    db.add(TaskLog(task_id=task.id,level='INFO',message='任务继续抓取',created_at=datetime.now(timezone.utc)))
+    db.commit();db.refresh(task)
     from app.tasks.crawl_task import run_crawl
     run_crawl.delay(task.id)
     return {'code':202,'message':'success','data':dump(task)}
