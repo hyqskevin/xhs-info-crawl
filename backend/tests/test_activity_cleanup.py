@@ -30,6 +30,10 @@ def test_cleanup_removes_window_outliers_and_rebuilds_exports_without_deleting_s
     folder = archive_task_folder(settings.archive_dir, reference, task.id)
     (folder / "source.md").write_text("原始来源证据", encoding="utf-8")
     (folder / "activities.md").write_text("历史活动", encoding="utf-8")
+    legacy_folder = settings.archive_dir / "2026-07-16" / f"task-{task.id}"
+    legacy_folder.mkdir(parents=True)
+    (legacy_folder / "source.md").write_text("旧目录来源证据", encoding="utf-8")
+    (legacy_folder / "activities.md").write_text("历史活动", encoding="utf-8")
 
     summary = cleanup_activity_dates(db_session, settings, reference)
 
@@ -46,6 +50,10 @@ def test_cleanup_removes_window_outliers_and_rebuilds_exports_without_deleting_s
     assert "有效活动" in activities_markdown
     assert "历史活动" not in activities_markdown
     assert (folder / "activities.xlsx").is_file()
+    assert (legacy_folder / "source.md").read_text(encoding="utf-8") == "旧目录来源证据"
+    assert "有效活动" in (legacy_folder / "activities.md").read_text(encoding="utf-8")
+    assert "历史活动" not in (legacy_folder / "activities.md").read_text(encoding="utf-8")
+    assert (legacy_folder / "activities.xlsx").is_file()
 
     second = cleanup_activity_dates(db_session, settings, reference)
     assert second.deleted == 0
