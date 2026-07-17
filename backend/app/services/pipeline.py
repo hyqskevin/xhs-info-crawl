@@ -7,6 +7,15 @@ from app.services.crawler import AuthenticationRequired
 T = TypeVar("T")
 
 
+def title_matches_keywords(title: str, keywords: list[str]) -> bool:
+    normalized = (title or "").strip().casefold()
+    return bool(normalized) and any(
+        keyword.strip().casefold() in normalized
+        for keyword in keywords
+        if keyword.strip()
+    )
+
+
 def run_stage(operation: Callable[[], T], attempts: int, delay_seconds: float) -> T:
     last_error: Exception | None = None
     for attempt in range(max(1, attempts)):
@@ -23,14 +32,24 @@ def run_stage(operation: Callable[[], T], attempts: int, delay_seconds: float) -
 
 
 def deduplicate_results(rows: Iterable[tuple[str, dict[str, Any]]]) -> list[tuple[str, dict[str, Any]]]:
-    seen: set[str] = set()
+    seen: dict[str, dict[str, Any]] = {}
     unique = []
     for city, item in rows:
         url = str(item.get("url") or "")
-        if not url or url in seen:
+        if not url:
             continue
-        seen.add(url)
-        unique.append((city, item))
+        if url in seen:
+            target = seen[url]
+            keywords = target.setdefault("_matched_keywords", [])
+            for keyword in item.get("_matched_keywords", []):
+                if keyword not in keywords:
+                    keywords.append(keyword)
+            continue
+        copied = dict(item)
+        if "_matched_keywords" in copied:
+            copied["_matched_keywords"] = list(dict.fromkeys(copied["_matched_keywords"]))
+        seen[url] = copied
+        unique.append((city, copied))
     return unique
 
 

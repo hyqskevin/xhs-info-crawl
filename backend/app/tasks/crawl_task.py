@@ -17,7 +17,7 @@ from app.services.minimax import MiniMaxClient
 from app.services.ocr import OCRService
 from app.services.opencli_adapter import OpenCLIAdapter
 from app.services.paddleocr_adapter import PaddleOCREngine
-from app.services.pipeline import deduplicate_results, process_with_isolation, run_stage
+from app.services.pipeline import deduplicate_results, process_with_isolation, run_stage, title_matches_keywords
 from app.tasks.celery_app import celery_app
 
 
@@ -180,7 +180,10 @@ def run_crawl(self, task_id: int):
                 keywords = task.params.get("keywords") or configured_keywords
                 recent_filter = task.params.get("recent_filter") or city.recent_filter
                 for keyword in keywords:
-                    results.extend((city.code, item) for item in adapter.search_recent(f"{city.name} {keyword}", recent_filter))
+                    for item in adapter.search_recent(f"{city.name} {keyword}", recent_filter):
+                        tagged = dict(item)
+                        tagged["_matched_keywords"] = [keyword]
+                        results.append((city.code, tagged))
                 blogger_ids = task.params.get("blogger_ids", [])
                 if blogger_ids:
                     bloggers = list(db.scalars(select(Blogger).where(Blogger.id.in_(blogger_ids), Blogger.city_code == city.code, Blogger.enabled.is_(True))).all())
@@ -189,13 +192,22 @@ def run_crawl(self, task_id: int):
         else:
             for city_code in requested_cities:
                 for keyword in task.params.get("keywords", []):
-                    results.extend((city_code, item) for item in adapter.search_recent(f"{city_code} {keyword}", "一周内"))
+                    for item in adapter.search_recent(f"{city_code} {keyword}", "一周内"):
+                        tagged = dict(item)
+                        tagged["_matched_keywords"] = [keyword]
+                        results.append((city_code, tagged))
 
         results = deduplicate_results(results)
         task.total_notes = len(results)
         db.commit()
 
         def processor(entry: tuple[str, dict]) -> None:
+            matched_keywords = entry[1].get("_matched_keywords")
+            if matched_keywords and not title_matches_keywords(entry[1].get("title", ""), matched_keywords):
+                task.skipped_notes += 1
+                db.commit()
+                log(db, task.id, "INFO", f"标题未包含关键词，已跳过 [{entry[1]['url']}] 标题={entry[1].get('title', '')!r} 关键词={matched_keywords}")
+                return
             process_note(db, task, entry[0], entry[1], adapter, settings)
 
         def on_failure(entry: tuple[str, dict], exc: Exception) -> None:
