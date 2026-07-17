@@ -38,7 +38,7 @@ async function generate() {
     ElMessage.success('周报生成成功')
     await load()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail || '周报生成失败')
+    ElMessage.error(error.response?.data?.message || error.response?.data?.detail || '周报生成失败')
   } finally {
     generating.value = false
   }

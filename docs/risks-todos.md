@@ -1,4 +1,6 @@
-# 风险与待办
+# 风险清单
+
+项目待办事项统一维护在 [`TODO.md`](TODO.md)。
 
 ## 风险清单
 
@@ -13,18 +15,3 @@
 | filesystem broker 可靠性有限 | 中 | 仅用于阶段一本地单机；阶段二切换 Redis，阶段一任务必须具备幂等性 |
 | SQLite 并发写入受限 | 中 | 阶段一限制 Worker 并发并缩短事务；阶段二切换 PostgreSQL |
 | 本地图片目录增长 | 中 | 提供清理与保留策略；阶段二迁移 MinIO |
-
-## 待办事项
-
-| 待办 | 负责人 | 说明 |
-|------|--------|------|
-| 轮换 MiniMax API Key | 用户 | 当前密钥曾在聊天中明文发送，验收后应在控制台轮换 |
-| 确认城市列表 | 用户 | 第一版 1-3 个城市 |
-| 初始化关键词词库 | 用户 | 10-20 个核心关键词 |
-| 准备小红书账号 | 用户 | 用于 Chrome 登录 |
-| 确认服务器资源 | 用户 | CPU/内存/磁盘是否足够 |
-| 阶段一工程搭建 | 已完成 | Vue、FastAPI、Celery、SQLite、本地文件和 filesystem broker |
-| 阶段一导出 | 已完成 | 同时生成 Excel 和 Markdown |
-| 阶段二基础设施升级 | 开发 | PostgreSQL、Redis、MinIO、Docker Compose |
-| OpenCLI 命令验证 | 已完成 | 已验证 whoami、search、download 和 note 命令接口 |
-| 数据库迁移脚本 | 已完成 | Alembic 初始化迁移已提供 |

@@ -11,7 +11,9 @@ def similarity_score(left: dict[str, Any], right: dict[str, Any]) -> float:
         return 0.0
     name = SequenceMatcher(None, str(left.get("name", "")), str(right.get("name", ""))).ratio()
     location = SequenceMatcher(None, str(left.get("location", "")), str(right.get("location", ""))).ratio()
-    date_match = str(left.get("start_time", ""))[:10] == str(right.get("start_time", ""))[:10]
+    left_start = left.get("start_time")
+    right_start = right.get("start_time")
+    date_match = bool(left_start and right_start and str(left_start)[:10] == str(right_start)[:10])
     return round(name * 0.55 + location * 0.2 + (0.25 if date_match else 0), 4)
 
 
@@ -44,7 +46,7 @@ def create_duplicate_candidates(db: Session, activity: Activity) -> list[Duplica
         if exists: continue
         matched=[]
         if activity.city_code==other.city_code: matched.append('city')
-        if activity.start_time.date()==other.start_time.date(): matched.append('date')
+        if activity.start_time and other.start_time and activity.start_time.date()==other.start_time.date(): matched.append('date')
         candidate=DuplicateCandidate(activity_a_id=a,activity_b_id=b,similarity=score,matched_fields=','.join(matched),status='pending')
         db.add(candidate); created.append(candidate)
     return created

@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import ElementPlus, { ElDatePicker, ElSelect } from 'element-plus'
+import ElementPlus, { ElDatePicker, ElMessage, ElSelect } from 'element-plus'
 import { describe, expect, it, vi } from 'vitest'
 
 import ReportsView from './ReportsView.vue'
@@ -29,5 +29,19 @@ describe('ReportsView', () => {
     await wrapper.findAll('button').find((button) => button.text().includes('Markdown'))!.trigger('click')
     await flushPromises()
     expect(downloadReport).toHaveBeenCalledWith(3, 'md')
+  })
+
+  it('shows the backend reason when no approved activity can be exported', async () => {
+    generateReport.mockRejectedValueOnce({ response: { data: { message: '所选城市和周次没有已通过活动，请先在活动管理中审核通过' } } })
+    const error = vi.spyOn(ElMessage, 'error')
+    const wrapper = mount(ReportsView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    wrapper.getComponent(ElDatePicker).vm.$emit('update:modelValue', new Date('2026-07-13T00:00:00'))
+    wrapper.getComponent(ElSelect).vm.$emit('update:modelValue', 'nb')
+
+    await wrapper.findAll('button').find((button) => button.text().includes('生成周报'))!.trigger('click')
+    await flushPromises()
+
+    expect(error).toHaveBeenCalledWith('所选城市和周次没有已通过活动，请先在活动管理中审核通过')
   })
 })

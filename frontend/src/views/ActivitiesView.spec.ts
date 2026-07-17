@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   updateActivity: vi.fn(),
   deleteActivity: vi.fn(),
   deleteActivities: vi.fn().mockResolvedValue({ data: { data: { deleted_count: 1, deleted_ids: [1] } } }),
+  approveActivities: vi.fn().mockResolvedValue({ data: { data: { approved_count: 1, approved_ids: [1] } } }),
 }))
 vi.mock('@/api/client', () => ({ api: mocks }))
 
@@ -54,6 +55,24 @@ describe('ActivitiesView', () => {
     await flushPromises()
 
     expect(mocks.deleteActivities).toHaveBeenCalledWith([1])
+    expect(mocks.activities).toHaveBeenCalledTimes(2)
+  })
+
+  it('batch approves selected activities and refreshes the list', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    const wrapper = mount(ActivitiesView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    const button = wrapper.findAll('button').find((item) => item.text().includes('批量通过'))!
+    expect(button).toBeDefined()
+    expect(button.attributes('disabled')).toBeDefined()
+
+    wrapper.getComponent(ElTable).vm.$emit('selection-change', [{ id: 1 }])
+    await flushPromises()
+    expect(button.attributes('disabled')).toBeUndefined()
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(mocks.approveActivities).toHaveBeenCalledWith([1])
     expect(mocks.activities).toHaveBeenCalledTimes(2)
   })
 

@@ -1265,18 +1265,7 @@ MINIMAX_API_KEY=
 
 ### 12.2 待办事项
 
-| 待办 | 负责人 | 说明 |
-|------|--------|------|
-| 提供 MiniMax API Key | 用户 | 用于字段提取 |
-| 确认城市列表 | 用户 | 第一版 1-3 个城市 |
-| 初始化关键词词库 | 用户 | 10-20 个核心关键词 |
-| 准备小红书账号 | 用户 | 用于 Chrome 登录 |
-| 确认服务器资源 | 用户 | CPU/内存/磁盘是否足够 |
-| 阶一工程搭建 | 开发 | Vue、FastAPI、Celery、SQLite、本地文件和 filesystem broker |
-| 阶一导出 | 开发 | 同时生成 Excel 和 Markdown |
-| 阶二基础设施升级 | 开发 | PostgreSQL、Redis、MinIO、Docker Compose |
-| OpenCLI 命令验证 | 开发 | 验证 search/download/note 命令输出 |
-| 数据库迁移脚本 | 开发 | 初始化表结构 |
+项目待办事项统一维护在 [`docs/TODO.md`](docs/TODO.md)，该文件是当前待办、后续优化、阶段二事项和完成记录的唯一维护入口。
 
 ---
 

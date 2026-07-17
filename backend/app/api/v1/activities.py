@@ -78,6 +78,21 @@ def batch_delete_activities(payload: BatchDeleteRequest, _: auth, db: database):
     return {"code": 200, "message": "success", "data": {"deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)}}
 
 
+@router.post("/batch/approve")
+def batch_approve_activities(payload: BatchDeleteRequest, _: auth, db: database):
+    ids = list(dict.fromkeys(payload.ids))
+    activities = list(db.scalars(select(Activity).where(Activity.id.in_(ids), Activity.status.notin_(["DELETED", "MERGED"]))).all())
+    if not activities:
+        raise HTTPException(status_code=404, detail="没有可审核通过的活动")
+    changed_at = datetime.now(timezone.utc)
+    for activity in activities:
+        activity.status = "APPROVED"
+        activity.updated_at = changed_at
+    db.commit()
+    approved_ids = [activity.id for activity in activities]
+    return {"code": 200, "message": "success", "data": {"approved_ids": approved_ids, "approved_count": len(approved_ids)}}
+
+
 @router.get("/{activity_id}")
 def get_activity(activity_id: int, _: auth, db: database):
     activity = find_activity(db, activity_id)

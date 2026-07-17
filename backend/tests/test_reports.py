@@ -64,6 +64,41 @@ def test_generate_persists_and_regenerates_single_report(client: TestClient, db_
     assert second.json()["data"]["activity_count"] == 1
 
 
+def test_generate_filters_approved_activities_to_selected_iso_week(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
+    included = activity(10)
+    outside_week = activity(11)
+    outside_week.start_time = datetime(2025, 7, 21, 10, tzinfo=timezone.utc)
+    pending = activity(12, status="RAW")
+    db_session.add_all([included, outside_week, pending])
+    db_session.commit()
+
+    response = client.post("/api/v1/reports/generate", json={"week": "2025-W29", "cities": ["shanghai"]}, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["data"]["activity_count"] == 1
+    report_id = response.json()["data"]["id"]
+    workbook = load_workbook(BytesIO(client.get(f"/api/v1/reports/{report_id}/download?format=xlsx", headers=headers).content), read_only=True)
+    rows = list(workbook.active.iter_rows(values_only=True))
+    assert [row[0] for row in rows[1:]] == ["活动10"]
+
+
+def test_generate_rejects_week_without_approved_activities(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
+    db_session.add(activity(20, status="RAW"))
+    db_session.commit()
+
+    response = client.post("/api/v1/reports/generate", json={"week": "2025-W29", "cities": ["shanghai"]}, headers=headers)
+
+    assert response.status_code == 422
+    assert response.json()["message"] == "所选城市和周次没有已通过活动，请先在活动管理中审核通过"
+
+
+def test_generate_rejects_invalid_iso_week(client: TestClient, headers: dict[str, str]) -> None:
+    response = client.post("/api/v1/reports/generate", json={"week": "2025-W99", "cities": ["shanghai"]}, headers=headers)
+
+    assert response.status_code == 422
+    assert response.json()["message"] == "周次格式无效，请使用 YYYY-Www"
+
+
 def test_report_generation_requires_exactly_one_city(client: TestClient, headers: dict[str, str]) -> None:
     assert client.post("/api/v1/reports/generate", json={"week": "2026-W29", "cities": []}, headers=headers).status_code == 422
     assert client.post("/api/v1/reports/generate", json={"week": "2026-W29", "cities": ["nb", "shanghai"]}, headers=headers).status_code == 422

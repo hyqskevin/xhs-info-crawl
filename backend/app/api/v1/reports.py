@@ -1,5 +1,6 @@
 import json
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import Annotated, Literal
 
@@ -24,8 +25,25 @@ class GenerateRequest(BaseModel):
     cities: list[str] = Field(min_length=1, max_length=1)
 
 
-def select_activities(db: Session, cities: list[str]) -> list[Activity]:
-    return list(db.scalars(select(Activity).where(Activity.city_code.in_(cities), Activity.status == "APPROVED")).all())
+def week_bounds(week: str) -> tuple[datetime, datetime]:
+    match = re.fullmatch(r"(\d{4})-W(\d{2})", week)
+    if match is None:
+        raise ValueError("invalid ISO week")
+    try:
+        start = datetime.fromisocalendar(int(match.group(1)), int(match.group(2)), 1).replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise ValueError("invalid ISO week") from exc
+    return start, start + timedelta(days=7)
+
+
+def select_activities(db: Session, cities: list[str], week: str) -> list[Activity]:
+    start, end = week_bounds(week)
+    return list(db.scalars(select(Activity).where(
+        Activity.city_code.in_(cities),
+        Activity.status == "APPROVED",
+        Activity.start_time >= start,
+        Activity.start_time < end,
+    ).order_by(Activity.start_time, Activity.id)).all())
 
 @router.get("")
 def list_reports(_: Annotated[dict[str,str],Depends(get_current_user)],db:Annotated[Session,Depends(get_db)]):
@@ -41,7 +59,12 @@ def get_report(report_id:int,_:Annotated[dict[str,str],Depends(get_current_user)
 
 @router.post("/generate")
 def generate_report(payload: GenerateRequest, _: Annotated[dict[str, str], Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
-    activities = select_activities(db, payload.cities)
+    try:
+        activities = select_activities(db, payload.cities, payload.week)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="周次格式无效，请使用 YYYY-Www") from None
+    if not activities:
+        raise HTTPException(status_code=422, detail="所选城市和周次没有已通过活动，请先在活动管理中审核通过")
     content = generate_markdown(payload.week, payload.cities, activities)
     report = db.scalar(select(WeeklyReport).where(WeeklyReport.week == payload.week))
     if report is None:
@@ -66,5 +89,5 @@ def download_report(report_id: int, _: Annotated[dict[str, str], Depends(get_cur
     filename = f"{report.week}.{format}"
     if format == "md":
         return Response(report.content, media_type="text/markdown; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
-    activities = select_activities(db, json.loads(report.cities))
+    activities = select_activities(db, json.loads(report.cities), report.week)
     return Response(generate_xlsx(activities), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{filename}"'})

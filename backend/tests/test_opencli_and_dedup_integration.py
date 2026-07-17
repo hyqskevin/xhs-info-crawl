@@ -80,3 +80,16 @@ def test_duplicate_candidates_are_created_once(db_session):
     db_session.flush()
     assert len(create_duplicate_candidates(db_session,second))==0
     assert db_session.query(DuplicateCandidate).count()==1
+
+
+def test_duplicate_candidates_tolerate_missing_start_times(db_session):
+    first = Activity(name='宁波纳得美术馆作品展览', city_code='nb', start_time=None, location='宁波纳得美术馆', price='', type='展览', status='NEEDS_REVIEW')
+    second = Activity(name='宁波纳得美术馆作品展览', city_code='nb', start_time=None, location='宁波纳得美术馆', price='', type='展览', status='NEEDS_REVIEW')
+    db_session.add_all([first, second])
+    db_session.flush()
+
+    candidates = create_duplicate_candidates(db_session, second)
+
+    assert len(candidates) == 1
+    assert candidates[0].similarity == 0.75
+    assert candidates[0].matched_fields == 'city'

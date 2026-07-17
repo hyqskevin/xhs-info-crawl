@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Delete, Edit, Refresh, Search, View } from '@element-plus/icons-vue'
+import { CircleCheck, Delete, Edit, Refresh, Search, View } from '@element-plus/icons-vue'
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
@@ -15,6 +15,7 @@ const imagesLoading = ref(false)
 const editingId = ref<number | null>(null)
 const selectedRows = ref<any[]>([])
 const batchDeleting = ref(false)
+const batchApproving = ref(false)
 const filters = reactive({ city: '', status: '', dates: [] as string[], page: 1, page_size: 20 })
 const form = reactive<any>({})
 const statusLabels: Record<string, string> = { NEEDS_REVIEW: '待完善', RAW: '待审核', APPROVED: '已通过', PUBLISHED: '已发布' }
@@ -87,6 +88,22 @@ async function batchRemove() {
   }
 }
 
+async function batchApprove() {
+  if (!selectedRows.value.length) return
+  await ElMessageBox.confirm(`确认将选中的 ${selectedRows.value.length} 条活动标记为已通过？`, '批量审核确认', { type: 'warning' })
+  batchApproving.value = true
+  try {
+    const response = await api.approveActivities(selectedRows.value.map((row) => row.id))
+    ElMessage.success(`已通过 ${response.data.data.approved_count} 条活动`)
+    selectedRows.value = []
+    await load()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '批量审核失败')
+  } finally {
+    batchApproving.value = false
+  }
+}
+
 function releaseImages() {
   imageUrls.value.forEach((url) => URL.revokeObjectURL(url))
   imageUrls.value = []
@@ -120,6 +137,7 @@ onUnmounted(releaseImages)
       <ElSelect v-model="filters.status" placeholder="审核状态" clearable class="filter-item"><ElOption v-for="(label, value) in statusLabels" :key="value" :label="label" :value="value" /></ElSelect>
       <ElButton :icon="Search" @click="applyFilters">筛选</ElButton>
       <ElButton :icon="Refresh" @click="resetFilters">重置</ElButton>
+      <ElButton type="success" :icon="CircleCheck" :disabled="!selectedRows.length" :loading="batchApproving" @click="batchApprove">批量通过</ElButton>
       <ElButton type="danger" :icon="Delete" :disabled="!selectedRows.length" :loading="batchDeleting" @click="batchRemove">批量删除</ElButton>
     </div>
 
