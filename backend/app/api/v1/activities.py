@@ -8,8 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.activity import Activity
-from app.schemas.activity import ActivityCreate, ActivityRead, ActivityUpdate
-from app.services.dedup import create_duplicate_candidates
+from app.schemas.activity import ActivityRead, ActivityUpdate
 
 
 router = APIRouter(prefix="/activities", tags=["activities"])
@@ -22,7 +21,7 @@ def serialize(activity: Activity) -> dict[str, object]:
 
 
 def find_activity(db: Session, activity_id: int) -> Activity:
-    activity = db.scalar(select(Activity).where(Activity.id == activity_id, Activity.status != "DELETED"))
+    activity = db.scalar(select(Activity).where(Activity.id == activity_id, Activity.status.notin_(["DELETED", "MERGED"])))
     if activity is None:
         raise HTTPException(status_code=404, detail="活动不存在")
     return activity
@@ -40,7 +39,7 @@ def list_activities(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
-    filters = [Activity.status != "DELETED"]
+    filters = [Activity.status.notin_(["DELETED", "MERGED"])]
     if city:
         filters.append(Activity.city_code == city)
     if type:
@@ -61,17 +60,6 @@ def get_activity(activity_id: int, _: auth, db: database):
     data = serialize(find_activity(db, activity_id))
     data.update({"note": None, "images": []})
     return {"code": 200, "message": "success", "data": data}
-
-
-@router.post("", status_code=status.HTTP_201_CREATED)
-def create_activity(payload: ActivityCreate, _: auth, db: database):
-    activity = Activity(**payload.model_dump())
-    db.add(activity)
-    db.commit()
-    db.refresh(activity)
-    create_duplicate_candidates(db, activity)
-    db.commit()
-    return {"code": 201, "message": "success", "data": serialize(activity)}
 
 
 @router.put("/{activity_id}")

@@ -35,9 +35,15 @@ def test_get_activities_filters_by_city_and_multiple_fields(client: TestClient, 
 
 
 def test_get_activities_date_range_and_invalid_date(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
-    db_session.add(make_activity(1))
+    db_session.add_all([
+        make_activity(1),
+        Activity(name="次日活动", city_code="shanghai", start_time=datetime(2025, 7, 21, 10, tzinfo=timezone.utc), location="静安", type="展览", status="RAW"),
+    ])
     db_session.commit()
-    assert client.get("/api/v1/activities?start_date=2025-07-20&end_date=2025-07-27", headers=headers).json()["pagination"]["total"] == 1
+    assert client.get("/api/v1/activities?start_date=2025-07-20&end_date=2025-07-27", headers=headers).json()["pagination"]["total"] == 2
+    response = client.get("/api/v1/activities?start_date=2025-07-21&end_date=2025-07-21&page=1&page_size=10", headers=headers)
+    assert response.json()["pagination"] == {"page": 1, "page_size": 10, "total": 1}
+    assert response.json()["data"]["items"][0]["name"] == "次日活动"
     assert client.get("/api/v1/activities?start_date=not-a-date", headers=headers).status_code == 422
 
 
@@ -68,7 +74,6 @@ def test_delete_activity_is_soft_delete(client: TestClient, db_session: Session,
     assert client.get(f"/api/v1/activities/{activity.id}", headers=headers).status_code == 404
 
 
-def test_create_activity_manual(client: TestClient, headers: dict[str, str]) -> None:
+def test_create_activity_manual_is_not_available(client: TestClient, headers: dict[str, str]) -> None:
     response = client.post("/api/v1/activities", json={"name": "新活动", "city_code": "shanghai", "start_time": "2025-08-01T10:00:00Z", "end_time": "2025-08-01T18:00:00Z", "location": "上海中心", "price": "免费", "type": "展览", "source_url": "https://manual.example.com", "summary": "手动录入的活动"}, headers=headers)
-    assert response.status_code == 201
-    assert response.json()["data"]["id"] > 0
+    assert response.status_code == 405

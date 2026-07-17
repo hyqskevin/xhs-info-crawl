@@ -21,6 +21,20 @@ def test_download_checks_login_and_returns_new_images(tmp_path:Path,monkeypatch)
     assert adapter.download('https://example/note',tmp_path/'out')==[tmp_path/'out'/'a.jpg']
     assert calls[0][:2]==['xiaohongshu','whoami']
 
+def test_search_recent_uses_city_recent_filter(tmp_path:Path,monkeypatch):
+    adapter=OpenCLIAdapter(Settings(project_root=tmp_path)); calls=[]
+    def run(args):
+        calls.append(args)
+        if args[:2]==['xiaohongshu','whoami']: return {'logged_in':True}
+        if args[:3]==['browser',adapter.session,'state']:
+            return '[1]<button>筛选\n[2]<span>最新\n[3]<span>半年内'
+        if args[:3]==['browser',adapter.session,'eval']: return []
+        return {'ok':True}
+    monkeypatch.setattr(adapter,'run',run)
+    assert adapter.search_recent('宁波 活动','半年内') == []
+    click_refs=[args[3] for args in calls if args[:3]==['browser',adapter.session,'click']]
+    assert click_refs == ['1','2','3']
+
 def test_duplicate_candidates_are_created_once(db_session):
     when=datetime(2026,7,18,10,tzinfo=timezone.utc)
     first=Activity(name='上海夏日音乐节',city_code='shanghai',start_time=when,location='徐汇滨江',price='免费',type='演出',status='RAW')

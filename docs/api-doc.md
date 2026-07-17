@@ -187,11 +187,17 @@
 
 ```json
 {
-  "type": "keyword",
-  "cities": ["shanghai"],
-  "keywords": ["周末活动", "展览"]
+  "type": "mixed",
+  "city": "city-a1b2c3d4",
+  "keywords": ["周末活动", "展览"],
+  "recent_filter": "一周内",
+  "blogger_ids": [1, 3]
 }
 ```
+
+- 入口：仪表盘。
+- 城市必须是配置中心已启用城市；关键词和博主必须属于该城市。
+- 时间范围仅允许：不限、一天内、一周内、半年内。
 
 ### GET /api/v1/tasks/:id/logs
 
@@ -201,35 +207,21 @@
 
 ### GET /api/v1/settings/cities
 
-- 描述：城市列表
+- 描述：城市列表；返回城市名称、内部 code、关键词数组、抓取时间范围和启用状态
 
 ### POST /api/v1/settings/cities
 
-- 描述：新增城市
+- 描述：新增城市，同时提交 `keywords` 与 `recent_filter`；`code` 由后端自动生成
 
 ### PUT /api/v1/settings/cities/:id
 
-- 描述：编辑城市
+- 描述：编辑城市名称、关键词、抓取时间范围和启用状态
 
 ### DELETE /api/v1/settings/cities/:id
 
 - 描述：删除城市
 
-### GET /api/v1/settings/keywords
-
-- 描述：关键词列表
-
-### POST /api/v1/settings/keywords
-
-- 描述：新增关键词
-
-### PUT /api/v1/settings/keywords/:id
-
-- 描述：编辑关键词
-
-### DELETE /api/v1/settings/keywords/:id
-
-- 描述：删除关键词
+关键词接口为内部兼容接口；管理端统一通过城市接口维护城市与关键词组合。
 
 ### GET /api/v1/settings/bloggers
 

@@ -28,10 +28,12 @@ class OpenCLIAdapter:
         match=re.search(rf'\[(\d+)\]<(?:div|span|button)[^>]*>[^\n]*{re.escape(text)}',state)
         if not match: raise OpenCLIError(f'filter option not found: {text}')
         self.run(['browser',self.session,'click',match.group(1)])
-    def search_recent(self,query:str)->list[dict[str,Any]]:
+    def search_recent(self,query:str,recent_filter:str='一周内')->list[dict[str,Any]]:
         self.check_login(); url=f'https://www.xiaohongshu.com/search_result?keyword={quote_plus(query)}'
         self.run(['browser',self.session,'open',url,'--window','background']); self.run(['browser',self.session,'wait','time','2'])
-        state=self._state(); self._click_text_ref(state,'筛选'); self.run(['browser',self.session,'wait','time','1']); state=self._state(); self._click_text_ref(state,'最新'); self._click_text_ref(state,'一周内'); self.run(['browser',self.session,'wait','time','2'])
+        state=self._state(); self._click_text_ref(state,'筛选'); self.run(['browser',self.session,'wait','time','1']); state=self._state(); self._click_text_ref(state,'最新')
+        if recent_filter != '不限': self._click_text_ref(state,recent_filter)
+        self.run(['browser',self.session,'wait','time','2'])
         script=r"""(() => Array.from(document.querySelectorAll('section')).map(s => { const links=[...s.querySelectorAll('a[href*="/search_result/"]')]; const title=s.querySelector('a[href*="/search_result/"] span')?.textContent?.trim(); const time=[...s.querySelectorAll('div')].map(x=>x.textContent?.trim()).find(x=>/^(\d+分钟前|\d+小时前|\d+天前|\d{2}-\d{2})$/.test(x||'')); return title&&links[0]?{title,url:new URL(links[0].getAttribute('href'),location.origin).href,published_text:time||''}:null }).filter(Boolean))()"""
         previous=0; stagnant=0; items=[]
         for _ in range(self.settings.xhs_search_scroll_max_rounds+1):
@@ -54,6 +56,17 @@ class OpenCLIAdapter:
             self.run(['browser',self.session,'wait','time','1'])
         self.run(['browser',self.session,'close'])
         return self.normalize_note(self.run(['xiaohongshu','note',url,'-f','json','--window','background']))
+    def blogger_notes(self,profile_url:str)->list[dict[str,Any]]:
+        self.check_login(); self.run(['browser',self.session,'open',profile_url,'--window','background']); self.run(['browser',self.session,'wait','time','2'])
+        script=r"""(() => Array.from(document.querySelectorAll('a[href*="/explore/"]')).map(a => ({title:(a.textContent||'博主笔记').trim(),url:new URL(a.getAttribute('href'),location.origin).href})).filter((x,i,all)=>all.findIndex(y=>y.url===x.url)===i))()"""
+        items=[]; previous=0; stagnant=0
+        for _ in range(self.settings.xhs_search_scroll_max_rounds+1):
+            items=self.run(['browser',self.session,'eval',script]) or []
+            if len(items)>=self.settings.xhs_search_target_count: break
+            stagnant=stagnant+1 if len(items)<=previous else 0
+            if stagnant>=self.settings.xhs_scroll_stagnant_rounds: break
+            previous=len(items); self.run(['browser',self.session,'scroll','down','--amount',str(self.settings.xhs_scroll_pixels)]); self.run(['browser',self.session,'wait','time','1'])
+        self.run(['browser',self.session,'close']); return items[:self.settings.xhs_search_target_count]
     def download(self,url:str,output_dir:Path)->list[Path]:
         self.check_login(); output_dir.mkdir(parents=True,exist_ok=True)
         before={path.resolve() for path in output_dir.rglob('*') if path.is_file()}

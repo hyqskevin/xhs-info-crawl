@@ -10,6 +10,7 @@ class City(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64))
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    recent_filter: Mapped[str] = mapped_column(String(16), default="一周内")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 

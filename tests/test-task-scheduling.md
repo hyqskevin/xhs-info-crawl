@@ -182,29 +182,32 @@ def test_task_retries_on_failure(celery_app, mock_opencli):
 **被测接口**: `POST /api/v1/tasks/crawl`
 
 ### Given
-- 请求参数指定城市和关键词
+- 配置中心已有启用城市、该城市的关键词和博主
+- 仪表盘单选城市，多选关键词和博主，并选择小红书原生时间范围
 
 ### When
 发送 `POST /api/v1/tasks/crawl`
 
 ### Then
-- HTTP 200
-- 返回 task_id
+- HTTP 202
+- 返回任务对象
 - Celery 任务入队
-- 任务 type = "manual"
+- 任务 type = "mixed"
 
 ```python
 def test_manual_crawl_trigger(client, auth_headers, mock_db):
     """手动触发应返回任务 ID"""
     response = client.post("/api/v1/tasks/crawl", json={
-        "type": "keyword",
-        "cities": ["shanghai"],
-        "keywords": ["周末活动", "展览"]
+        "type": "mixed",
+        "city": "shanghai",
+        "keywords": ["周末活动", "展览"],
+        "recent_filter": "一周内",
+        "blogger_ids": [1]
     }, headers=auth_headers)
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     data = response.json()["data"]
-    assert "task_id" in data
+    assert data["status"] == "PENDING"
 ```
 
 ---

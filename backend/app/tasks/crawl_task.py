@@ -4,6 +4,7 @@ from sqlalchemy import select
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.models.activity import Activity
+from app.models.config import Blogger, City, Keyword
 from app.models.note import Note,NoteImage
 from app.models.task import CrawlTask,TaskLog
 from app.services.crawler import AuthenticationRequired
@@ -23,8 +24,23 @@ def run_crawl(self,task_id:int):
     try:
         task.status='RUNNING'; task.started_at=datetime.now(timezone.utc); db.commit(); log(db,task.id,'INFO','login check')
         results=[]
-        for city in task.params.get('cities',[]):
-            for keyword in task.params.get('keywords',[]): results.extend((city,x) for x in adapter.search_recent(f'{city} {keyword}'))
+        requested_cities=[task.params['city']] if task.params.get('city') else task.params.get('cities',[])
+        city_query=select(City).where(City.enabled.is_(True))
+        if requested_cities: city_query=city_query.where(City.code.in_(requested_cities))
+        cities=list(db.scalars(city_query.order_by(City.id)).all())
+        if cities:
+            for city in cities:
+                configured_keywords=list(db.scalars(select(Keyword.word).where(Keyword.city_code==city.code,Keyword.enabled.is_(True)).order_by(Keyword.id)).all())
+                keywords=task.params.get('keywords') or configured_keywords
+                recent_filter=task.params.get('recent_filter') or city.recent_filter
+                for keyword in keywords: results.extend((city.code,x) for x in adapter.search_recent(f'{city.name} {keyword}',recent_filter))
+                blogger_ids=task.params.get('blogger_ids',[])
+                if blogger_ids:
+                    bloggers=list(db.scalars(select(Blogger).where(Blogger.id.in_(blogger_ids),Blogger.city_code==city.code,Blogger.enabled.is_(True))).all())
+                    for blogger in bloggers: results.extend((city.code,x) for x in adapter.blogger_notes(blogger.profile_url))
+        else:
+            for city_code in requested_cities:
+                for keyword in task.params.get('keywords',[]): results.extend((city_code,x) for x in adapter.search_recent(f'{city_code} {keyword}','一周内'))
         task.status='DOWNLOADING'; task.total_notes=len(results); db.commit()
         for city,item in results:
             if db.scalar(select(Note).where(Note.source_url==item['url'])): continue

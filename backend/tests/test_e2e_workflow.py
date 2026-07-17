@@ -2,7 +2,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.models.activity import Activity
 from app.models.user import User
+from datetime import datetime, timezone
 
 
 def test_editorial_workflow_from_login_to_dual_report_download(client: TestClient, db_session: Session) -> None:
@@ -13,23 +15,10 @@ def test_editorial_workflow_from_login_to_dual_report_download(client: TestClien
     assert login.status_code == 200
     headers = {"Authorization": f"Bearer {login.json()['data']['access_token']}"}
 
-    created = client.post(
-        "/api/v1/activities",
-        headers=headers,
-        json={
-            "name": "夏日音乐节",
-            "city_code": "shanghai",
-            "start_time": "2025-07-20T18:00:00Z",
-            "end_time": "2025-07-20T22:00:00Z",
-            "location": "徐汇滨江",
-            "price": "免费",
-            "type": "演出",
-            "source_url": "https://www.xiaohongshu.com/a/1",
-            "summary": "户外音乐节",
-        },
-    )
-    assert created.status_code == 201
-    activity_id = created.json()["data"]["id"]
+    crawled = Activity(name="夏日音乐节", city_code="shanghai", start_time=datetime(2025, 7, 20, 18, tzinfo=timezone.utc), end_time=datetime(2025, 7, 20, 22, tzinfo=timezone.utc), location="徐汇滨江", price="免费", type="演出", source_url="https://www.xiaohongshu.com/a/1", summary="户外音乐节", status="RAW")
+    db_session.add(crawled)
+    db_session.commit()
+    activity_id = crawled.id
 
     approved = client.put(f"/api/v1/activities/{activity_id}", headers=headers, json={"status": "APPROVED"})
     assert approved.status_code == 200

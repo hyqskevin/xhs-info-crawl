@@ -16,25 +16,62 @@ def headers():
 
 
 def test_city_keyword_blogger_crud(client: TestClient, headers):
-    city = client.post('/api/v1/settings/cities', json={'name': '上海', 'code': 'shanghai'}, headers=headers)
+    city = client.post('/api/v1/settings/cities', json={
+        'name': '上海',
+        'keywords': ['周末活动', '亲子活动'],
+        'recent_filter': '一周内',
+    }, headers=headers)
     assert city.status_code == 201
-    assert client.get('/api/v1/settings/cities', headers=headers).json()['data'][0]['code'] == 'shanghai'
-    assert client.post('/api/v1/settings/keywords', json={'word': '周末活动', 'city_code': 'shanghai'}, headers=headers).status_code == 201
-    assert client.post('/api/v1/settings/bloggers', json={'platform_user_id': 'u1', 'username': '博主', 'profile_url': 'https://example.com/u1', 'city_code': 'shanghai'}, headers=headers).status_code == 201
+    created = city.json()['data']
+    assert created['code'].startswith('city-')
+    assert created['keywords'] == ['周末活动', '亲子活动']
+    assert created['recent_filter'] == '一周内'
+
+    updated = client.put(f"/api/v1/settings/cities/{created['id']}", json={
+        'name': '上海市',
+        'keywords': ['展览'],
+        'recent_filter': '一天内',
+        'enabled': False,
+    }, headers=headers)
+    assert updated.status_code == 200
+    assert updated.json()['data']['code'] == created['code']
+    assert updated.json()['data']['keywords'] == ['展览']
+    assert updated.json()['data']['recent_filter'] == '一天内'
+
+    listed = client.get('/api/v1/settings/cities', headers=headers).json()['data'][0]
+    assert listed['name'] == '上海市'
+    assert listed['keywords'] == ['展览']
+    assert client.post('/api/v1/settings/bloggers', json={'platform_user_id': 'u1', 'username': '博主', 'profile_url': 'https://example.com/u1', 'city_code': created['code']}, headers=headers).status_code == 201
     assert client.delete(f"/api/v1/settings/cities/{city.json()['data']['id']}", headers=headers).status_code == 200
+
+
+def test_city_rejects_unsupported_recent_filter(client: TestClient, headers):
+    response = client.post('/api/v1/settings/cities', json={
+        'name': '宁波',
+        'keywords': ['周末活动'],
+        'recent_filter': '三天内',
+    }, headers=headers)
+    assert response.status_code == 422
 
 
 def test_tasks_list_logs_and_reject_concurrent_trigger(client: TestClient, db_session: Session, headers):
     running = CrawlTask(type='keyword', status='RUNNING', params={})
     db_session.add(running); db_session.flush(); db_session.add(TaskLog(task_id=running.id, level='INFO', message='running')); db_session.commit()
-    assert client.post('/api/v1/tasks/crawl', json={'type': 'keyword', 'cities': ['shanghai'], 'keywords': ['活动']}, headers=headers).status_code == 409
+    assert client.post('/api/v1/tasks/crawl', json={'type': 'mixed', 'city': 'shanghai', 'keywords': ['活动'], 'recent_filter': '一周内', 'blogger_ids': []}, headers=headers).status_code == 409
     assert client.get('/api/v1/tasks', headers=headers).json()['pagination']['total'] == 1
     assert client.get(f'/api/v1/tasks/{running.id}/logs', headers=headers).json()['data'][0]['message'] == 'running'
 
 
-def test_manual_task_created_when_idle(client: TestClient, headers):
-    response = client.post('/api/v1/tasks/crawl', json={'type': 'keyword', 'cities': ['shanghai'], 'keywords': ['活动']}, headers=headers)
-    assert response.status_code == 202 and response.json()['data']['status'] == 'PENDING'
+def test_dashboard_task_uses_configured_city_keywords_time_and_bloggers(client: TestClient, db_session: Session, headers, monkeypatch):
+    city = client.post('/api/v1/settings/cities', json={'name': '上海', 'keywords': ['活动', '展览'], 'recent_filter': '一周内'}, headers=headers).json()['data']
+    blogger = client.post('/api/v1/settings/bloggers', json={'platform_user_id': 'u1', 'username': '博主', 'profile_url': 'https://example.com/u1', 'city_code': city['code']}, headers=headers).json()['data']
+    monkeypatch.setattr('app.tasks.crawl_task.run_crawl.delay', lambda _: None)
+    invalid = client.post('/api/v1/tasks/crawl', json={'type': 'mixed', 'city': city['code'], 'keywords': ['不存在'], 'recent_filter': '一天内', 'blogger_ids': []}, headers=headers)
+    assert invalid.status_code == 422
+    response = client.post('/api/v1/tasks/crawl', json={'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一天内', 'blogger_ids': [blogger['id']]}, headers=headers)
+    assert response.status_code == 202
+    assert response.json()['data']['params'] == {'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一天内', 'blogger_ids': [blogger['id']]}
+
 
 
 def activity(name):
@@ -47,5 +84,12 @@ def test_duplicate_list_merge_and_ignore(client: TestClient, db_session: Session
     second = DuplicateCandidate(activity_a_id=a.id, activity_b_id=b.id, similarity=.6, matched_fields=['city'])
     db_session.add_all([first, second]); db_session.commit()
     assert client.get('/api/v1/duplicates', headers=headers).json()['pagination']['total'] == 2
+    a.status = 'RAW'; b.status = 'RAW'; db_session.commit()
     assert client.post(f'/api/v1/duplicates/{first.id}/merge', json={'keep': 'a'}, headers=headers).status_code == 200
+    db_session.refresh(a); db_session.refresh(b)
+    assert a.status == 'RAW'
+    assert b.status == 'DELETED'
+    pending = client.get('/api/v1/duplicates', headers=headers).json()
+    assert pending['pagination']['total'] == 1
+    assert pending['data']['items'][0]['id'] == second.id
     assert client.post(f'/api/v1/duplicates/{second.id}/ignore', headers=headers).status_code == 200

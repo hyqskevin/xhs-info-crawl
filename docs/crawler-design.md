@@ -62,10 +62,10 @@ opencli xiaohongshu search --keyword "上海 周末活动" --limit 10 -f json
 1. 打开小红书搜索结果页。
 2. 点击结果区右侧“筛选”。
 3. 选择排序“最新”。
-4. 选择发布时间“一周内”。
+4. 读取当前城市的 `recent_filter`，选择“不限、一天内、一周内、半年内”中的对应原生选项；“不限”不点击时间选项。
 5. 关闭筛选层或等待结果刷新。
 6. 按配置多轮向下滚动，收集更多笔记卡片。
-7. 最终在代码层按 `published_at` 再过滤近 7 天，形成 UI 筛选与代码过滤双保险。
+7. 若 OpenCLI 返回标准发布时间字段，则按城市配置的时间范围再次校验；浏览器原生筛选仍是主约束。
 
 滚动停止条件：达到 `XHS_SEARCH_TARGET_COUNT`；达到最大轮次；或连续 `XHS_SCROLL_STAGNANT_ROUNDS` 轮没有新增卡片。默认每轮下拉 800px、目标 50 条、最多 8 轮、连续 2 轮无新增即停止。
 
@@ -86,7 +86,7 @@ def run_keyword_crawl(task_id: int, city_code: str, keyword: str):
     # 2. 解析搜索结果
     notes = parse_search_result(result)
 
-    # 2.1 浏览器筛选：最新 + 一周内；多轮滚动加载到目标数量
+    # 2.1 浏览器筛选：最新 + 城市 recent_filter；多轮滚动加载到目标数量
     notes = collect_search_results_with_scroll(target=SEARCH_TARGET_COUNT)
     
     # 3. 过滤近 7 天笔记

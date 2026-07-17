@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from fastapi import APIRouter,Depends,HTTPException,Query,status
 from pydantic import BaseModel
 from sqlalchemy import func,select
@@ -6,8 +6,14 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import require_admin
 from app.models.task import CrawlTask,TaskLog
+from app.models.config import Blogger, City, Keyword
 router=APIRouter(prefix='/tasks',tags=['tasks']); Admin=Annotated[dict,Depends(require_admin)]; DB=Annotated[Session,Depends(get_db)]
-class CrawlIn(BaseModel): type:str='keyword'; cities:list[str]; keywords:list[str]=[]
+class CrawlIn(BaseModel):
+    type: str = 'mixed'
+    city: str
+    keywords: list[str] = []
+    recent_filter: Literal['不限','一天内','一周内','半年内'] = '一周内'
+    blogger_ids: list[int] = []
 def dump(t): return {c.name:getattr(t,c.name) for c in t.__table__.columns}
 @router.get('')
 def tasks(_:Admin,db:DB,page:int=1,page_size:Annotated[int,Query(le=100)]=20):
@@ -17,6 +23,13 @@ def tasks(_:Admin,db:DB,page:int=1,page_size:Annotated[int,Query(le=100)]=20):
 def crawl(payload:CrawlIn,_:Admin,db:DB):
     running=db.scalar(select(CrawlTask).where(CrawlTask.status.in_(['PENDING','RUNNING','SEARCH_DONE','DOWNLOADING','PROCESSING','DEDUPING'])))
     if running: raise HTTPException(409,'TASK_IN_PROGRESS')
+    city=db.scalar(select(City).where(City.code==payload.city,City.enabled.is_(True)))
+    if not city: raise HTTPException(422,'请选择已启用的城市')
+    configured_keywords=set(db.scalars(select(Keyword.word).where(Keyword.city_code==city.code,Keyword.enabled.is_(True))).all())
+    if any(keyword not in configured_keywords for keyword in payload.keywords): raise HTTPException(422,'关键词不属于所选城市')
+    configured_bloggers=set(db.scalars(select(Blogger.id).where(Blogger.city_code==city.code,Blogger.enabled.is_(True))).all())
+    if any(blogger_id not in configured_bloggers for blogger_id in payload.blogger_ids): raise HTTPException(422,'博主不属于所选城市')
+    if not payload.keywords and not payload.blogger_ids: raise HTTPException(422,'请至少选择一个关键词或博主')
     task=CrawlTask(type=payload.type,status='PENDING',params=payload.model_dump()); db.add(task); db.commit(); db.refresh(task)
     from app.tasks.crawl_task import run_crawl
     run_crawl.delay(task.id)

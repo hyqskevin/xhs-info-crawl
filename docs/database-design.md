@@ -77,7 +77,8 @@
 |------|------|------|
 | id | SERIAL PK | 主键 |
 | name | VARCHAR(64) | 城市名称，如"上海" |
-| code | VARCHAR(32) UNIQUE | 城市代码，如"shanghai" |
+| code | VARCHAR(32) UNIQUE | 后端自动生成的内部关联键，前端不展示 |
+| recent_filter | VARCHAR(16) DEFAULT "一周内" | 小红书原生时间筛选：不限/一天内/一周内/半年内 |
 | enabled | BOOLEAN DEFAULT TRUE | 是否启用 |
 | created_at | TIMESTAMP | 创建时间 |
 | updated_at | TIMESTAMP | 更新时间 |

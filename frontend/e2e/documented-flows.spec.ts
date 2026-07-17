@@ -46,19 +46,16 @@ test.describe('TC-UI-007 登录完整流程', () => {
 })
 
 test.describe('TC-UI-008/009 活动管理完整流程', () => {
-  test.beforeEach(async ({ page }) => authenticated(page))
+  test.beforeEach(async ({ page }) => {
+    await authenticated(page)
+    await page.route('**/api/v1/settings/cities**', (route) => route.fulfill({ json: response([{ id: 1, name: '上海', code: 'shanghai', enabled: true }]) }))
+  })
 
-  test('新增活动缺少必填项时阻止提交', async ({ page }) => {
-    let submitted = false
-    await page.route('**/api/v1/activities**', async (route) => {
-      if (route.request().method() === 'POST') submitted = true
-      return route.fulfill({ json: { ...response({ items: [] }), pagination: { total: 0 } } })
-    })
+  test('不提供手工新增活动入口', async ({ page }) => {
+    await page.route('**/api/v1/activities**', (route) => route.fulfill({ json: { ...response({ items: [] }), pagination: { total: 0 } } }))
     await page.goto('/activities')
-    await page.getByRole('button', { name: '新增活动' }).click()
-    await page.getByRole('button', { name: '保存' }).click()
-    await expect(page.getByText('请填写活动名称和开始时间')).toBeVisible()
-    expect(submitted).toBe(false)
+    await expect(page.getByRole('button', { name: '新增活动' })).toHaveCount(0)
+    await expect(page.getByText('活动时间')).toBeVisible()
   })
 
   test('编辑活动并审核为 APPROVED', async ({ page }) => {
@@ -71,10 +68,10 @@ test.describe('TC-UI-008/009 活动管理完整流程', () => {
       return route.fulfill({ json: { ...response({ items: [activity] }), pagination: { total: 1 } } })
     })
     await page.goto('/activities')
-    await page.getByRole('button', { name: '编辑' }).click()
+    await page.getByRole('button', { name: '编辑审核' }).click()
     await page.getByLabel('名称').fill('上海周末展览（已审核）')
-    await page.locator('.el-form-item').filter({ hasText: '状态' }).locator('.el-select').click()
-    await page.getByRole('option', { name: 'APPROVED' }).click()
+    await page.locator('.el-form-item').filter({ hasText: '审核状态' }).locator('.el-select').click()
+    await page.getByRole('option', { name: '已通过' }).click()
     await page.getByRole('button', { name: '保存' }).click()
     await expect.poll(() => updated?.status).toBe('APPROVED')
     expect(updated?.name).toBe('上海周末展览（已审核）')
@@ -109,7 +106,11 @@ test.describe('TC-UI-008/009 活动管理完整流程', () => {
 })
 
 test.describe('TC-UI-010 任务完整流程', () => {
-  test.beforeEach(async ({ page }) => authenticated(page))
+  test.beforeEach(async ({ page }) => {
+    await authenticated(page)
+    await page.route('**/api/v1/settings/cities**', (route) => route.fulfill({ json: response([{ id: 1, name: '上海', code: 'shanghai', keywords: ['周末活动'], recent_filter: '一周内', enabled: true }]) }))
+    await page.route('**/api/v1/settings/bloggers**', (route) => route.fulfill({ json: response([]) }))
+  })
 
   test('提交期间禁用按钮以防重复点击', async ({ page }) => {
     let resolveRequest: (() => void) | undefined
@@ -122,7 +123,9 @@ test.describe('TC-UI-010 任务完整流程', () => {
       }
       return route.fulfill({ json: response({ items: [] }) })
     })
-    await page.goto('/tasks')
+    await page.goto('/dashboard')
+    await page.locator('.crawl-card .el-select').nth(1).click()
+    await page.getByRole('option', { name: '周末活动' }).click()
     const button = page.getByRole('button', { name: '开始抓取' })
     await button.click()
     await expect(button).toBeDisabled()
@@ -137,7 +140,7 @@ test.describe('TC-UI-010 任务完整流程', () => {
     await page.route('**/api/v1/tasks/8/logs', (route) => route.fulfill({ json: response([{ id: 1, level: 'ERROR', message: task.error_message, created_at: '2026-07-16T10:00:00Z' }]) }))
     await page.route('**/api/v1/tasks**', (route) => route.fulfill({ json: response({ items: [task] }) }))
     await page.goto('/tasks')
-    await expect(page.getByText('PAUSED')).toBeVisible()
+    await expect(page.getByText('等待登录')).toBeVisible()
     await page.getByRole('button', { name: '日志' }).click()
     await expect(page.locator('.el-drawer__title', { hasText: '任务日志' })).toBeVisible()
     await expect(page.getByText(/请在 Chrome 登录小红书后重试/)).toBeVisible()
@@ -191,34 +194,48 @@ test.describe('TC-UI-012 周报完整流程', () => {
 test.describe('TC-UI-013 配置中心完整流程', () => {
   test.beforeEach(async ({ page }) => authenticated(page))
 
-  for (const config of [
-    { tab: '关键词', labels: [['关键词', '周末活动'], ['城市代码', 'shanghai']], expected: 'keywords' },
-    { tab: '博主', labels: [['用户 ID', 'user-1'], ['名称', '活动博主'], ['主页', 'https://example.com/u/1'], ['城市代码', 'shanghai']], expected: 'bloggers' },
-  ]) {
-    test(`新增${config.tab}配置`, async ({ page }) => {
-      let posted = ''
-      await page.route('**/api/v1/settings/**', async (route: Route) => {
-        if (route.request().method() === 'POST') { posted = route.request().url(); return route.fulfill({ json: response({ id: 1 }) }) }
-        return route.fulfill({ json: response([]) })
-      })
-      await page.goto('/settings')
-      await page.getByText(config.tab, { exact: true }).click()
-      await page.getByRole('button', { name: '新增' }).click()
-      for (const [label, value] of config.labels) await page.getByRole('textbox', { name: label }).fill(value)
-      await page.getByRole('button', { name: '保存' }).click()
-      await expect.poll(() => posted).toContain(`/settings/${config.expected}`)
+  test('新增城市时同时保存关键词和时间范围', async ({ page }) => {
+    let payload: Record<string, unknown> | undefined
+    await page.route('**/api/v1/settings/**', async (route: Route) => {
+      if (route.request().method() === 'POST') { payload = route.request().postDataJSON(); return route.fulfill({ json: response({ id: 1 }) }) }
+      return route.fulfill({ json: response([]) })
     })
-  }
+    await page.goto('/settings')
+    await page.getByRole('button', { name: '新增城市' }).click()
+    await page.getByLabel('城市名称').fill('宁波')
+    const keyword = page.getByRole('textbox', { name: '关键词' })
+    await keyword.fill('周末活动')
+    await keyword.press('Enter')
+    await page.getByRole('button', { name: '保存' }).click()
+    await expect.poll(() => payload?.name).toBe('宁波')
+    expect(payload?.keywords).toEqual(['周末活动'])
+    expect(payload?.recent_filter).toBe('一周内')
+    expect(payload).not.toHaveProperty('code')
+  })
+
+  test('编辑城市配置', async ({ page }) => {
+    let updated = false
+    await page.route('**/api/v1/settings/cities**', async (route) => {
+      if (route.request().method() === 'PUT') { updated = true; return route.fulfill({ json: response({}) }) }
+      return route.fulfill({ json: response([{ id: 1, name: '宁波', code: 'nb', keywords: ['活动'], recent_filter: '一周内', enabled: true }]) })
+    })
+    await page.goto('/settings')
+    await page.getByRole('button', { name: '编辑' }).click()
+    await page.getByLabel('城市名称').fill('宁波市')
+    await page.getByRole('button', { name: '保存' }).click()
+    await expect.poll(() => updated).toBe(true)
+  })
 
   test('删除配置并显示 OpenCLI 未登录提示', async ({ page }) => {
     let deleted = false
     await page.route('**/api/v1/settings/opencli/test', (route) => route.fulfill({ status: 401, json: { detail: 'AUTH_REQUIRED' } }))
     await page.route('**/api/v1/settings/cities**', async (route) => {
       if (route.request().method() === 'DELETE') { deleted = true; return route.fulfill({ json: response({ id: 1 }) }) }
-      return route.fulfill({ json: response([{ id: 1, name: '上海', code: 'shanghai' }]) })
+      return route.fulfill({ json: response([{ id: 1, name: '上海', code: 'shanghai', keywords: ['活动'], recent_filter: '一周内', enabled: true }]) })
     })
     await page.goto('/settings')
     await page.getByRole('button', { name: '删除' }).click()
+    await page.getByRole('button', { name: '确定' }).click()
     await expect.poll(() => deleted).toBe(true)
     await page.getByRole('button', { name: '测试 OpenCLI' }).click()
     await expect(page.getByText('请在 Chrome 登录小红书')).toBeVisible()
