@@ -17,9 +17,11 @@
   - 验收：点击停止后，worker在10秒内检测到停止信号并退出当前任务；不再需要手动kill worker进程。
   - 实现：`backend/app/services/opencli_adapter.py` 缩短超时时间（60秒）；`backend/app/services/task_registry.py` kill方法立即发送SIGKILL。
   - 测试：`backend/tests/test_worker_stop_during_block.py` 4个全过。
-- [ ] 识别到触发反爬时候，等我扫码或者验证码验证完，不要直接关掉页面
+- [ ] 识别小红书验证码/风控后暂停抓取、保留页面并等待人工验证
+  - 目标：明确验证信号进入 PAUSED，保留 crawler 验证页并自动唤醒 Chrome，用户完成验证后手动检测并继续原任务。
+  - 验收：验证页不被 finally 关闭；普通错误/停止仍清理；仪表盘提示与恢复流程完整；不自动绕过风控；全量测试通过。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-xhs-verification-pause-design.md`（持续授权已审核）。
 - [ ] 活动列表的摘要，是完整的推文，写推文的文字，是ocr识别出来的，要写ocr识别出的文字，有日期的带上日期
-- [ ] 识别到小红书验证时，要停止爬虫，在仪表盘告知，然后打开页面等待扫码
 - [x] 点击开始抓取时自动停止上一个任务（不报错 TASK_IN_PROGRESS）
   - 目标：用户点击"开始抓取"时，如果有正在运行的任务，自动停止上一个任务并启动新任务，而非报错。
   - 验收：见 spec `docs/superpowers/specs/2026-07-18-crawl-auto-stop-previous-design.md`。
