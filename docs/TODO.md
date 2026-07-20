@@ -12,15 +12,16 @@
 ## 当前待办
 
 - [ ] 写 spec 前先把问题解答清楚，spec 写完后必须过用户审核再开发（流程规则，永久保留）
-- [ ] 一次性爬虫模式（生产场景启动一次爬虫 → 跑完 → worker 自动退出）
-  - 目标：与 `docs/crawler-design.md` 第 168 行一致，"worker 完成当前单篇笔记... 然后写入 STOPPED 并退出"。
-  - 验收：**待写 spec 过审后再列具体验收条件**。
+- [ ] 停止执行栅栏与浏览器标签页清理
+  - 目标：停止后不再启动新的 OpenCLI 命令，结束当前子进程并清理本次抓取打开的标签页；Celery worker 保持运行并可接收下一任务。
+  - 验收：5 秒内不再启动新的业务命令，包含标签页清理时最迟 15 秒进入 `STOPPED`；PID 注册表无活动记录；抓取标签页关闭；同一 worker 能执行后续新任务。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-stop-execution-fence-browser-cleanup-design.md`（待审核）。
 - [ ] 跑任务 #7 重新抓取验证博主笔记 URL 不再缺 xsec_token
   - 目标：验证博主抓取修复后，note 命令能正常打开笔记详情。
   - 验收：选 nb + 博主 1 提交任务，日志 `博主 '从零发现宁波' 命中 N 篇（带 xsec_token 的）`；`downloaded > 0`；无 `xsec_token` 或 `Missing url` 错误。
 - [ ] 验证点击"停止抓取"立即 kill 子进程（点一次停止后 5 秒内任务变 STOPPED）
   - 目标：spec 1 已实现；提交一个耗时任务测一下。
-  - 验收：日志 `已结束抓取（状态置为 STOPPED, 子进程已 kill=True）`；5s 内任务状态 STOPPED；worker 进程不退。
+  - 验收：日志记录子进程已结束；5 秒内不再启动新的业务命令，包含标签页清理时最迟 15 秒进入 `STOPPED`；worker 进程不退。
 - [x] 修复worker在opencli阻塞时无法响应停止信号的问题
   - 目标：celery worker在执行opencli调用时（CDP超时115秒），能够及时检测到STOP_REQUESTED状态并退出。
   - 验收：点击停止后，worker在10秒内检测到停止信号并退出当前任务；不再需要手动kill worker进程。
