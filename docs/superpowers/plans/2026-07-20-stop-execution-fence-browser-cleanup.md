@@ -211,7 +211,7 @@ git commit -m "fix: fence stopped OpenCLI executions"
 - Consumes: the extended `OpenCLIAdapter.run(..., enforce_execution: bool, timeout: int | None)` from Task 1.
 - Produces: `OpenCLIAdapter._close_browser_tab() -> None`, a best-effort cleanup operation for the adapter session.
 
-- [ ] **Step 1: Add failing browser-cleanup tests**
+- [x] **Step 1: Add failing browser-cleanup tests**
 
 Append tests using a monkeypatched adapter `run` that accepts keyword arguments:
 
@@ -289,7 +289,7 @@ def test_cleanup_failure_uses_warning_sink_without_masking_result(monkeypatch) -
     assert "浏览器标签页清理失败" in warnings[0]
 ```
 
-- [ ] **Step 2: Run cleanup tests and verify RED**
+- [x] **Step 2: Run cleanup tests and verify RED**
 
 Run:
 
@@ -299,7 +299,7 @@ cd backend && .venv/bin/pytest -q tests/test_opencli_execution_fence.py -k 'clos
 
 Expected: tests fail because cleanup is not in `finally`, interrupted open is not cleaned up, and no warning sink helper exists.
 
-- [ ] **Step 3: Implement bounded best-effort cleanup**
+- [x] **Step 3: Implement bounded best-effort cleanup**
 
 Add a logger and two helpers to `OpenCLIAdapter`:
 
@@ -332,7 +332,7 @@ Return parsed search results and normalized note details from inside the `try`; 
 
 Update the approved spec sentence “如果 `browser open` 本身失败，不执行多余关闭” to state that cleanup begins once the open invocation is attempted, because interruption may happen after Chrome has already created the tab.
 
-- [ ] **Step 4: Run adapter regression tests**
+- [x] **Step 4: Run adapter regression tests**
 
 Run:
 
@@ -342,7 +342,7 @@ cd backend && .venv/bin/pytest -q tests/test_opencli_execution_fence.py tests/te
 
 Expected: all tests pass; normal paths close exactly once, exceptional paths attempt cleanup, and cleanup failures do not mask the business result.
 
-- [ ] **Step 5: Commit browser cleanup**
+- [x] **Step 5: Commit browser cleanup**
 
 ```bash
 git add backend/app/services/opencli_adapter.py backend/tests/test_opencli_execution_fence.py docs/superpowers/specs/2026-07-20-stop-execution-fence-browser-cleanup-design.md

@@ -117,7 +117,7 @@ worker 与 Chrome、OpenCLI 是不同进程。关闭 worker 不能可靠清理 C
 - 清理失败通过绑定的 WARNING 回调写入当前任务日志；未绑定任务时退回模块 logger，但不得把已经停止的任务改成 `FAILED`；
 - 无论清理成功或失败，PID 注册项最终必须被移除。
 
-如果 `browser open` 本身失败，不执行多余关闭。
+从 `browser open` 调用开始就进入清理范围。即使命令进程在返回成功前被停止，Chrome 也可能已经创建标签页，因此仍执行 crawler session 的最佳努力关闭。
 
 ### 4.4 worker 和任务状态
 

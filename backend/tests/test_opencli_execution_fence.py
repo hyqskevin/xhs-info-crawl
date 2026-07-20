@@ -83,3 +83,82 @@ def test_unbound_adapter_remains_compatible(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: proc)
 
     assert OpenCLIAdapter(Settings()).run(["xiaohongshu", "whoami"]) == []
+
+
+def test_search_closes_session_tab_when_middle_command_stops(monkeypatch) -> None:
+    adapter = OpenCLIAdapter(Settings())
+    calls: list[tuple[list[str], dict]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        if args[:2] == ["xiaohongshu", "whoami"]:
+            return {"logged_in": True}
+        if args[:3] == ["browser", adapter.session, "open"]:
+            return {"opened": True}
+        if args[:3] == ["browser", adapter.session, "close"]:
+            return {"closed": True}
+        raise ExecutionStoppedForTest()
+
+    monkeypatch.setattr(adapter, "run", fake_run)
+
+    with pytest.raises(ExecutionStoppedForTest):
+        adapter.search_recent("宁波 活动", "一周内")
+
+    close_calls = [
+        (args, kwargs)
+        for args, kwargs in calls
+        if args[:3] == ["browser", adapter.session, "close"]
+    ]
+    assert close_calls == [
+        (["browser", adapter.session, "close"], {"enforce_execution": False, "timeout": 10})
+    ]
+
+
+def test_note_attempts_cleanup_when_open_command_is_interrupted(monkeypatch) -> None:
+    adapter = OpenCLIAdapter(Settings())
+    calls: list[tuple[list[str], dict]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        if args[:2] == ["xiaohongshu", "whoami"]:
+            return {"logged_in": True}
+        if args[:3] == ["browser", adapter.session, "close"]:
+            return {"closed": True}
+        if args[:3] == ["browser", adapter.session, "open"]:
+            raise ExecutionStoppedForTest()
+        return {}
+
+    monkeypatch.setattr(adapter, "run", fake_run)
+
+    with pytest.raises(ExecutionStoppedForTest):
+        adapter.note("https://www.xiaohongshu.com/explore/note-id")
+
+    assert any(
+        args[:3] == ["browser", adapter.session, "close"] for args, _ in calls
+    )
+
+
+def test_cleanup_failure_uses_warning_sink_without_masking_result(monkeypatch) -> None:
+    warnings = []
+    adapter = OpenCLIAdapter(Settings())
+    adapter.bind_task(14, "run-token", warning_sink=warnings.append)
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["xiaohongshu", "whoami"]:
+            return {"logged_in": True}
+        if args[:3] == ["browser", adapter.session, "open"]:
+            return {"opened": True}
+        if args[:3] == ["browser", adapter.session, "eval"]:
+            script = args[3]
+            if "optionExists" in script or "targetText" in script:
+                return True
+            return []
+        if args[:3] == ["browser", adapter.session, "close"]:
+            raise RuntimeError("close failed")
+        return True
+
+    monkeypatch.setattr(adapter, "run", fake_run)
+
+    assert adapter.search_recent("宁波 活动", "不限") == []
+    assert len(warnings) == 1
+    assert "浏览器标签页清理失败" in warnings[0]

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import subprocess
@@ -8,6 +9,9 @@ from typing import Any
 from urllib.parse import quote_plus
 from app.core.config import Settings
 from app.services.crawler import AuthenticationRequired, OpenCLITimeout, OpenCLIError
+
+logger = logging.getLogger(__name__)
+
 
 class OpenCLIAdapter:
     def __init__(self,settings:Settings,session:str='xhs-crawler') -> None:
@@ -39,6 +43,25 @@ class OpenCLIAdapter:
     def _assert_execution_active(self, enforce_execution: bool) -> None:
         if enforce_execution and self._execution_guard is not None:
             self._execution_guard()
+
+    def _warn(self, message: str) -> None:
+        try:
+            if self._warning_sink is not None:
+                self._warning_sink(message)
+            else:
+                logger.warning(message)
+        except Exception:
+            logger.exception("OpenCLI warning sink failed")
+
+    def _close_browser_tab(self) -> None:
+        try:
+            self.run(
+                ["browser", self.session, "close"],
+                enforce_execution=False,
+                timeout=10,
+            )
+        except Exception as exc:
+            self._warn(f"浏览器标签页清理失败: {exc}")
 
     @staticmethod
     def _kill_and_reap(proc: subprocess.Popen) -> None:
@@ -142,34 +165,41 @@ class OpenCLIAdapter:
         if not query or not query.strip():
             raise OpenCLIError(f'search_recent: 查询关键词为空（query={query!r}）')
         self.check_login(); url=f'https://www.xiaohongshu.com/search_result?keyword={quote_plus(query)}'
-        self.run(['browser',self.session,'open',url,'--window','background']); self.run(['browser',self.session,'wait','time','2'])
-        self._open_filter_panel(); self._click_filter_option('最新')
-        if recent_filter != '不限': self._click_filter_option(recent_filter)
-        self.run(['browser',self.session,'wait','time','2'])
-        script=r"""(() => Array.from(document.querySelectorAll('section')).map(s => { const links=[...s.querySelectorAll('a[href*="/search_result/"]')]; const title=s.querySelector('a[href*="/search_result/"] span')?.textContent?.trim(); const time=[...s.querySelectorAll('div')].map(x=>x.textContent?.trim()).find(x=>/^(\d+分钟前|\d+小时前|\d+天前|\d{2}-\d{2})$/.test(x||'')); return title&&links[0]?{title,url:new URL(links[0].getAttribute('href'),location.origin).href,published_text:time||''}:null }).filter(Boolean))()"""
-        previous=0; stagnant=0; items=[]
-        for _ in range(self.settings.xhs_search_scroll_max_rounds+1):
-            items=self.run(['browser',self.session,'eval',script]) or []
-            if len(items)>=self.settings.xhs_search_target_count: break
-            stagnant=stagnant+1 if len(items)<=previous else 0
-            if stagnant>=self.settings.xhs_scroll_stagnant_rounds: break
-            previous=len(items); self.run(['browser',self.session,'scroll','down','--amount',str(self.settings.xhs_scroll_pixels)]); self.run(['browser',self.session,'wait','time','1'])
-        self.run(['browser',self.session,'close']); return items[:self.settings.xhs_search_target_count]
+        try:
+            self.run(['browser',self.session,'open',url,'--window','background'])
+            self.run(['browser',self.session,'wait','time','2'])
+            self._open_filter_panel(); self._click_filter_option('最新')
+            if recent_filter != '不限': self._click_filter_option(recent_filter)
+            self.run(['browser',self.session,'wait','time','2'])
+            script=r"""(() => Array.from(document.querySelectorAll('section')).map(s => { const links=[...s.querySelectorAll('a[href*="/search_result/"]')]; const title=s.querySelector('a[href*="/search_result/"] span')?.textContent?.trim(); const time=[...s.querySelectorAll('div')].map(x=>x.textContent?.trim()).find(x=>/^(\d+分钟前|\d+小时前|\d+天前|\d{2}-\d{2})$/.test(x||'')); return title&&links[0]?{title,url:new URL(links[0].getAttribute('href'),location.origin).href,published_text:time||''}:null }).filter(Boolean))()"""
+            previous=0; stagnant=0; items=[]
+            for _ in range(self.settings.xhs_search_scroll_max_rounds+1):
+                items=self.run(['browser',self.session,'eval',script]) or []
+                if len(items)>=self.settings.xhs_search_target_count: break
+                stagnant=stagnant+1 if len(items)<=previous else 0
+                if stagnant>=self.settings.xhs_scroll_stagnant_rounds: break
+                previous=len(items); self.run(['browser',self.session,'scroll','down','--amount',str(self.settings.xhs_scroll_pixels)]); self.run(['browser',self.session,'wait','time','1'])
+            return items[:self.settings.xhs_search_target_count]
+        finally:
+            self._close_browser_tab()
     def note(self,url:str)->dict[str,Any]:
         if not url or not url.strip():
             raise OpenCLIError(f'note: 笔记 url 为空，无法抓取详情')
         self.check_login()
-        self.run(['browser',self.session,'open',url,'--window','background']); self.run(['browser',self.session,'wait','time','2'])
-        previous=0; stagnant=0
-        for _ in range(self.settings.xhs_detail_scroll_max_rounds):
-            height=int(self.run(['browser',self.session,'eval','document.documentElement.scrollHeight']) or 0)
-            stagnant=stagnant+1 if height<=previous else 0
-            if stagnant>=self.settings.xhs_scroll_stagnant_rounds: break
-            previous=height
-            self.run(['browser',self.session,'scroll','down','--amount',str(self.settings.xhs_scroll_pixels)])
-            self.run(['browser',self.session,'wait','time','1'])
-        self.run(['browser',self.session,'close'])
-        return self.normalize_note(self.run(['xiaohongshu','note',url,'-f','json','--window','background']))
+        try:
+            self.run(['browser',self.session,'open',url,'--window','background'])
+            self.run(['browser',self.session,'wait','time','2'])
+            previous=0; stagnant=0
+            for _ in range(self.settings.xhs_detail_scroll_max_rounds):
+                height=int(self.run(['browser',self.session,'eval','document.documentElement.scrollHeight']) or 0)
+                stagnant=stagnant+1 if height<=previous else 0
+                if stagnant>=self.settings.xhs_scroll_stagnant_rounds: break
+                previous=height
+                self.run(['browser',self.session,'scroll','down','--amount',str(self.settings.xhs_scroll_pixels)])
+                self.run(['browser',self.session,'wait','time','1'])
+            return self.normalize_note(self.run(['xiaohongshu','note',url,'-f','json','--window','background']))
+        finally:
+            self._close_browser_tab()
     def blogger_notes(self, username: str, profile_url: str = "") -> list[dict[str,Any]]:
         """博主笔记抓取：通过 user 命令拿带 xsec_token 的完整 URL。
 
