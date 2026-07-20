@@ -31,7 +31,7 @@
 - Produces: `OpenCLIAdapter.bind_task(task_id: int, run_token: str | None = None, execution_guard: Callable[[], None] | None = None, warning_sink: Callable[[str], None] | None = None) -> None`.
 - Produces: `OpenCLIAdapter.run(args: list[str], *, task_id: int | None = None, run_token: str | None = None, enforce_execution: bool = True, timeout: int | None = None) -> Any`.
 
-- [ ] **Step 1: Write failing fence tests**
+- [x] **Step 1: Write failing fence tests**
 
 Create `backend/tests/test_opencli_execution_fence.py` with a process double that records termination:
 
@@ -123,7 +123,7 @@ def test_unbound_adapter_remains_compatible(monkeypatch) -> None:
     assert OpenCLIAdapter(Settings()).run(["xiaohongshu", "whoami"]) == []
 ```
 
-- [ ] **Step 2: Run the new tests and verify RED**
+- [x] **Step 2: Run the new tests and verify RED**
 
 Run:
 
@@ -133,7 +133,7 @@ cd backend && .venv/bin/pytest -q tests/test_opencli_execution_fence.py
 
 Expected: the first two tests fail because `bind_task` does not accept `execution_guard`; the compatibility test passes.
 
-- [ ] **Step 3: Implement the minimal execution fence**
+- [x] **Step 3: Implement the minimal execution fence**
 
 In `backend/app/services/opencli_adapter.py`, import `Callable`, add callback fields, and extend `bind_task`:
 
@@ -181,7 +181,7 @@ Extend `run()` with `enforce_execution` and `timeout`. Call `_assert_execution_a
 
 Use `timeout if timeout is not None else self._command_timeout()` as the effective timeout. Do not catch or translate exceptions raised by the execution guard.
 
-- [ ] **Step 4: Run focused and existing subprocess tests**
+- [x] **Step 4: Run focused and existing subprocess tests**
 
 Run:
 
@@ -191,7 +191,7 @@ cd backend && .venv/bin/pytest -q tests/test_opencli_execution_fence.py tests/te
 
 Expected: all tests pass; PID registration remains token-aware and guard failures do not leave registry entries.
 
-- [ ] **Step 5: Commit the execution fence**
+- [x] **Step 5: Commit the execution fence**
 
 ```bash
 git add backend/app/services/opencli_adapter.py backend/tests/test_opencli_execution_fence.py

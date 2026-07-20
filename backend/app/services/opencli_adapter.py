@@ -2,6 +2,7 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
@@ -14,8 +15,16 @@ class OpenCLIAdapter:
         self.session=session
         self._current_task_id: int | None = None
         self._current_run_token: str | None = None
+        self._execution_guard: Callable[[], None] | None = None
+        self._warning_sink: Callable[[str], None] | None = None
 
-    def bind_task(self, task_id: int, run_token: str | None = None) -> None:
+    def bind_task(
+        self,
+        task_id: int,
+        run_token: str | None = None,
+        execution_guard: Callable[[], None] | None = None,
+        warning_sink: Callable[[str], None] | None = None,
+    ) -> None:
         """绑定当前抓取任务 ID；所有后续 run() 调用都会注册到 task_registry。
 
         用法：
@@ -24,6 +33,19 @@ class OpenCLIAdapter:
         """
         self._current_task_id = task_id
         self._current_run_token = run_token
+        self._execution_guard = execution_guard
+        self._warning_sink = warning_sink
+
+    def _assert_execution_active(self, enforce_execution: bool) -> None:
+        if enforce_execution and self._execution_guard is not None:
+            self._execution_guard()
+
+    @staticmethod
+    def _kill_and_reap(proc: subprocess.Popen) -> None:
+        if proc.poll() is None:
+            proc.kill()
+        proc.communicate()
+
     def _command_timeout(self) -> int:
         # Python 层超时 = opencli 内部超时 + 30 秒缓冲，缩短超时让 worker 能及时响应停止信号
         try:
@@ -31,7 +53,15 @@ class OpenCLIAdapter:
         except (TypeError, ValueError):
             inner = 30
         return max(inner + 30, 60)
-    def run(self,args:list[str], *, task_id: int | None = None, run_token: str | None = None) -> Any:
+    def run(
+        self,
+        args:list[str],
+        *,
+        task_id: int | None = None,
+        run_token: str | None = None,
+        enforce_execution: bool = True,
+        timeout: int | None = None,
+    ) -> Any:
         """执行 opencli 子进程命令。
 
         Args:
@@ -42,7 +72,8 @@ class OpenCLIAdapter:
         """
         effective_task_id = task_id if task_id is not None else self._current_task_id
         effective_run_token = run_token if run_token is not None else self._current_run_token
-        timeout = self._command_timeout()
+        self._assert_execution_active(enforce_execution)
+        effective_timeout = timeout if timeout is not None else self._command_timeout()
         proc = subprocess.Popen(
             ['opencli', *args],
             stdout=subprocess.PIPE,
@@ -54,11 +85,16 @@ class OpenCLIAdapter:
             register(effective_task_id, proc.pid, run_token=effective_run_token)
         try:
             try:
-                stdout, stderr = proc.communicate(timeout=timeout)
+                self._assert_execution_active(enforce_execution)
+            except Exception:
+                self._kill_and_reap(proc)
+                raise
+            try:
+                stdout, stderr = proc.communicate(timeout=effective_timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 stdout, stderr = proc.communicate()
-                raise OpenCLITimeout(f'opencli 命令执行超过 {timeout}s 被强制终止: {args}')
+                raise OpenCLITimeout(f'opencli 命令执行超过 {effective_timeout}s 被强制终止: {args}')
         finally:
             if effective_task_id is not None:
                 from app.services.task_registry import unregister
