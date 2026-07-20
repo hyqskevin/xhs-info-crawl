@@ -269,7 +269,12 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
     adapter = OpenCLIAdapter(settings)
     # 注册 task_id 到 adapter 让 run() 自动绑定 PID（如果 adapter 支持）
     if hasattr(adapter, "bind_task"):
-        adapter.bind_task(task.id, run_token)
+        adapter.bind_task(
+            task.id,
+            run_token,
+            execution_guard=lambda: assert_execution_active(db, task.id, run_token),
+            warning_sink=lambda message: log(db, task.id, "WARNING", message),
+        )
     try:
         if task.started_at is None:
             task.started_at = datetime.now(timezone.utc)

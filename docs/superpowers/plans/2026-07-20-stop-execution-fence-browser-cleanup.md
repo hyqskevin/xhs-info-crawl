@@ -361,7 +361,7 @@ git commit -m "fix: clean up stopped crawler tabs"
 - Consumes: `assert_execution_active(db, task_id: int, run_token: str) -> None` and `log(db, task_id: int, level: str, message: str) -> None`.
 - Produces: a task-bound adapter whose guard observes current database status/token and whose cleanup warnings appear in `task_logs`.
 
-- [ ] **Step 1: Write a failing callback-binding test**
+- [x] **Step 1: Write a failing callback-binding test**
 
 Append to `backend/tests/test_crawl_execution_ownership.py`:
 
@@ -414,7 +414,7 @@ def test_worker_binds_execution_guard_and_warning_sink(db_session, monkeypatch) 
     assert "浏览器标签页清理失败: test" in messages
 ```
 
-- [ ] **Step 2: Run the binding test and verify RED**
+- [x] **Step 2: Run the binding test and verify RED**
 
 Run:
 
@@ -424,7 +424,7 @@ cd backend && .venv/bin/pytest -q tests/test_crawl_execution_ownership.py::test_
 
 Expected: fail because `run_crawl` currently passes only `task_id` and `run_token` to `bind_task`.
 
-- [ ] **Step 3: Bind callbacks in `run_crawl`**
+- [x] **Step 3: Bind callbacks in `run_crawl`**
 
 Replace the current binding call with:
 
@@ -439,7 +439,7 @@ Replace the current binding call with:
 
 Do not move state transitions into the adapter. Existing `ExecutionStopped` and `ExecutionSuperseded` handlers remain the only owners of crawl task status.
 
-- [ ] **Step 4: Run ownership and stop regressions**
+- [x] **Step 4: Run ownership and stop regressions**
 
 Run:
 
@@ -449,7 +449,7 @@ cd backend && .venv/bin/pytest -q tests/test_crawl_execution_ownership.py tests/
 
 Expected: all tests pass; stopped tasks do not process another note, old tokens cannot write, and warning messages are visible in task logs.
 
-- [ ] **Step 5: Commit task binding**
+- [x] **Step 5: Commit task binding**
 
 ```bash
 git add backend/app/tasks/crawl_task.py backend/tests/test_crawl_execution_ownership.py

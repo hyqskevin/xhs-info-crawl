@@ -1,10 +1,11 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token
 from app.models.config import City, Keyword
 from app.models.note import Note
-from app.models.task import CrawlTask
+from app.models.task import CrawlTask, TaskLog
 from app.core.config import Settings
 from app.tasks import crawl_task
 
@@ -129,7 +130,7 @@ def test_stop_requested_after_note_detail_prevents_download_and_note_write(
         def __init__(self, _settings):
             pass
 
-        def bind_task(self, *_args):
+        def bind_task(self, *_args, **_kwargs):
             pass
 
         def search_recent(self, *_args):
@@ -164,3 +165,54 @@ def test_stop_requested_after_note_detail_prevents_download_and_note_write(
     assert task.status == "STOPPED"
     assert download_calls == []
     assert db_session.query(Note).count() == 0
+
+
+def test_worker_binds_execution_guard_and_warning_sink(db_session, monkeypatch) -> None:
+    city = City(name="宁波", code="nb", enabled=True, recent_filter="一周内")
+    keyword = Keyword(city_code="nb", word="活动", enabled=True)
+    task = CrawlTask(
+        type="mixed",
+        status="PENDING",
+        run_token="bound-token",
+        params={"city": "nb", "keywords": ["活动"], "blogger_ids": []},
+    )
+    db_session.add_all([city, keyword, task])
+    db_session.commit()
+    captured = {}
+
+    class FakeAdapter:
+        def __init__(self, _settings):
+            pass
+
+        def bind_task(
+            self,
+            task_id,
+            run_token,
+            execution_guard=None,
+            warning_sink=None,
+        ):
+            captured.update(
+                task_id=task_id,
+                run_token=run_token,
+                execution_guard=execution_guard,
+                warning_sink=warning_sink,
+            )
+
+        def search_recent(self, *_args):
+            captured["execution_guard"]()
+            captured["warning_sink"]("浏览器标签页清理失败: test")
+            return []
+
+    monkeypatch.setattr(crawl_task, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(crawl_task, "OpenCLIAdapter", FakeAdapter)
+
+    crawl_task.run_crawl.run(task.id, "bound-token")
+
+    assert captured["task_id"] == task.id
+    assert captured["run_token"] == "bound-token"
+    assert callable(captured["execution_guard"])
+    assert callable(captured["warning_sink"])
+    messages = list(
+        db_session.scalars(select(TaskLog.message).where(TaskLog.task_id == task.id))
+    )
+    assert "浏览器标签页清理失败: test" in messages
