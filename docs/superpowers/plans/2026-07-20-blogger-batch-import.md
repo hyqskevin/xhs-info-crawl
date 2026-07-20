@@ -27,11 +27,11 @@
 - Produces `generate_blogger_template() -> bytes`.
 - Produces `import_bloggers(db: Session, content: bytes, filename: str) -> dict[str, int]`.
 
-- [ ] Write failing parser tests for xlsx, csv, city separators and enabled values.
-- [ ] Write failing transaction tests for unknown city, duplicate/ambiguous identity and rollback.
-- [ ] Write failing idempotency test: first import creates, second import updates without increasing count.
-- [ ] Implement row dataclasses, parsers, validation plan and one-transaction apply.
-- [ ] Run `backend/tests/test_blogger_batch_import.py` green.
+- [x] Write failing parser tests for xlsx, csv, city separators and enabled values.
+- [x] Write failing transaction tests for unknown city, duplicate/ambiguous identity and rollback.
+- [x] Write failing idempotency test: first import creates, second import updates without increasing count.
+- [x] Implement row dataclasses, parsers, validation plan and one-transaction apply.
+- [x] Run `backend/tests/test_blogger_batch_import.py` green.
 
 ### Task 2: Template and import API
 
@@ -43,10 +43,10 @@
 - `GET /api/v1/settings/bloggers/import-template` returns xlsx attachment.
 - `POST /api/v1/settings/bloggers/import?filename=list.xlsx` consumes raw bytes and returns counts.
 
-- [ ] Write failing auth, download, success, 422 and 2 MiB limit API tests.
-- [ ] Add endpoints with admin auth and stable error response containing row numbers.
-- [ ] Run import API tests and existing settings API tests green.
-- [ ] Commit backend implementation.
+- [x] Write failing auth, download, success, 422 and 2 MiB limit API tests.
+- [x] Add endpoints with admin auth and stable error response containing row numbers.
+- [x] Run import API tests and existing settings API tests green.
+- [x] Commit backend implementation.
 
 ### Task 3: Element Plus import UI
 

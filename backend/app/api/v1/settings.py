@@ -1,7 +1,7 @@
 from hashlib import sha1
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -13,6 +13,7 @@ from app.models.blogger_city import BloggerCity
 from app.models.config import Blogger, City, Keyword
 from app.services.opencli_adapter import OpenCLIAdapter
 from app.services.browser_launcher import BrowserLaunchError, open_xhs_login
+from app.services.blogger_import import BloggerImportError, generate_blogger_template, import_bloggers
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 Admin = Annotated[dict[str, str], Depends(require_admin)]
@@ -158,6 +159,27 @@ def _dump_blogger_with_cities(blogger: Blogger, db: Session) -> dict:
         ).all()
     )
     return data
+
+
+@router.get("/bloggers/import-template")
+def download_blogger_import_template(_: Admin):
+    return Response(
+        generate_blogger_template(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="blogger-import-template.xlsx"'},
+    )
+
+
+@router.post("/bloggers/import", status_code=status.HTTP_201_CREATED)
+async def import_blogger_settings(request: Request, filename: str, _: Admin, db: DB):
+    content = await request.body()
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(413, "导入文件不能超过 2 MiB")
+    try:
+        result = import_bloggers(db, content, filename)
+    except BloggerImportError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"code": 201, "message": "success", "data": result}
 
 
 @router.get("/{kind}")
