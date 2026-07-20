@@ -18,6 +18,9 @@
   - 实现：`backend/app/services/opencli_adapter.py` 缩短超时时间（60秒）；`backend/app/services/task_registry.py` kill方法立即发送SIGKILL。
   - 测试：`backend/tests/test_worker_stop_during_block.py` 4个全过。
 - [ ] 支持批量上传博主白名单
+  - 目标：在配置中心通过 Excel/CSV 一次导入多个博主及其城市关联，重复上传幂等更新。
+  - 验收：支持模板下载、整批校验、行号错误、2 MiB/500 行限制；仅使用城市名称；前端 Element Plus 上传与 Toast；全量测试通过。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-blogger-batch-import-design.md`（持续授权已审核）。
 - [ ] 识别到触发反爬时候，等我扫码或者验证码验证完，不要直接关掉页面
 - [ ] 活动列表的摘要，是完整的推文，写推文的文字，是ocr识别出来的，要写ocr识别出的文字，有日期的带上日期
 - [ ] 识别到小红书验证时，要停止爬虫，在仪表盘告知，然后打开页面等待扫码
