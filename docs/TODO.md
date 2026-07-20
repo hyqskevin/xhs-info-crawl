@@ -16,6 +16,7 @@
   - 目标：把 `user/profile/<user-id>/<note-id>` 与同一笔记的其他 URL 形式识别为同一 `platform_note_id`，重复抓取时复用已处理笔记，不重复插入。
   - 验收：不同 token 的同一 `user/profile` URL 提取相同 note ID；已处理笔记再次发现时不调用详情下载且不触发 `notes.platform_note_id` 唯一约束；现有 explore/search_result/discovery URL 行为不回退。
   - 证据：任务 #7 在已有 `platform_note_id=6a5739490000000016024c14` 时，因预检查未识别 `user/profile` 路径而再次 INSERT，触发 SQLite UNIQUE constraint。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-user-profile-note-identity-design.md`（持续授权已审核）。
 - [x] 修复worker在opencli阻塞时无法响应停止信号的问题
   - 目标：celery worker在执行opencli调用时（CDP超时115秒），能够及时检测到STOP_REQUESTED状态并退出。
   - 验收：点击停止后，worker在10秒内检测到停止信号并退出当前任务；不再需要手动kill worker进程。

@@ -142,7 +142,7 @@ Assert:
 
 Set the spec status to `已通过持续授权审核并实现`, add automated and real task results to the test document, and move the task #7 TODO into `已完成`.
 
-- [ ] **Step 5: Commit acceptance evidence**
+- [x] **Step 5: Commit acceptance evidence**
 
 ```bash
 git add docs/TODO.md docs/superpowers/specs/2026-07-20-blogger-discovery-resilience-design.md tests/test-blogger-discovery-resilience.md docs/superpowers/plans/2026-07-20-blogger-discovery-resilience.md
