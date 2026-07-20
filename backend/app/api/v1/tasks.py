@@ -83,14 +83,17 @@ def stop(task_id:int,_:Admin,db:DB):
     if not task: raise HTTPException(404,'任务不存在')
     if task.status in {'STOPPED','STOP_REQUESTED','COMPLETED','COMPLETED_WITH_ERRORS'}:
         return {'code':202,'message':'success','data':dump(task)}
-    from app.services.task_registry import kill as kill_task_pid
-    pid_killed = kill_task_pid(task_id, run_token=task.run_token, timeout=5.0)
-    if task.status == 'PENDING':
+    if task.status in {'PENDING','FAILED','PAUSED'}:
         task.status='STOPPED';task.current_stage=None;task.current_note=None;task.finished_at=datetime.now(timezone.utc)
-    elif task.status in {'RUNNING','FAILED','PAUSED'}:
+    elif task.status == 'RUNNING':
         task.status='STOP_REQUESTED';task.current_stage=None;task.current_note=None
     else:
         raise HTTPException(409,'当前状态不支持结束抓取')
+    # 必须先提交停止状态再 kill 子进程。worker 在子进程退出后会重新检查数据库；
+    # 如果先 kill，它可能仍读到 RUNNING 并把正常停止误判为 FAILED。
+    db.commit()
+    from app.services.task_registry import kill as kill_task_pid
+    pid_killed = kill_task_pid(task_id, run_token=task.run_token, timeout=5.0)
     db.add(TaskLog(task_id=task.id,level='INFO',message=f'已请求停止抓取（状态置为 {task.status}, 子进程已 kill={pid_killed}）',created_at=datetime.now(timezone.utc)))
     db.commit();db.refresh(task)
     return {'code':202,'message':'success','data':dump(task)}

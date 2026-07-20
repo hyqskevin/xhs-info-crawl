@@ -122,6 +122,9 @@ class OpenCLIAdapter:
             if effective_task_id is not None:
                 from app.services.task_registry import unregister
                 unregister(effective_task_id, run_token=effective_run_token)
+        # 子进程可能由停止接口在另一进程中 kill。此时 -9 只是停止动作的结果，
+        # 必须先重新读取任务所有权，避免把正常停止误写成 OpenCLIError/FAILED。
+        self._assert_execution_active(enforce_execution)
         output = (stdout or "").strip()
         if proc.returncode == 77:
             raise AuthenticationRequired('请在 Chrome 登录小红书后重试')

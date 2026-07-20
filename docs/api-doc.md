@@ -234,9 +234,12 @@
 
 ### POST /api/v1/tasks/:id/stop
 
-- 描述：安全停止等待中或运行中的任务
-- `PENDING` 立即变为 `STOPPED`；`RUNNING` 先变为 `STOP_REQUESTED`，当前笔记结束后变为 `STOPPED`
-- 已成功处理、归档的数据全部保留；重复请求 `STOP_REQUESTED` 幂等返回
+- 描述：停止等待中或运行中的抓取任务，不关闭 Celery worker 或用户整个 Chrome
+- `PENDING`、`FAILED`、`PAUSED` 立即变为 `STOPPED`；`RUNNING` 先提交 `STOP_REQUESTED`，再结束已登记的 OpenCLI 子进程并由 worker 确认为 `STOPPED`
+- 停止后每条业务 OpenCLI 命令在启动前、PID 登记后和子进程退出后校验执行权；目标是 5 秒内不再出现新的业务命令
+- crawler session 标签页在异常路径也会执行最多 10 秒的最佳努力关闭；包含清理时最迟 15 秒进入 `STOPPED`
+- 标签页清理失败写入任务 WARNING 日志，但不把已经停止的任务改为 `FAILED`
+- 已成功处理、归档的数据全部保留；重复请求 `STOP_REQUESTED` 或 `STOPPED` 幂等返回
 
 ## 配置接口
 

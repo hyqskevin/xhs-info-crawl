@@ -117,7 +117,7 @@ def test_task_stop_transitions_are_safe_and_idempotent(client: TestClient, db_se
     assert completed_response.status_code == 202
     assert completed_response.json()['data']['status'] == 'COMPLETED'
     assert failed_response.status_code == 202
-    assert failed_response.json()['data']['status'] == 'STOP_REQUESTED'
+    assert failed_response.json()['data']['status'] == 'STOPPED'
     assert stopped_response.status_code == 202
     assert client.post('/api/v1/tasks/99999/stop', headers=headers).status_code == 404
 

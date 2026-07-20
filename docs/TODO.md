@@ -12,16 +12,9 @@
 ## 当前待办
 
 - [ ] 写 spec 前先把问题解答清楚，spec 写完后必须过用户审核再开发（流程规则，永久保留）
-- [ ] 停止执行栅栏与浏览器标签页清理
-  - 目标：停止后不再启动新的 OpenCLI 命令，结束当前子进程并清理本次抓取打开的标签页；Celery worker 保持运行并可接收下一任务。
-  - 验收：5 秒内不再启动新的业务命令，包含标签页清理时最迟 15 秒进入 `STOPPED`；PID 注册表无活动记录；抓取标签页关闭；同一 worker 能执行后续新任务。
-  - 关联 spec：`docs/superpowers/specs/2026-07-20-stop-execution-fence-browser-cleanup-design.md`（已审核，待实现）。
 - [ ] 跑任务 #7 重新抓取验证博主笔记 URL 不再缺 xsec_token
   - 目标：验证博主抓取修复后，note 命令能正常打开笔记详情。
   - 验收：选 nb + 博主 1 提交任务，日志 `博主 '从零发现宁波' 命中 N 篇（带 xsec_token 的）`；`downloaded > 0`；无 `xsec_token` 或 `Missing url` 错误。
-- [ ] 验证点击"停止抓取"立即 kill 子进程（点一次停止后 5 秒内任务变 STOPPED）
-  - 目标：spec 1 已实现；提交一个耗时任务测一下。
-  - 验收：日志记录子进程已结束；5 秒内不再启动新的业务命令，包含标签页清理时最迟 15 秒进入 `STOPPED`；worker 进程不退。
 - [x] 修复worker在opencli阻塞时无法响应停止信号的问题
   - 目标：celery worker在执行opencli调用时（CDP超时115秒），能够及时检测到STOP_REQUESTED状态并退出。
   - 验收：点击停止后，worker在10秒内检测到停止信号并退出当前任务；不再需要手动kill worker进程。
@@ -56,6 +49,10 @@
 
 ## 已完成
 
+- [x] 停止执行栅栏、浏览器标签页清理与真实停止验收
+  - 结果：业务 OpenCLI 命令在进程创建前、PID 登记后和子进程退出后校验执行权；stop API 先提交 `STOP_REQUESTED` 再 kill；crawler session 使用有界 `finally` 清理，Celery worker 保持运行。
+  - 验收：后端 `210 passed, 1 skipped`、前端组件 `28 passed`、E2E `38 passed`；真实任务 `#15` 约 `0.25s` 进入 `STOPPED`，PID 注册表为空且 crawler 标签页关闭；不重启 worker，任务 `#16` 正常进入 `RUNNING / SEARCHING` 并可再次安全停止。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-stop-execution-fence-browser-cleanup-design.md`；测试案例：`tests/test-stop-execution-fence-browser-cleanup.md`。
 - [x] 消除测试环境 JWT 短密钥安全警告
   - 结果：pytest 在导入应用前注入独立的测试专用 JWT 密钥，不读取或暴露本地 `.env` 真实密钥；应用运行时配置逻辑未修改。
   - 验收：专项测试 `2 passed`；后端全量 `199 passed, 1 skipped`；输出不再包含 `InsecureKeyLengthWarning`。

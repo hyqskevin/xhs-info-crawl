@@ -25,7 +25,7 @@ test.describe('已登录业务流程', () => {
 
   test('TC-UI-008 活动只来自抓取且支持按时间筛选', async ({ page }) => {
     let query = ''
-    await page.route('**/api/v1/activities**', async (route) => {
+    await page.route('**/api/v1/notes**', async (route) => {
       query = route.request().url()
       return route.fulfill({ json: { ...response({ items: [] }), pagination: { total: 0 } } })
     })
@@ -41,12 +41,13 @@ test.describe('已登录业务流程', () => {
 
   test('TC-UI-009 筛选并查看活动详情', async ({ page }) => {
     let filtered = false
-    const activity = { id: 1, name: '上海周末展览', city_code: 'shanghai', start_time: '2026-07-18T10:00:00Z', location: '静安', price: '免费', type: '展览', source_url: '', summary: '活动详情', status: 'RAW' }
-    await page.route('**/api/v1/activities**', async (route) => {
+    const note = { id: 1, title: '上海周末展览推文', city_code: 'shanghai', published_at: '2026-07-18T10:00:00Z', activity_count: 1, review_status: 'PENDING' }
+    const detail = { ...note, content: '活动详情', source_url: 'https://www.xiaohongshu.com/explore/note-1', images: [], activities: [{ id: 10, name: '上海周末展览', location: '静安', status: 'RAW' }] }
+    await page.route('**/api/v1/notes**', async (route) => {
       const url = new URL(route.request().url())
-      if (/\/activities\/1$/.test(url.pathname)) return route.fulfill({ json: response(activity) })
+      if (/\/notes\/1$/.test(url.pathname)) return route.fulfill({ json: response(detail) })
       filtered = url.searchParams.get('city') === 'shanghai'
-      return route.fulfill({ json: { ...response({ items: [activity] }), pagination: { total: 1 } } })
+      return route.fulfill({ json: { ...response({ items: [note] }), pagination: { total: 1 } } })
     })
     await page.goto('/activities')
     await page.locator('.el-select').first().click()
@@ -54,15 +55,16 @@ test.describe('已登录业务流程', () => {
     await page.getByRole('button', { name: '筛选' }).click()
     await expect.poll(() => filtered).toBe(true)
     await page.getByRole('button', { name: '详情' }).click()
-    await expect(page.getByRole('heading', { name: '活动详情' })).toBeVisible()
-    await expect(page.getByRole('cell', { name: '活动详情' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '推文详情' })).toBeVisible()
+    await expect(page.getByText('活动详情', { exact: true })).toBeVisible()
+    await expect(page.getByRole('cell', { name: '上海周末展览', exact: true })).toBeVisible()
   })
 
   test('TC-UI-009A 日期未知活动显示待确认', async ({ page }) => {
-    const unknown = { id: 2, name: '日期未知活动', city_code: 'shanghai', start_time: null, location: '静安', status: 'NEEDS_REVIEW' }
-    await page.route('**/api/v1/activities**', (route) => route.fulfill({ json: { ...response({ items: [unknown] }), pagination: { total: 1 } } }))
+    const unknown = { id: 2, title: '日期未知活动推文', city_code: 'shanghai', published_at: null, created_at: null, activity_count: 1, review_status: 'PENDING' }
+    await page.route('**/api/v1/notes**', (route) => route.fulfill({ json: { ...response({ items: [unknown] }), pagination: { total: 1 } } }))
     await page.goto('/activities')
-    await expect(page.getByRole('row', { name: /日期未知活动/ })).toContainText('待确认')
+    await expect(page.getByRole('row', { name: /日期未知活动推文/ })).toContainText('待确认')
   })
 
   test('TC-UI-010 提交抓取任务并查看登录提示', async ({ page }) => {
@@ -85,13 +87,16 @@ test.describe('已登录业务流程', () => {
 
   test('TC-UI-011 合并重复活动', async ({ page }) => {
     let merged = false
-    await page.route('**/api/v1/activities/*', (route) => route.fulfill({ json: response({ id: 10, name: '活动', start_time: '2026-07-18T10:00:00Z', location: '静安' }) }))
+    await page.route('**/api/v1/notes/*', (route) => {
+      const id = Number(new URL(route.request().url()).pathname.split('/').pop())
+      return route.fulfill({ json: response({ id, title: `推文 ${id}`, published_at: '2026-07-18T10:00:00Z', activity_count: 1 }) })
+    })
     await page.route('**/api/v1/duplicates**', async (route) => {
       if (route.request().method() === 'POST') {
         merged = true
         return route.fulfill({ json: response({ status: 'MERGED' }) })
       }
-      return route.fulfill({ json: response({ items: [{ id: 1, activity_a_id: 10, activity_b_id: 11, similarity: 0.92, matched_fields: 'name,time' }] }) })
+      return route.fulfill({ json: response({ items: [{ id: 1, note_a_id: 10, note_b_id: 11, similarity: 0.92, matched_fields: 'title,published_at' }] }) })
     })
     await page.goto('/duplicates')
     await page.getByRole('button', { name: '保留 A' }).click()
@@ -142,8 +147,8 @@ test.describe('已登录业务流程', () => {
 
   test('TC-UI-014 批量删除当前页活动', async ({ page }) => {
     let deletedIds: number[] = []
-    const items = [1, 2].map((id) => ({ id, name: `活动 ${id}`, city_code: 'shanghai', start_time: '2026-07-18T10:00:00Z', location: '静安', status: 'RAW' }))
-    await page.route('**/api/v1/activities**', async (route) => {
+    const items = [1, 2].map((id) => ({ id, title: `推文 ${id}`, city_code: 'shanghai', published_at: '2026-07-18T10:00:00Z', activity_count: 1, review_status: 'PENDING' }))
+    await page.route('**/api/v1/notes**', async (route) => {
       if (route.request().method() === 'DELETE') {
         deletedIds = route.request().postDataJSON().ids
         return route.fulfill({ json: response({ deleted_count: deletedIds.length }) })
@@ -160,8 +165,8 @@ test.describe('已登录业务流程', () => {
   test('TC-UI-018 批量通过后生成单城市周报', async ({ page }) => {
     let approvedIds: number[] = []
     let reportPayload: { week: string; cities: string[] } | null = null
-    const items = [1, 2].map((id) => ({ id, name: `活动 ${id}`, city_code: 'shanghai', start_time: '2026-07-18T10:00:00Z', location: '静安', status: 'RAW' }))
-    await page.route('**/api/v1/activities**', async (route) => {
+    const items = [1, 2].map((id) => ({ id, title: `推文 ${id}`, city_code: 'shanghai', published_at: '2026-07-18T10:00:00Z', activity_count: 1, review_status: 'PENDING' }))
+    await page.route('**/api/v1/notes**', async (route) => {
       if (route.request().method() === 'POST' && route.request().url().endsWith('/batch/approve')) {
         approvedIds = route.request().postDataJSON().ids
         return route.fulfill({ json: response({ approved_ids: approvedIds, approved_count: approvedIds.length }) })
@@ -182,7 +187,7 @@ test.describe('已登录业务流程', () => {
     await page.getByRole('button', { name: '批量通过' }).click()
     await page.getByRole('button', { name: '确定' }).click()
     await expect.poll(() => approvedIds).toEqual([1, 2])
-    await expect(page.getByText('已通过 2 条活动')).toBeVisible()
+    await expect(page.getByText('已通过 2 篇推文')).toBeVisible()
 
     await page.goto('/reports')
     await page.getByRole('button', { name: '生成周报' }).click()

@@ -9,6 +9,7 @@
 from unittest.mock import patch
 import signal
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -80,6 +81,28 @@ def test_stop_running_task_sets_stop_requested(client: TestClient, db_session: S
     assert task.status == "STOP_REQUESTED"
 
 
+def test_stop_commits_stop_requested_before_killing_child(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+):
+    """子进程退出前必须已能从数据库读到 STOP_REQUESTED，避免被写成 FAILED。"""
+    task = _create_running_task(db_session)
+    statuses_seen_during_kill = []
+
+    def fake_kill(task_id, *, run_token=None, timeout=5.0):
+        db_session.expire_all()
+        statuses_seen_during_kill.append(db_session.get(CrawlTask, task_id).status)
+        return True
+
+    monkeypatch.setattr("app.services.task_registry.kill", fake_kill)
+
+    response = client.post(f"/api/v1/tasks/{task.id}/stop", headers=_auth())
+
+    assert response.status_code == 202
+    assert statuses_seen_during_kill == ["STOP_REQUESTED"]
+
+
 def test_stop_pending_task_sets_stopped(client: TestClient, db_session: Session):
     """PENDING 任务调用 stop 后，状态应立即变为 STOPPED。"""
     task = _create_pending_task(db_session)
@@ -87,6 +110,25 @@ def test_stop_pending_task_sets_stopped(client: TestClient, db_session: Session)
     response = client.post(f"/api/v1/tasks/{task.id}/stop", headers=_auth())
     assert response.status_code == 202
 
+    db_session.refresh(task)
+    assert task.status == "STOPPED"
+    assert task.finished_at is not None
+
+
+@pytest.mark.parametrize("initial_status", ["FAILED", "PAUSED"])
+def test_stop_inactive_task_sets_stopped_immediately(
+    client: TestClient,
+    db_session: Session,
+    initial_status: str,
+):
+    """已退出 worker 的失败/等待登录任务不能停留在 STOP_REQUESTED。"""
+    task = _create_running_task(db_session)
+    task.status = initial_status
+    db_session.commit()
+
+    response = client.post(f"/api/v1/tasks/{task.id}/stop", headers=_auth())
+
+    assert response.status_code == 202
     db_session.refresh(task)
     assert task.status == "STOPPED"
     assert task.finished_at is not None

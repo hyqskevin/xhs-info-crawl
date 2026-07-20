@@ -78,6 +78,34 @@ def test_guard_failure_after_registration_kills_new_process(monkeypatch) -> None
     assert task_registry.get(13, "run-token") is None
 
 
+def test_guard_failure_after_process_exit_wins_over_killed_return_code(monkeypatch) -> None:
+    stopped = False
+
+    class ExternallyKilledProc(FakeProc):
+        def communicate(self, timeout=None):
+            nonlocal stopped
+            self.communicate_calls += 1
+            self.returncode = -9
+            stopped = True
+            return "", "opencli process killed"
+
+    proc = ExternallyKilledProc()
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: proc)
+
+    def guard() -> None:
+        if stopped:
+            raise ExecutionStoppedForTest()
+
+    adapter = OpenCLIAdapter(Settings())
+    adapter.bind_task(14, "run-token", execution_guard=guard)
+
+    with pytest.raises(ExecutionStoppedForTest):
+        adapter.run(["xiaohongshu", "whoami"])
+
+    assert proc.communicate_calls == 1
+    assert task_registry.get(14, "run-token") is None
+
+
 def test_unbound_adapter_remains_compatible(monkeypatch) -> None:
     proc = FakeProc()
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: proc)

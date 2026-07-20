@@ -14,6 +14,22 @@ const activity = {
   summary: '活动详情',
   status: 'RAW',
 }
+const note = {
+  id: 1,
+  title: '上海周末展览推文',
+  city_code: 'shanghai',
+  published_at: '2026-07-18T09:00:00Z',
+  created_at: '2026-07-18T09:00:00Z',
+  activity_count: 1,
+  review_status: 'PENDING',
+}
+const noteDetail = {
+  ...note,
+  content: '页面正文',
+  source_url: 'https://example.com/note/1',
+  activities: [activity],
+  images: [],
+}
 
 async function authenticated(page: Page) {
   await page.addInitScript(() => localStorage.setItem('token', 'e2e-token'))
@@ -52,84 +68,92 @@ test.describe('TC-UI-008/009 活动管理完整流程', () => {
   })
 
   test('不提供手工新增活动入口', async ({ page }) => {
-    await page.route('**/api/v1/activities**', (route) => route.fulfill({ json: { ...response({ items: [] }), pagination: { total: 0 } } }))
+    await page.route('**/api/v1/notes**', (route) => route.fulfill({ json: { ...response({ items: [] }), pagination: { total: 0 } } }))
     await page.goto('/activities')
     await expect(page.getByRole('button', { name: '新增活动' })).toHaveCount(0)
-    await expect(page.getByText('活动时间')).toBeVisible()
+    await expect(page.getByText('发布时间')).toBeVisible()
   })
 
-  test('编辑活动并审核为 APPROVED', async ({ page }) => {
+  test('在推文详情中编辑识别活动', async ({ page }) => {
     let updated: Record<string, unknown> | undefined
-    await page.route('**/api/v1/activities**', async (route) => {
+    await page.route('**/api/v1/notes**', (route) => {
+      const pathname = new URL(route.request().url()).pathname
+      if (pathname.endsWith('/notes/1')) return route.fulfill({ json: response(noteDetail) })
+      return route.fulfill({ json: { ...response({ items: [note] }), pagination: { total: 1 } } })
+    })
+    await page.route('**/api/v1/activities/1', async (route) => {
       if (route.request().method() === 'PUT') {
         updated = route.request().postDataJSON()
         return route.fulfill({ json: response({ ...activity, ...updated }) })
       }
-      return route.fulfill({ json: { ...response({ items: [activity] }), pagination: { total: 1 } } })
+      return route.fulfill({ json: response(activity) })
     })
     await page.goto('/activities')
-    await page.getByRole('button', { name: '编辑审核' }).click()
+    await page.getByRole('button', { name: '详情' }).click()
+    await page.getByRole('button', { name: '编辑' }).click()
     await page.getByLabel('名称').fill('上海周末展览（已审核）')
-    await page.locator('.el-form-item').filter({ hasText: '审核状态' }).locator('.el-select').click()
-    await page.getByRole('option', { name: '已通过' }).click()
     await page.getByRole('button', { name: '保存' }).click()
-    await expect.poll(() => updated?.status).toBe('APPROVED')
     expect(updated?.name).toBe('上海周末展览（已审核）')
   })
 
-  test('删除先取消不请求，再确认执行软删除', async ({ page }) => {
+  test('子活动删除先取消不请求，再确认执行', async ({ page }) => {
     let deletes = 0
-    await page.route('**/api/v1/activities**', async (route) => {
+    await page.route('**/api/v1/notes**', (route) => {
+      const pathname = new URL(route.request().url()).pathname
+      if (pathname.endsWith('/notes/1')) return route.fulfill({ json: response(noteDetail) })
+      return route.fulfill({ json: { ...response({ items: [note] }), pagination: { total: 1 } } })
+    })
+    await page.route('**/api/v1/activities/1', async (route) => {
       if (route.request().method() === 'DELETE') { deletes += 1; return route.fulfill({ json: response({ id: 1 }) }) }
-      return route.fulfill({ json: { ...response({ items: [activity] }), pagination: { total: 1 } } })
+      return route.fulfill({ json: response(activity) })
     })
     await page.goto('/activities')
+    await page.getByRole('button', { name: '详情' }).click()
     await page.getByRole('button', { name: '删除', exact: true }).click()
     await page.getByRole('button', { name: '取消' }).click()
     expect(deletes).toBe(0)
     await page.getByRole('button', { name: '删除', exact: true }).click()
     await page.getByRole('button', { name: '确定' }).click()
     await expect.poll(() => deletes).toBe(1)
-    await expect(page.getByText('已删除')).toBeVisible()
   })
 
   test('分页点击下一页请求 page=2', async ({ page }) => {
     const pages: string[] = []
-    await page.route('**/api/v1/activities**', (route) => {
+    await page.route('**/api/v1/notes**', (route) => {
       pages.push(new URL(route.request().url()).searchParams.get('page') || '1')
-      return route.fulfill({ json: { ...response({ items: [activity] }), pagination: { total: 21 } } })
+      return route.fulfill({ json: { ...response({ items: [note] }), pagination: { total: 21 } } })
     })
     await page.goto('/activities')
     await page.getByRole('button', { name: '下一页' }).click()
     await expect.poll(() => pages).toContain('2')
   })
 
-  test('勾选多条活动后批量删除', async ({ page }) => {
+  test('勾选多篇推文后批量删除', async ({ page }) => {
     let ids: number[] = []
-    const second = { ...activity, id: 2, name: '上海周末市集' }
-    await page.route('**/api/v1/activities**', async (route) => {
+    const second = { ...note, id: 2, title: '上海周末市集推文' }
+    await page.route('**/api/v1/notes**', async (route) => {
       if (route.request().method() === 'DELETE') {
         ids = route.request().postDataJSON().ids
         return route.fulfill({ json: response({ deleted_count: ids.length }) })
       }
-      return route.fulfill({ json: { ...response({ items: [activity, second] }), pagination: { total: 2 } } })
+      return route.fulfill({ json: { ...response({ items: [note, second] }), pagination: { total: 2 } } })
     })
     await page.goto('/activities')
     await page.locator('.el-table__header .el-checkbox').click()
     await page.getByRole('button', { name: '批量删除' }).click()
     await page.getByRole('button', { name: '确定' }).click()
     await expect.poll(() => ids).toEqual([1, 2])
-    await expect(page.getByText('已删除 2 条活动')).toBeVisible()
+    await expect(page.getByText('已删除 2 篇推文')).toBeVisible()
   })
 
   test('宽版活动详情在表格下展示来源页面图片并支持预览', async ({ page }) => {
-    const detail = { ...activity, note: { id: 7, title: '宁波活动图集', content: '页面正文', source_url: 'https://example.com/note/7', status: 'PROCESSED' }, images: [{ id: 11, url: '/activities/1/images/11' }, { id: 12, url: '/activities/1/images/12' }] }
-    await page.route('**/api/v1/activities**', (route) => {
+    const detail = { ...noteDetail, title: '宁波活动图集', images: [{ id: 11 }, { id: 12 }] }
+    await page.route('**/api/v1/notes**', (route) => {
       const pathname = new URL(route.request().url()).pathname
-      if (pathname.endsWith('/activities/1')) return route.fulfill({ json: response(detail) })
-      return route.fulfill({ json: { ...response({ items: [activity] }), pagination: { total: 1 } } })
+      if (pathname.endsWith('/notes/1')) return route.fulfill({ json: response(detail) })
+      return route.fulfill({ json: { ...response({ items: [note] }), pagination: { total: 1 } } })
     })
-    await page.route('**/api/v1/activities/1/images/**', (route) => route.fulfill({ body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'), contentType: 'image/png' }))
+    await page.route('**/api/v1/notes/1/images/**', (route) => route.fulfill({ body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'), contentType: 'image/png' }))
     await page.goto('/activities')
     await page.getByRole('button', { name: '详情' }).click()
 
@@ -255,31 +279,32 @@ test.describe('TC-UI-010 任务完整流程', () => {
   })
 })
 
-test.describe('TC-UI-011 去重完整流程', () => {
+test.describe('TC-UI-011 推文去重完整流程', () => {
   test.beforeEach(async ({ page }) => authenticated(page))
 
-  test('双栏展示两个活动的名称、时间和地点', async ({ page }) => {
-    await page.route('**/api/v1/activities/10', (route) => route.fulfill({ json: response({ ...activity, id: 10, name: '活动 A' }) }))
-    await page.route('**/api/v1/activities/11', (route) => route.fulfill({ json: response({ ...activity, id: 11, name: '活动 B', location: '静安公园' }) }))
-    await page.route('**/api/v1/duplicates**', (route) => route.fulfill({ json: response({ items: [{ id: 1, activity_a_id: 10, activity_b_id: 11, similarity: 0.92, matched_fields: 'city,date' }] }) }))
+  test('双栏展示两篇推文的标题、发布时间和活动数', async ({ page }) => {
+    await page.route('**/api/v1/notes/10', (route) => route.fulfill({ json: response({ ...note, id: 10, title: '推文 A' }) }))
+    await page.route('**/api/v1/notes/11', (route) => route.fulfill({ json: response({ ...note, id: 11, title: '推文 B', activity_count: 2 }) }))
+    await page.route('**/api/v1/duplicates**', (route) => route.fulfill({ json: response({ items: [{ id: 1, note_a_id: 10, note_b_id: 11, similarity: 0.92, matched_fields: 'city,published_at' }] }) }))
     await page.goto('/duplicates')
-    await expect(page.getByRole('cell', { name: /活动 A 2026/ })).toBeVisible()
-    await expect(page.getByRole('cell', { name: /活动 B 2026/ })).toBeVisible()
-    await expect(page.getByText('静安艺术中心')).toBeVisible()
-    await expect(page.getByText('静安公园')).toBeVisible()
+    await expect(page.getByRole('cell', { name: /推文 A 2026/ })).toBeVisible()
+    await expect(page.getByRole('cell', { name: /推文 B 2026/ })).toBeVisible()
+    await expect(page.getByText('识别活动 1 条')).toBeVisible()
+    await expect(page.getByText('识别活动 2 条')).toBeVisible()
   })
 
   test('保留 B 与忽略分别调用正确接口', async ({ page }) => {
     const calls: string[] = []
     await page.route('**/api/v1/duplicates**', async (route) => {
       if (route.request().method() === 'POST') { calls.push(`${route.request().url()}:${route.request().postData() || ''}`); return route.fulfill({ json: response({}) }) }
-      return route.fulfill({ json: response({ items: [{ id: 1, activity_a_id: 10, activity_b_id: 11, similarity: 0.92, matched_fields: 'city,date' }] }) })
+      return route.fulfill({ json: response({ items: [{ id: 1, note_a_id: 10, note_b_id: 11, similarity: 0.92, matched_fields: 'city,published_at' }] }) })
     })
-    await page.route('**/api/v1/activities/*', (route) => route.fulfill({ json: response(activity) }))
+    await page.route('**/api/v1/notes/*', (route) => route.fulfill({ json: response(note) }))
     await page.goto('/duplicates')
     await page.getByRole('button', { name: '保留 B' }).click()
     await expect.poll(() => calls.some((x) => x.includes('/merge') && x.includes('"keep":"b"'))).toBe(true)
-    await page.getByRole('button', { name: '不是重复' }).click()
+    await page.getByRole('button', { name: '更多' }).click()
+    await page.getByRole('menuitem', { name: '不是重复' }).click()
     await expect.poll(() => calls.some((x) => x.includes('/ignore'))).toBe(true)
   })
 })

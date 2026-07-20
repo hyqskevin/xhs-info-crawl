@@ -471,7 +471,7 @@ git commit -m "fix: bind crawl execution checks to OpenCLI"
 - Consumes: the command fence, browser cleanup, worker callback binding, and existing stop/restart API.
 - Produces: documented automated and real-browser acceptance evidence for this TODO.
 
-- [ ] **Step 1: Add the E2E test-case document**
+- [x] **Step 1: Add the E2E test-case document**
 
 Create `tests/test-stop-execution-fence-browser-cleanup.md` with the following cases:
 
@@ -499,13 +499,13 @@ Create `tests/test-stop-execution-fence-browser-cleanup.md` with the following c
 9. 验证第一条任务的进度、日志和数据不再变化。
 ```
 
-- [ ] **Step 2: Update design and API documentation**
+- [x] **Step 2: Update design and API documentation**
 
 In `docs/crawler-design.md`, replace the ambiguous “worker ... 退出” wording with “当前 `run_crawl` 返回，Celery worker 保持运行”，and document pre-Popen/post-registration guards plus bounded `finally` cleanup.
 
 In `docs/api-doc.md`, document `STOP_REQUESTED`, the 5-second no-new-business-command target, the 15-second cleanup-inclusive `STOPPED` target, and warning-log behavior.
 
-- [ ] **Step 3: Run the complete automated suite**
+- [x] **Step 3: Run the complete automated suite**
 
 Run:
 
@@ -517,17 +517,17 @@ git diff --check
 
 Expected: backend, frontend component, and Playwright suites exit 0; no formatting errors; tests do not invoke real OpenCLI or mutate the local broker/database.
 
-- [ ] **Step 4: Run real local worker acceptance**
+- [x] **Step 4: Run real local worker acceptance**
 
 Use the steps in `tests/test-stop-execution-fence-browser-cleanup.md`. Record the tested task IDs and timestamps in the test document without recording URLs containing complete tokens.
 
 Expected: no new business command after stop, registry empty, crawler tab closed, old task stable, worker alive, and second task runs.
 
-- [ ] **Step 5: Close the TODO after all acceptance passes**
+- [x] **Step 5: Close the TODO after all acceptance passes**
 
 Change the spec status to `已审核并实现`. Move “停止执行栅栏与浏览器标签页清理” and the overlapping manual “验证点击停止抓取” item into `docs/TODO.md` 的“已完成” section. Record exact automated counts and the real task IDs without sensitive values.
 
-- [ ] **Step 6: Commit documentation and acceptance evidence**
+- [x] **Step 6: Commit documentation and acceptance evidence**
 
 ```bash
 git add docs/crawler-design.md docs/api-doc.md docs/TODO.md docs/superpowers/specs/2026-07-20-stop-execution-fence-browser-cleanup-design.md tests/test-stop-execution-fence-browser-cleanup.md

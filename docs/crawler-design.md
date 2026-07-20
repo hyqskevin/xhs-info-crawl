@@ -165,7 +165,7 @@ def download_note_details(note_id: int, note_url: str):
 
 任务实时记录发现、下载、OCR、提取和失败数量，并记录当前阶段与当前笔记。正常跑完但存在单篇失败时状态为 `COMPLETED_WITH_ERRORS`，不会误报为整批失败。
 
-用户请求安全停止后，运行中任务进入 `STOP_REQUESTED`。worker 完成当前单篇笔记并保留其事务和归档，然后在下一篇开始前写入 `STOPPED` 并退出；禁止强制杀死当前处理导致半成品。`STOPPED` 可按原任务 ID 继续抓取。
+用户请求停止后，API 先提交 `STOP_REQUESTED`，再结束当前已登记的 OpenCLI 子进程。每条业务命令在 `Popen` 前、PID 登记后和子进程退出后分别校验 `task_id + run_token`；退出后的检查保证 stop API 结束进程产生的非零退出码不会被误判为任务失败。停止或被新执行取代时不得再继续打开、滚动、解析或下载。搜索和详情流程从尝试打开 crawler session 标签页起使用 `finally` 做最多 10 秒的最佳努力关闭，清理失败只写 WARNING。worker 确认停止后写入 `STOPPED`，当前 `run_crawl` 返回；Celery worker 进程保持运行，可继续接收下一任务。已经没有 worker 执行的 `FAILED`、`PAUSED` 任务点击结束时直接进入 `STOPPED`。`STOPPED` 可按原任务 ID继续抓取，残缺笔记由既有清理逻辑处理。
 
 | 错误码 | 含义 | 处理策略 |
 |--------|------|----------|

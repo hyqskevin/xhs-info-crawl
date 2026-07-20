@@ -10,7 +10,7 @@ test.beforeEach(async ({ page }) => {
     })
   })
   await page.route('**/api/v1/dashboard/summary**', (route) => route.fulfill({ json: { data: { last_task: null } } }))
-  await page.route('**/api/v1/activities**', (route) => route.fulfill({ json: { data: { items: [] }, pagination: { total: 0 } } }))
+  await page.route('**/api/v1/notes**', (route) => route.fulfill({ json: { data: { items: [] }, pagination: { total: 0 } } }))
   await page.route('**/api/v1/duplicates**', (route) => route.fulfill({ json: { data: { items: [] } } }))
   await page.route('**/api/v1/tasks**', (route) => route.fulfill({ json: { data: { items: [] } } }))
   await page.route('**/api/v1/reports**', (route) => route.fulfill({ json: { data: [] } }))
