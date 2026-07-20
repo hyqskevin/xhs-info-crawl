@@ -29,7 +29,7 @@
 
 **Files:** Dashboard tests/E2E, crawler/API/UI docs, `tests/test-xhs-verification-pause.md`, `docs/TODO.md`.
 
-- [ ] Verify PAUSED verification copy and existing two buttons.
-- [ ] Add browser flow for open-login and resume after verification.
-- [ ] Run full backend, frontend, build, E2E and formatting checks.
-- [ ] Record evidence, close the consolidated TODO and commit.
+- [x] Verify PAUSED verification copy and existing two buttons.
+- [x] Add browser flow for open-login and resume after verification.
+- [x] Run full backend, frontend, build, E2E and formatting checks.
+- [x] Record evidence, close the consolidated TODO and commit.

@@ -128,4 +128,14 @@ describe('DashboardView', () => {
     await flushPromises()
     expect(mocks.restartTask).toHaveBeenCalledWith(4)
   })
+
+  it('shows the security verification reason with manual recovery controls', async () => {
+    mocks.dashboard.mockResolvedValueOnce({ data: { data: { last_task: { id: 12, status: 'PAUSED', total_notes: 20, downloaded_notes: 4, ocr_notes: 4, extracted_notes: 3, success_notes: 3, failed_notes: 0, skipped_notes: 0, current_stage: 'DOWNLOADING', current_note: '活动笔记', error_message: '检测到小红书安全验证，请在 Chrome 完成后点击检测登录并继续', progress_percent: 20 } } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('检测到小红书安全验证')
+    expect(wrapper.text()).toContain('打开小红书登录')
+    expect(wrapper.text()).toContain('检测登录并继续')
+  })
 })

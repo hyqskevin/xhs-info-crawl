@@ -1,5 +1,9 @@
 # 页面 UI 交互设计
 
+## 安全验证暂停
+
+任务进入 `PAUSED` 且错误为小红书安全验证时，仪表盘使用 Element Plus `ElAlert` 展示原因，并复用“打开小红书登录”“检测登录并继续”两个按钮。不得使用 emoji，不得自动填写或提交验证码。
+
 ## UI 实现规范
 
 - 前端基于 Vue 3，统一使用 **Element Plus**（Element UI 的 Vue 3 对应版本）作为 UI 组件库。

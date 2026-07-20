@@ -230,6 +230,7 @@
 
 - 描述：按原参数继续失败、已停止或等待登录任务，沿用原任务 ID，并跳过已经成功提取的笔记
 - 限制：`FAILED`、`STOPPED`、`PAUSED` 可调用；`PAUSED` 会先检测 OpenCLI 登录态，未登录返回 `409/AUTH_REQUIRED` 且保持暂停
+- 安全验证：验证码/风控会把任务置为 `PAUSED` 并保留浏览器页；人工完成后调用本接口检测并继续原任务。
 - 进度字段：`total_notes`、`downloaded_notes`、`ocr_notes`、`extracted_notes`、`failed_notes`、`skipped_notes`、`skipped_activities`、`current_stage`、`current_note`
 
 ### POST /api/v1/tasks/:id/stop

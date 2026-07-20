@@ -254,10 +254,10 @@ test.describe('TC-UI-010 任务完整流程', () => {
     await expect.poll(() => restarted).toBe(true)
   })
 
-  test('等待登录任务可打开 Chrome 登录页并检测登录后继续', async ({ page }) => {
+  test('等待安全验证任务可打开 Chrome 页面并检测后继续', async ({ page }) => {
     let opened = false
     let restarted = false
-    const pausedTask = { id: 4, status: 'PAUSED', total_notes: 102, downloaded_notes: 19, ocr_notes: 19, extracted_notes: 19, success_notes: 19, failed_notes: 0, skipped_notes: 0, skipped_activities: 3, current_stage: 'DOWNLOADING', current_note: '活动笔记', progress_percent: 18.6, error_message: '请在 Chrome 登录小红书后重试' }
+    const pausedTask = { id: 4, status: 'PAUSED', total_notes: 102, downloaded_notes: 19, ocr_notes: 19, extracted_notes: 19, success_notes: 19, failed_notes: 0, skipped_notes: 0, skipped_activities: 3, current_stage: 'DOWNLOADING', current_note: '活动笔记', progress_percent: 18.6, error_message: '检测到小红书安全验证，请在 Chrome 完成后点击检测登录并继续' }
     await page.route('**/api/v1/dashboard/summary**', (route) => route.fulfill({ json: response({ last_task: pausedTask }) }))
     await page.route('**/api/v1/settings/opencli/open-login', (route) => {
       opened = true
@@ -269,6 +269,7 @@ test.describe('TC-UI-010 任务完整流程', () => {
     })
 
     await page.goto('/dashboard')
+    await expect(page.getByText(/检测到小红书安全验证/)).toBeVisible()
     await expect(page.getByText('活动已跳过').locator('..').getByText('3')).toBeVisible()
     await page.getByRole('button', { name: '打开小红书登录' }).click()
     await expect.poll(() => opened).toBe(true)

@@ -50,6 +50,8 @@ opencli xiaohongshu search --keyword "上海 周末活动" --limit 10 -f json
 若检查返回错误码 77 / `AUTH_REQUIRED`：
 
 1. 当前抓取任务切换为 `PAUSED`。
+
+若 OpenCLI 返回明确的 captcha、安全验证、请完成验证或扫码验证信号，系统抛出 `VerificationRequired` 并同样进入 `PAUSED`。此时 crawler session 标签页必须保留，worker 最佳努力唤醒 Chrome，等待用户人工完成验证；不得自动填写或提交验证码。普通网络超时及无关“验证结果”不得误判。用户结束该 PAUSED 任务时关闭保留 session。
 2. 停止后续搜索、详情和下载命令。
 3. 管理端提示用户在当前 Chrome 登录小红书。
 4. 用户登录后点击“测试连接”或“重试”，系统重新执行 `whoami`。
