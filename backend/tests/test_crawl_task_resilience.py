@@ -1,7 +1,8 @@
 from app.services.crawler import AuthenticationRequired
 from app.services.pipeline import deduplicate_results, process_with_isolation, run_stage, title_matches_keywords
 from app.models.activity import Activity
-from app.models.config import City, Keyword
+from app.models.blogger_city import BloggerCity
+from app.models.config import Blogger, City, Keyword
 from app.models.note import Note
 from app.models.task import CrawlTask, TaskLog
 from app.tasks.crawl_task import prepare_existing_note
@@ -9,6 +10,123 @@ from app.tasks import crawl_task
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from sqlalchemy import select
+
+
+def _configured_bloggers(db_session, usernames: list[str]):
+    city = City(name="宁波", code="nb", enabled=True, recent_filter="一周内")
+    db_session.add(city)
+    db_session.flush()
+    bloggers = []
+    for index, username in enumerate(usernames, 1):
+        blogger = Blogger(
+            platform_user_id=f"user-{index}",
+            username=username,
+            profile_url=f"https://www.xiaohongshu.com/user/profile/user-{index}",
+            city_code="nb",
+            enabled=True,
+        )
+        db_session.add(blogger)
+        db_session.flush()
+        db_session.add(BloggerCity(blogger_id=blogger.id, city_code="nb", enabled=True))
+        bloggers.append(blogger)
+    db_session.commit()
+    return bloggers
+
+
+def test_one_blogger_discovery_failure_does_not_discard_other_results(db_session, monkeypatch):
+    broken, good = _configured_bloggers(db_session, ["坏账号", "正常账号"])
+    task = CrawlTask(
+        type="mixed",
+        status="PENDING",
+        run_token="blogger-token",
+        params={
+            "city": "nb",
+            "keywords": [],
+            "recent_filter": "一周内",
+            "blogger_ids": [broken.id, good.id],
+        },
+    )
+    db_session.add(task)
+    db_session.commit()
+    calls = []
+    processed = []
+
+    class FakeAdapter:
+        def __init__(self, _settings):
+            pass
+
+        def bind_task(self, *_args, **_kwargs):
+            pass
+
+        def blogger_notes(self, username, _profile_url):
+            calls.append(username)
+            if username == "坏账号":
+                raise RuntimeError("user store was not found")
+            return [{
+                "title": "宁波活动",
+                "url": "https://www.xiaohongshu.com/explore/signed-note?xsec_token=secret",
+            }]
+
+    def fake_process(db, current_task, _run_token, _city, item, _adapter, _settings):
+        processed.append(item["url"].split("?")[0])
+        current_task.extracted_notes += 1
+        current_task.success_notes += 1
+        db.commit()
+        return True
+
+    monkeypatch.setattr(crawl_task, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(crawl_task, "OpenCLIAdapter", FakeAdapter)
+    monkeypatch.setattr(crawl_task, "process_note", fake_process)
+
+    crawl_task.run_crawl.run(task.id, "blogger-token")
+
+    task = db_session.get(CrawlTask, task.id)
+    assert calls == ["坏账号", "正常账号"]
+    assert processed == ["https://www.xiaohongshu.com/explore/signed-note"]
+    assert task.status == "COMPLETED_WITH_ERRORS"
+    assert "坏账号" in (task.error_message or "")
+    messages = list(db_session.scalars(select(TaskLog.message).where(TaskLog.task_id == task.id)))
+    assert any("博主 '坏账号' 抓取失败" in message for message in messages)
+    assert all("xsec_token=secret" not in message for message in messages)
+
+
+def test_blogger_authentication_failure_still_pauses_the_batch(db_session, monkeypatch):
+    first, second = _configured_bloggers(db_session, ["需登录账号", "不应调用账号"])
+    task = CrawlTask(
+        type="mixed",
+        status="PENDING",
+        run_token="auth-token",
+        params={
+            "city": "nb",
+            "keywords": [],
+            "recent_filter": "一周内",
+            "blogger_ids": [first.id, second.id],
+        },
+    )
+    db_session.add(task)
+    db_session.commit()
+    calls = []
+
+    class FakeAdapter:
+        def __init__(self, _settings):
+            pass
+
+        def bind_task(self, *_args, **_kwargs):
+            pass
+
+        def blogger_notes(self, username, _profile_url):
+            calls.append(username)
+            raise AuthenticationRequired("login")
+
+    monkeypatch.setattr(crawl_task, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(crawl_task, "OpenCLIAdapter", FakeAdapter)
+
+    crawl_task.run_crawl.run(task.id, "auth-token")
+
+    task = db_session.get(CrawlTask, task.id)
+    assert calls == ["需登录账号"]
+    assert task.status == "PAUSED"
+    assert task.error_message == "login"
 
 
 def test_run_stage_retries_a_temporary_failure():

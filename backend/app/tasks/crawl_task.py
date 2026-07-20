@@ -281,6 +281,7 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         db.commit()
         log(db, task.id, "INFO", "login check")
         results: list[tuple[str, dict]] = []
+        discovery_failures = 0
         requested_cities = [task.params["city"]] if task.params.get("city") else task.params.get("cities", [])
         city_query = select(City).where(City.enabled.is_(True))
         if requested_cities:
@@ -303,7 +304,16 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
                     if not username:
                         log(db, task.id, "WARNING", f"跳过博主：username 为空 id={blogger.id}")
                         continue
-                    items = adapter.blogger_notes(username, blogger.profile_url or "")
+                    try:
+                        items = adapter.blogger_notes(username, blogger.profile_url or "")
+                    except (AuthenticationRequired, ExecutionStopped, ExecutionSuperseded):
+                        raise
+                    except Exception as exc:
+                        discovery_failures += 1
+                        task.error_message = f"博主 {username!r} 抓取失败：{exc}"
+                        db.commit()
+                        log(db, task.id, "ERROR", task.error_message)
+                        continue
                     assert_execution_active(db, task.id, run_token)
                     log(db, task.id, "INFO", f"博主 {username!r} 命中 {len(items)} 篇（带 xsec_token 的）")
                     results.extend((city.code, item) for item in items)
@@ -358,7 +368,7 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         if finish_stop_if_requested(db, task.id, run_token):
             return
         task = db.get(CrawlTask, task.id)
-        task.status = "COMPLETED_WITH_ERRORS" if task.failed_notes else "COMPLETED"
+        task.status = "COMPLETED_WITH_ERRORS" if task.failed_notes or discovery_failures else "COMPLETED"
         task.current_stage = None
         task.current_note = None
         task.finished_at = datetime.now(timezone.utc)
