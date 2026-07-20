@@ -395,4 +395,42 @@ test.describe('TC-UI-013 配置中心完整流程', () => {
     await expect(page.getByLabel('OpenCLI 测试中')).toHaveCount(0)
     await expect(page.getByText('OpenCLI 登录与连接正常')).toBeVisible()
   })
+
+  test('下载模板并批量导入博主后刷新列表', async ({ page }) => {
+    let imported = false
+    await page.route('**/api/v1/settings/cities**', (route) => route.fulfill({ json: response([
+      { id: 1, name: '宁波', code: 'nb', keywords: [], recent_filter: '一周内', enabled: true },
+    ]) }))
+    await page.route('**/api/v1/settings/bloggers**', async (route) => {
+      const pathname = new URL(route.request().url()).pathname
+      if (pathname.endsWith('/import-template')) {
+        return route.fulfill({
+          body: 'template',
+          headers: { 'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'content-disposition': 'attachment; filename="blogger-import-template.xlsx"' },
+        })
+      }
+      if (pathname.endsWith('/import') && route.request().method() === 'POST') {
+        imported = true
+        expect(new URL(route.request().url()).searchParams.get('filename')).toBe('bloggers.csv')
+        return route.fulfill({ status: 201, json: response({ created: 1, updated: 0, total: 1 }) })
+      }
+      return route.fulfill({ json: response(imported ? [
+        { id: 8, username: '批量博主', profile_url: '', city_codes: ['nb'], enabled: true },
+      ] : []) })
+    })
+    await page.goto('/settings')
+    await page.getByText('博主白名单').click()
+
+    const download = page.waitForEvent('download')
+    await page.getByRole('button', { name: '下载模板' }).click()
+    expect((await download).suggestedFilename()).toBe('blogger-import-template.xlsx')
+
+    await page.locator('input[type="file"]').setInputFiles({
+      name: 'bloggers.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from('博主名称,小红书用户ID,主页地址,关联城市,启用\n批量博主,,,宁波,是\n'),
+    })
+    await expect(page.getByText('导入成功：新增 1，更新 0')).toBeVisible()
+    await expect(page.getByText('批量博主')).toBeVisible()
+  })
 })

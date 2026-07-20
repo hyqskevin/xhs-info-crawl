@@ -17,10 +17,6 @@
   - 验收：点击停止后，worker在10秒内检测到停止信号并退出当前任务；不再需要手动kill worker进程。
   - 实现：`backend/app/services/opencli_adapter.py` 缩短超时时间（60秒）；`backend/app/services/task_registry.py` kill方法立即发送SIGKILL。
   - 测试：`backend/tests/test_worker_stop_during_block.py` 4个全过。
-- [ ] 支持批量上传博主白名单
-  - 目标：在配置中心通过 Excel/CSV 一次导入多个博主及其城市关联，重复上传幂等更新。
-  - 验收：支持模板下载、整批校验、行号错误、2 MiB/500 行限制；仅使用城市名称；前端 Element Plus 上传与 Toast；全量测试通过。
-  - 关联 spec：`docs/superpowers/specs/2026-07-20-blogger-batch-import-design.md`（持续授权已审核）。
 - [ ] 识别到触发反爬时候，等我扫码或者验证码验证完，不要直接关掉页面
 - [ ] 活动列表的摘要，是完整的推文，写推文的文字，是ocr识别出来的，要写ocr识别出的文字，有日期的带上日期
 - [ ] 识别到小红书验证时，要停止爬虫，在仪表盘告知，然后打开页面等待扫码
@@ -49,6 +45,10 @@
 
 ## 已完成
 
+- [x] 支持批量上传博主白名单
+  - 结果：配置中心支持下载 Excel 模板并上传 xlsx/UTF-8 csv；按用户 ID、主页、名称幂等更新，只填写城市名称，整批校验后单事务写入。
+  - 验收：支持行号错误、2 MiB/500 行限制、Element Plus loading/Toast；后端 `227 passed, 1 skipped`、前端 `31 passed`、构建成功、E2E `39 passed`。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-blogger-batch-import-design.md`；测试案例：`tests/test-blogger-batch-import.md`。
 - [x] 修复博主 `user/profile` 笔记 URL 的稳定身份识别与重复抓取唯一键冲突
   - 结果：统一身份函数严格识别 `/user/profile/<user-id>/<note-id>`，不同 token 得到同一 note ID；纯博主主页不误判。已处理笔记会刷新有效 URL 并跳过详情、下载及重复 INSERT。
   - 验收：身份与任务回归 `30 passed`；后端 `215 passed, 1 skipped`、前端 `28 passed`、E2E `38 passed`；任务 #7 真实记录只读核对通过。

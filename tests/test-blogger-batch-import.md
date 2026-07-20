@@ -13,3 +13,11 @@
 2. 选择 `.xlsx` 或 `.csv` 后自动上传，上传期间显示 loading。
 3. 成功 Toast 显示新增/更新数并刷新博主列表；失败 Toast 显示后端行号原因。
 4. 所有按钮使用 Element Plus 组件和图标，不使用 emoji。
+
+## 2026-07-20 验收结果
+
+- 后端专项及配置回归：`28 passed`。
+- 全量后端：`227 passed, 1 skipped`。
+- 前端组件：`31 passed`，SettingsView 批量导入相关 `8 passed`。
+- 前端生产构建成功；Playwright `39 passed`。
+- 浏览器案例确认下载文件名为 `blogger-import-template.xlsx`，CSV 上传携带文件名，成功后提示新增/更新数量并刷新列表。

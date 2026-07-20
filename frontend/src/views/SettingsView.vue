@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Connection, Delete, Edit, Loading, MagicStick, Plus } from '@element-plus/icons-vue'
+import { Connection, Delete, Download, Edit, Loading, MagicStick, Plus, UploadFilled } from '@element-plus/icons-vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
@@ -11,6 +11,7 @@ const dialog = ref(false)
 const editingId = ref<number | null>(null)
 const testingOpenCLI = ref(false)
 const enrichingId = ref<number | null>(null)
+const importingBloggers = ref(false)
 const form = reactive<any>({})
 const recentFilters = ['不限', '一天内', '一周内', '半年内']
 
@@ -79,6 +80,31 @@ async function enrich(row: any) {
   }
 }
 
+async function downloadTemplate() {
+  const response = await api.downloadBloggerTemplate()
+  const url = URL.createObjectURL(response.data)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'blogger-import-template.xlsx'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+async function importFile(uploadFile: any) {
+  if (!uploadFile.raw) return
+  importingBloggers.value = true
+  try {
+    const response = await api.importBloggers(uploadFile.raw)
+    const result = response.data.data
+    ElMessage.success(`导入成功：新增 ${result.created}，更新 ${result.updated}`)
+    await load()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || error.response?.data?.detail || '批量导入失败')
+  } finally {
+    importingBloggers.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -90,6 +116,10 @@ onMounted(load)
         <ElRadioButton value="bloggers">博主白名单</ElRadioButton>
       </ElRadioGroup>
       <ElButton type="primary" :icon="Plus" @click="open()">{{ tab === 'cities' ? '新增城市' : '新增博主' }}</ElButton>
+      <ElButton v-if="tab === 'bloggers'" :icon="Download" @click="downloadTemplate">下载模板</ElButton>
+      <ElUpload v-if="tab === 'bloggers'" :show-file-list="false" :auto-upload="false" accept=".xlsx,.csv" :on-change="importFile">
+        <ElButton :icon="UploadFilled" :loading="importingBloggers">批量导入</ElButton>
+      </ElUpload>
       <ElButton :icon="Connection" :disabled="testingOpenCLI" @click="test">测试 OpenCLI</ElButton>
       <ElIcon v-if="testingOpenCLI" class="opencli-testing-icon is-loading" aria-label="OpenCLI 测试中"><Loading /></ElIcon>
     </div>

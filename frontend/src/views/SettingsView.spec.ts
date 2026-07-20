@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import SettingsView from './SettingsView.vue'
@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   createSetting: vi.fn(),
   updateSetting: vi.fn(),
   deleteSetting: vi.fn(),
+  downloadBloggerTemplate: vi.fn(),
+  importBloggers: vi.fn(),
   testOpenCLI: vi.fn(),
 }))
 vi.mock('@/api/client', () => ({ api: mocks }))
@@ -119,5 +121,58 @@ describe('SettingsView', () => {
     expect(text).toContain('宁波')
     expect(text).toContain('上海')
     expect(text).toContain('未关联')  // 博主 B 没绑城市
+  })
+
+  it('shows template download and batch import only on blogger tab', async () => {
+    const wrapper = mount(SettingsView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('下载模板')
+    expect(wrapper.text()).not.toContain('批量导入')
+
+    await wrapper.findAll('input[type="radio"]').find((radio) => radio.attributes('value') === 'bloggers')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('下载模板')
+    expect(wrapper.text()).toContain('批量导入')
+  })
+
+  it('uploads one blogger file with loading and refreshes after success', async () => {
+    let resolveImport!: (value: unknown) => void
+    mocks.importBloggers.mockImplementationOnce(() => new Promise((resolve) => { resolveImport = resolve }))
+    const success = vi.spyOn(ElMessage, 'success')
+    const wrapper = mount(SettingsView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    await wrapper.findAll('input[type="radio"]').find((radio) => radio.attributes('value') === 'bloggers')!.trigger('click')
+    await flushPromises()
+    const upload = wrapper.findComponent({ name: 'ElUpload' })
+    const file = new File(['content'], 'bloggers.xlsx')
+
+    const importing = upload.props('onChange')({ raw: file })
+    await wrapper.vm.$nextTick()
+
+    expect(mocks.importBloggers).toHaveBeenCalledWith(file)
+    expect(wrapper.findAll('button').find((button) => button.text().includes('批量导入'))!.classes()).toContain('is-loading')
+
+    resolveImport({ data: { data: { created: 2, updated: 1, total: 3 } } })
+    await importing
+    await flushPromises()
+
+    expect(success).toHaveBeenCalledWith('导入成功：新增 2，更新 1')
+    expect(mocks.settings.mock.calls.filter((call) => call[0] === 'bloggers').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('shows the backend row error when batch import fails', async () => {
+    mocks.importBloggers.mockRejectedValueOnce({ response: { data: { message: '第3行：不存在城市：杭州' } } })
+    const error = vi.spyOn(ElMessage, 'error')
+    const wrapper = mount(SettingsView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    await wrapper.findAll('input[type="radio"]').find((radio) => radio.attributes('value') === 'bloggers')!.trigger('click')
+    await flushPromises()
+
+    await wrapper.findComponent({ name: 'ElUpload' }).props('onChange')({ raw: new File(['bad'], 'bloggers.csv') })
+    await flushPromises()
+
+    expect(error).toHaveBeenCalledWith('第3行：不存在城市：杭州')
   })
 })

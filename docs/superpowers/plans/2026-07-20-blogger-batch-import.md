@@ -55,10 +55,10 @@
 - Modify: `frontend/src/views/SettingsView.vue`
 - Modify: `frontend/src/views/SettingsView.spec.ts`
 
-- [ ] Write failing component tests for blogger-only controls, raw file upload, loading, success refresh and row-error Toast.
-- [ ] Add `downloadBloggerTemplate()` and `importBloggers(file)` API methods.
-- [ ] Add Element Plus upload/template controls with `UploadFilled` and `Download` icons.
-- [ ] Run SettingsView component tests green.
+- [x] Write failing component tests for blogger-only controls, raw file upload, loading, success refresh and row-error Toast.
+- [x] Add `downloadBloggerTemplate()` and `importBloggers(file)` API methods.
+- [x] Add Element Plus upload/template controls with `UploadFilled` and `Download` icons.
+- [x] Run SettingsView component tests green.
 
 ### Task 4: Browser flow, docs and closure
 
@@ -68,6 +68,6 @@
 - Modify: `docs/TODO.md`
 - Modify: `docs/superpowers/specs/2026-07-20-blogger-batch-import-design.md`
 
-- [ ] Add Playwright case for template download and successful batch import refresh.
-- [ ] Run backend, frontend component and E2E full suites plus `git diff --check`.
-- [ ] Record evidence, move TODO to completed and commit.
+- [x] Add Playwright case for template download and successful batch import refresh.
+- [x] Run backend, frontend component and E2E full suites plus `git diff --check`.
+- [x] Record evidence, move TODO to completed and commit.
