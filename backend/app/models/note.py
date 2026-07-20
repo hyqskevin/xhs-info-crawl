@@ -13,6 +13,8 @@ class Note(Base):
     source_url: Mapped[str] = mapped_column(String(512))
     city_code: Mapped[str] = mapped_column(String(32), index=True)
     status: Mapped[str] = mapped_column(String(32))
+    review_status: Mapped[str] = mapped_column(String(32), default="PENDING", index=True)
+    merged_into_note_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

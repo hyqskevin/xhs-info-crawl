@@ -119,7 +119,31 @@ def test_existing_incomplete_note_is_removed_before_retry(db_session):
     assert db_session.get(Note, note.id) is None
 
 
+def test_existing_note_is_found_by_platform_id_when_access_token_changes(db_session):
+    note = Note(
+        task_id=1,
+        platform_note_id="same-note",
+        title="活动",
+        content="正文",
+        source_url="https://www.xiaohongshu.com/explore/same-note?xsec_token=old",
+        city_code="nb",
+        status="PROCESSED",
+        raw_data={},
+    )
+    db_session.add(note)
+    db_session.commit()
+
+    assert prepare_existing_note(
+        db_session,
+        "https://www.xiaohongshu.com/discovery/item/same-note?xsec_token=new",
+    ) is True
+    db_session.refresh(note)
+    assert note.source_url.endswith("xsec_token=new")
+
+
 def test_one_note_keeps_valid_and_unknown_activities_but_skips_window_outliers(db_session, monkeypatch, tmp_path):
+    db_session.add(City(name="宁波", code="nb", enabled=True))
+    db_session.flush()
     task = CrawlTask(
         type="mixed",
         status="RUNNING",
@@ -156,6 +180,7 @@ def test_one_note_keeps_valid_and_unknown_activities_but_skips_window_outliers(d
     crawl_task.process_note(
         db_session,
         task,
+        task.run_token,
         "nb",
         {"title": "宁波活动合集", "url": "https://xhs/window-test"},
         FakeAdapter(),
@@ -198,7 +223,7 @@ def test_keyword_search_skips_titles_without_the_corresponding_keyword(db_sessio
             calls["download"].append(url)
             return []
 
-    def fake_process(db, current_task, _city, item, adapter, _settings):
+    def fake_process(db, current_task, _run_token, _city, item, adapter, _settings):
         adapter.note(item["url"])
         adapter.download(item["url"], tmp_path)
         current_task.extracted_notes += 1
@@ -210,7 +235,7 @@ def test_keyword_search_skips_titles_without_the_corresponding_keyword(db_sessio
     monkeypatch.setattr(crawl_task, "OpenCLIAdapter", FakeAdapter)
     monkeypatch.setattr(crawl_task, "process_note", fake_process)
 
-    crawl_task.run_crawl.run(task.id)
+    crawl_task.run_crawl.run(task.id, task.run_token)
 
     task = db_session.get(CrawlTask, task.id)
     assert calls == {"note": ["https://xhs/matched"], "download": ["https://xhs/matched"]}
@@ -237,7 +262,7 @@ def test_worker_finishes_current_note_then_stops_before_the_next(db_session, mon
                 {"title": "宁波活动二", "url": "https://xhs/2"},
             ]
 
-    def fake_process(db, current_task, _city, item, _adapter, _settings):
+    def fake_process(db, current_task, _run_token, _city, item, _adapter, _settings):
         processed.append(item["url"])
         current_task.extracted_notes += 1
         current_task.success_notes += 1
@@ -249,7 +274,7 @@ def test_worker_finishes_current_note_then_stops_before_the_next(db_session, mon
     monkeypatch.setattr(crawl_task, "OpenCLIAdapter", FakeAdapter)
     monkeypatch.setattr(crawl_task, "process_note", fake_process)
 
-    crawl_task.run_crawl.run(task.id)
+    crawl_task.run_crawl.run(task.id, task.run_token)
 
     task = db_session.get(CrawlTask, task.id)
     assert processed == ["https://xhs/1"]
@@ -275,7 +300,7 @@ def test_worker_does_not_restart_a_pending_task_that_was_already_stopped(db_sess
     monkeypatch.setattr(crawl_task, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(crawl_task, "OpenCLIAdapter", FakeAdapter)
 
-    crawl_task.run_crawl.run(task.id)
+    crawl_task.run_crawl.run(task.id, task.run_token)
 
     task = db_session.get(CrawlTask, task.id)
     assert task.status == "STOPPED"

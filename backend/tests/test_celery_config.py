@@ -6,8 +6,9 @@ from app.core.config import Settings
 from app.tasks.celery_app import create_celery_app
 
 
-def test_celery_uses_filesystem_transport_and_local_folders(tmp_path: Path) -> None:
-    settings = Settings(project_root=tmp_path)
+def test_celery_uses_filesystem_transport_and_local_folders(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("CELERY_BROKER_URL", raising=False)
+    settings = Settings(project_root=tmp_path, celery_broker_url="filesystem://")
 
     celery_app = create_celery_app(settings)
 

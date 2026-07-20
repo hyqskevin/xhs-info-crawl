@@ -1,4 +1,5 @@
 from collections.abc import Generator
+import os
 from pathlib import Path
 
 import pytest
@@ -6,8 +7,37 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+# Celery reads its broker while app modules are imported.  Force pytest onto a
+# process-local transport before importing the application so tests can never
+# publish messages to the developer's filesystem broker.
+os.environ["CELERY_BROKER_URL"] = "memory://"
+
 from app.core.database import Base, get_db
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def forbid_undeclared_celery_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test that expects a crawl dispatch must declare and assert it."""
+    from app.tasks.crawl_task import run_crawl
+
+    def fail(task_id: int, *args, **kwargs) -> None:
+        raise AssertionError(
+            f"undeclared Celery dispatch for task_id={task_id}; "
+            "patch run_crawl.delay explicitly in this test"
+        )
+
+    monkeypatch.setattr(run_crawl, "delay", fail)
+
+
+@pytest.fixture
+def celery_dispatches(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+    """Opt a test into crawl dispatch and expose the exact queued arguments."""
+    from app.tasks.crawl_task import run_crawl
+
+    queued: list[tuple] = []
+    monkeypatch.setattr(run_crawl, "delay", lambda *args, **kwargs: queued.append((*args, kwargs)))
+    return queued
 
 
 @pytest.fixture

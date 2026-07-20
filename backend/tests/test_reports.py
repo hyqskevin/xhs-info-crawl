@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token
 from app.models.activity import Activity
+from app.models.note import Note
 from app.services.report import format_activity_markdown, generate_markdown, generate_xlsx
 
 
@@ -19,6 +20,13 @@ def headers() -> dict[str, str]:
 
 def activity(index: int, city: str = "shanghai", kind: str = "演出", status: str = "APPROVED") -> Activity:
     return Activity(name=f"活动{index}", city_code=city, start_time=datetime(2025, 7, 20, 18, tzinfo=timezone.utc), end_time=datetime(2025, 7, 20, 22, tzinfo=timezone.utc), location="徐汇滨江", price="免费", type=kind, source_url=f"https://www.xiaohongshu.com/a/{index}", summary=f"活动{index}简介", status=status)
+
+
+def post(db: Session, index: int, *, published_at: datetime | None = None, review_status: str = "APPROVED") -> Note:
+    note = Note(task_id=1, platform_note_id=f"post-{index}", title=f"推文{index}", content="正文", source_url=f"https://www.xiaohongshu.com/explore/post-{index}", city_code="shanghai", status="PROCESSED", review_status=review_status, published_at=published_at or datetime(2025, 7, 20, 12, tzinfo=timezone.utc), raw_data={})
+    db.add(note); db.flush()
+    item = activity(index, status="RAW"); item.note_id = note.id; db.add(item)
+    return note
 
 
 def test_report_groups_by_city_and_type_and_excludes_non_approved() -> None:
@@ -54,22 +62,21 @@ def test_xlsx_contains_same_approved_activities() -> None:
 
 
 def test_generate_persists_and_regenerates_single_report(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
-    db_session.add(activity(1))
+    post(db_session, 1)
     db_session.commit()
     payload = {"week": "2025-W29", "cities": ["shanghai"]}
     first = client.post("/api/v1/reports/generate", json=payload, headers=headers)
     second = client.post("/api/v1/reports/generate", json=payload, headers=headers)
     assert first.status_code == 200 and second.status_code == 200
     assert first.json()["data"]["id"] == second.json()["data"]["id"]
+    assert second.json()["data"]["note_count"] == 1
     assert second.json()["data"]["activity_count"] == 1
 
 
 def test_generate_filters_approved_activities_to_selected_iso_week(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
-    included = activity(10)
-    outside_week = activity(11)
-    outside_week.start_time = datetime(2025, 7, 21, 10, tzinfo=timezone.utc)
-    pending = activity(12, status="RAW")
-    db_session.add_all([included, outside_week, pending])
+    post(db_session, 10)
+    post(db_session, 11, published_at=datetime(2025, 7, 21, 10, tzinfo=timezone.utc))
+    post(db_session, 12, review_status="PENDING")
     db_session.commit()
 
     response = client.post("/api/v1/reports/generate", json={"week": "2025-W29", "cities": ["shanghai"]}, headers=headers)
@@ -79,17 +86,17 @@ def test_generate_filters_approved_activities_to_selected_iso_week(client: TestC
     report_id = response.json()["data"]["id"]
     workbook = load_workbook(BytesIO(client.get(f"/api/v1/reports/{report_id}/download?format=xlsx", headers=headers).content), read_only=True)
     rows = list(workbook.active.iter_rows(values_only=True))
-    assert [row[0] for row in rows[1:]] == ["活动10"]
+    assert [row[0] for row in rows[1:]] == ["推文10"]
 
 
 def test_generate_rejects_week_without_approved_activities(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
-    db_session.add(activity(20, status="RAW"))
+    post(db_session, 20, review_status="PENDING")
     db_session.commit()
 
     response = client.post("/api/v1/reports/generate", json={"week": "2025-W29", "cities": ["shanghai"]}, headers=headers)
 
     assert response.status_code == 422
-    assert response.json()["message"] == "所选城市和周次没有已通过活动，请先在活动管理中审核通过"
+    assert response.json()["message"] == "所选城市和周次没有已审核推文，请先在活动管理中审核通过"
 
 
 def test_generate_rejects_invalid_iso_week(client: TestClient, headers: dict[str, str]) -> None:
@@ -105,7 +112,7 @@ def test_report_generation_requires_exactly_one_city(client: TestClient, headers
 
 
 def test_download_report_returns_markdown_and_excel(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
-    db_session.add(activity(1))
+    post(db_session, 1)
     db_session.commit()
     report_id = client.post("/api/v1/reports/generate", json={"week": "2025-W29", "cities": ["shanghai"]}, headers=headers).json()["data"]["id"]
     md = client.get(f"/api/v1/reports/{report_id}/download?format=md", headers=headers)

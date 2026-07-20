@@ -24,8 +24,8 @@ class Keyword(Base):
 class Blogger(Base):
     __tablename__ = "bloggers"
     id: Mapped[int] = mapped_column(primary_key=True)
-    platform_user_id: Mapped[str] = mapped_column(String(128), unique=True)
+    platform_user_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True, default=None)
     username: Mapped[str] = mapped_column(String(128))
-    profile_url: Mapped[str] = mapped_column(String(512))
-    city_code: Mapped[str] = mapped_column(String(32), index=True)
+    profile_url: Mapped[str | None] = mapped_column(String(512), nullable=True, default=None)
+    city_code: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default=None)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)

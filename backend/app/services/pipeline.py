@@ -3,6 +3,7 @@ from collections.abc import Callable, Iterable
 from typing import Any, TypeVar
 
 from app.services.crawler import AuthenticationRequired
+from app.services.note_identity import canonicalize_note_url, extract_platform_note_id
 
 T = TypeVar("T")
 
@@ -38,17 +39,21 @@ def deduplicate_results(rows: Iterable[tuple[str, dict[str, Any]]]) -> list[tupl
         url = str(item.get("url") or "")
         if not url:
             continue
-        if url in seen:
-            target = seen[url]
+        platform_note_id = extract_platform_note_id(url)
+        identity = f"{city}:{platform_note_id}" if platform_note_id else f"{city}:{canonicalize_note_url(url)}"
+        if identity in seen:
+            target = seen[identity]
             keywords = target.setdefault("_matched_keywords", [])
             for keyword in item.get("_matched_keywords", []):
                 if keyword not in keywords:
                     keywords.append(keyword)
+            # Keep the newest signed URL so detail retrieval uses the freshest token.
+            target["url"] = url
             continue
         copied = dict(item)
         if "_matched_keywords" in copied:
             copied["_matched_keywords"] = list(dict.fromkeys(copied["_matched_keywords"]))
-        seen[url] = copied
+        seen[identity] = copied
         unique.append((city, copied))
     return unique
 

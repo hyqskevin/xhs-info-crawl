@@ -397,6 +397,23 @@ def test_create_activity_manual(client, auth_headers, mock_db):
 
 ---
 
+## TC-ACT-011: 批量审核通过
+
+**优先级**: P0
+**类型**: 集成测试
+**被测接口**: `POST /api/v1/activities/batch/approve`
+
+### Given
+- 选中多条 `RAW` 或 `NEEDS_REVIEW` 活动。
+- 请求 ID 中可以包含重复值。
+
+### Then
+- 所有有效活动状态更新为 `APPROVED`。
+- 返回去重后的 `approved_ids` 和 `approved_count`。
+- 重复提交保持幂等；空列表返回 422。
+
+可执行代码：`backend/tests/test_activities_api.py::test_batch_approve_activities_is_idempotent`。
+
 ## 测试运行命令
 
 ```bash

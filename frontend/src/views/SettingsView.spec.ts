@@ -58,4 +58,66 @@ describe('SettingsView', () => {
     await flushPromises()
     expect(wrapper.find('.opencli-testing-icon').exists()).toBe(false)
   })
+
+  it('submits a blogger without platform_user_id and profile_url', async () => {
+    mocks.createSetting.mockResolvedValue({ data: { data: { id: 99, username: 'xhs_user', city_codes: ['nb'], enabled: true } } })
+    mocks.settings.mockImplementation((kind: string) => Promise.resolve({ data: { data: kind === 'cities'
+      ? [{ id: 1, name: '宁波', code: 'nb', keywords: [], recent_filter: '一周内', enabled: true }]
+      : [] } }))
+
+    const wrapper = mount(SettingsView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    // 切到博主 tab
+    await wrapper.findAll('input[type="radio"]').find((r) => r.attributes('value') === 'bloggers')!.trigger('click')
+    await wrapper.findAll('button').find((b) => b.text().includes('新增博主'))!.trigger('click')
+    await flushPromises()
+
+    // 输入博主名称，留空 xhs_id 和 profile_url
+    const inputs = document.body.querySelectorAll('input')
+    let usernameInput: HTMLInputElement | undefined
+    for (const input of Array.from(inputs)) {
+      const formItem = input.closest('.el-form-item')
+      if (formItem?.textContent?.includes('博主名称')) {
+        usernameInput = input as HTMLInputElement
+        break
+      }
+    }
+    usernameInput!.value = 'xhs_user'
+    usernameInput!.dispatchEvent(new Event('input', { bubbles: true }))
+
+    await wrapper.findAll('button').find((b) => b.text().trim() === '保存')!.trigger('click')
+    await flushPromises()
+
+    const call = mocks.createSetting.mock.calls.find((c) => c[0] === 'bloggers')!
+    const payload = call[1]
+    // platform_user_id 字段不存在或为空
+    expect(payload.platform_user_id === '' || payload.platform_user_id == null).toBe(true)
+    expect(payload.username).toBe('xhs_user')
+    expect(payload.city_codes).toEqual([])
+  })
+
+  it('renders blogger list with city tag from city_codes array', async () => {
+    mocks.settings.mockImplementation((kind: string) => Promise.resolve({ data: { data: kind === 'cities'
+      ? [
+          { id: 1, name: '宁波', code: 'nb', keywords: [], recent_filter: '一周内', enabled: true },
+          { id: 2, name: '上海', code: 'city-99f1e469', keywords: [], recent_filter: '一周内', enabled: true },
+        ]
+      : [
+          { id: 100, username: '博主A', profile_url: 'https://xhs/u/A', city_codes: ['nb', 'city-99f1e469'], enabled: true },
+          { id: 101, username: '博主B', profile_url: 'https://xhs/u/B', city_codes: [], enabled: true },
+        ] } }))
+
+    const wrapper = mount(SettingsView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    await wrapper.findAll('input[type="radio"]').find((r) => r.attributes('value') === 'bloggers')!.trigger('click')
+    await flushPromises()
+
+    const text = document.body.textContent || ''
+    expect(text).toContain('博主A')
+    expect(text).toContain('博主B')
+    // 博主 A 的两个城市标签都应出现
+    expect(text).toContain('宁波')
+    expect(text).toContain('上海')
+    expect(text).toContain('未关联')  // 博主 B 没绑城市
+  })
 })

@@ -28,6 +28,7 @@ def test_note_rejects_empty_url(tmp_path:Path,monkeypatch):
     assert called is False, 'run() should not be invoked when url is empty'
 
 def test_blogger_notes_rejects_empty_profile_url(tmp_path:Path,monkeypatch):
+    """博主 profile_url 为空时 blogger_notes 抛 OpenCLIError，不调子命令。"""
     from app.services.crawler import OpenCLIError
     adapter=OpenCLIAdapter(Settings(project_root=tmp_path))
     called=False
@@ -36,12 +37,67 @@ def test_blogger_notes_rejects_empty_profile_url(tmp_path:Path,monkeypatch):
     monkeypatch.setattr(adapter,'run',run)
     for bad in ['', None, '   ']:
         try:
-            adapter.blogger_notes(bad)
+            adapter.blogger_notes('博主', bad)
         except OpenCLIError as exc:
             assert 'profile_url 为空' in str(exc)
         else:
             raise AssertionError(f'expected OpenCLIError for profile_url={bad!r}')
     assert called is False
+
+
+def test_blogger_notes_rejects_invalid_profile_url(tmp_path:Path,monkeypatch):
+    """博主 profile_url 格式不正确无法提取 user-id 时抛 OpenCLIError。"""
+    from app.services.crawler import OpenCLIError
+    adapter=OpenCLIAdapter(Settings(project_root=tmp_path))
+    called=False
+    def run(args):
+        nonlocal called; called=True; return []
+    monkeypatch.setattr(adapter,'run',run)
+    try:
+        adapter.blogger_notes('博主', 'https://www.xiaohongshu.com/wrong/path/123')
+    except OpenCLIError as exc:
+        assert '无法从 profile_url 提取 user-id' in str(exc)
+    else:
+        raise AssertionError('expected OpenCLIError for invalid profile_url')
+    assert called is False
+
+
+def test_blogger_notes_returns_notes_with_xsec_token(tmp_path:Path,monkeypatch):
+    """blogger_notes 返回带 xsec_token 的笔记列表。"""
+    adapter=OpenCLIAdapter(Settings(project_root=tmp_path))
+    calls=[]
+    def run(args):
+        calls.append(args)
+        if args[:2]==['xiaohongshu','whoami']:
+            return {'logged_in':True}
+        if args[:2]==['xiaohongshu','user']:
+            return [
+                {
+                    'id': '69142d3e000000000302e5ec',
+                    'title': '宁波活动锦集',
+                    'url': 'https://www.xiaohongshu.com/user/profile/619ca5dc0000000010007e92/69142d3e000000000302e5ec?xsec_token=ABC&xsec_source=pc_user',
+                },
+                {
+                    'id': '68a7df12000000001d020ee2',
+                    'title': '宁波美食推荐',
+                    'url': 'https://www.xiaohongshu.com/user/profile/619ca5dc0000000010007e92/68a7df12000000001d020ee2?xsec_token=DEF&xsec_source=pc_user',
+                },
+            ]
+        return {'ok':True}
+    monkeypatch.setattr(adapter,'run',run)
+
+    notes = adapter.blogger_notes('从零发现宁波', 'https://www.xiaohongshu.com/user/profile/619ca5dc0000000010007e92')
+
+    assert len(notes) == 2
+    assert notes[0]['title'] == '宁波活动锦集'
+    assert notes[0]['author'] == '从零发现宁波'
+    assert 'xsec_token=ABC' in notes[0]['url']
+    assert notes[1]['title'] == '宁波美食推荐'
+    assert 'xsec_token=DEF' in notes[1]['url']
+
+    user_calls = [args for args in calls if args[:2]==['xiaohongshu','user']]
+    assert len(user_calls) == 1
+    assert user_calls[0][2] == '619ca5dc0000000010007e92'
 
 def test_download_rejects_empty_url(tmp_path:Path,monkeypatch):
     from app.services.crawler import OpenCLIError
@@ -58,18 +114,48 @@ def test_download_rejects_empty_url(tmp_path:Path,monkeypatch):
         raise AssertionError('expected OpenCLIError for empty url')
     assert called is False
 
-def test_run_translates_missing_url_error(tmp_path:Path,monkeypatch):
+def test_run_translates_missing_url_error(tmp_path: Path, monkeypatch):
     from app.services.crawler import OpenCLIError
-    adapter=OpenCLIAdapter(Settings(project_root=tmp_path))
-    fake_result = type('R', (), {'stdout': '', 'stderr': '✖  Missing url\n', 'returncode': 1})()
-    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: fake_result)
+
+    adapter = OpenCLIAdapter(Settings(project_root=tmp_path))
+    popen_calls: list[tuple[list[str], dict]] = []
+
+    class FakeProc:
+        pid = 12345
+        returncode = 1
+
+        def communicate(self, timeout=None):
+            return "", "✖  Missing url\n"
+
+        def kill(self):
+            return None
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append((command, kwargs))
+        return FakeProc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
     try:
-        adapter.run(['browser', adapter.session, 'open', '', '--window', 'background'])
+        adapter.run(["browser", adapter.session, "open", "", "--window", "background"])
     except OpenCLIError as exc:
-        msg = str(exc)
-        assert 'Missing url' in msg or '缺少 url' in msg
+        message = str(exc)
+        assert "Missing url" in message or "缺少 url" in message
     else:
-        raise AssertionError('expected OpenCLIError for missing url from opencli')
+        raise AssertionError("expected OpenCLIError for missing url from opencli")
+
+    assert len(popen_calls) == 1
+    command, kwargs = popen_calls[0]
+    assert command == [
+        "opencli",
+        "browser",
+        adapter.session,
+        "open",
+        "",
+        "--window",
+        "background",
+    ]
+    assert kwargs["text"] is True
 
 def test_download_checks_login_and_returns_new_images(tmp_path:Path,monkeypatch):
     adapter=OpenCLIAdapter(Settings(project_root=tmp_path)); calls=[]
@@ -153,4 +239,4 @@ def test_duplicate_candidates_tolerate_missing_start_times(db_session):
 
     assert len(candidates) == 1
     assert candidates[0].similarity == 0.75
-    assert candidates[0].matched_fields == 'city'
+    assert candidates[0].matched_fields == ['city']

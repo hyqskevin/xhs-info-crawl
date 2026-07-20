@@ -32,7 +32,7 @@ onMounted(load)
       <ElTableColumn label="进度" width="160"><template #default="scope"><ElProgress :percentage="progress(scope.row)" /></template></ElTableColumn>
       <ElTableColumn prop="created_at" label="创建时间" min-width="180" />
       <ElTableColumn prop="error_message" label="错误" min-width="220" show-overflow-tooltip />
-      <ElTableColumn label="操作" width="100"><template #default="scope"><ElButton text :icon="View" @click="show(scope.row.id)">日志</ElButton></template></ElTableColumn>
+      <ElTableColumn label="操作" min-width="120" class-name="action-column"><template #default="scope"><ElButton text :icon="View" @click="show(scope.row.id)">日志</ElButton></template></ElTableColumn>
     </ElTable>
   </ElCard>
   <ElDrawer v-model="drawer" title="任务日志"><ElTimeline><ElTimelineItem v-for="item in logs" :key="item.id" :timestamp="item.created_at">{{ item.level }} - {{ item.message }}</ElTimelineItem></ElTimeline></ElDrawer>

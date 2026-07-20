@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Connection, Delete, Edit, Loading, Plus } from '@element-plus/icons-vue'
+import { Connection, Delete, Edit, Loading, MagicStick, Plus } from '@element-plus/icons-vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
@@ -10,6 +10,7 @@ const cities = ref<any[]>([])
 const dialog = ref(false)
 const editingId = ref<number | null>(null)
 const testingOpenCLI = ref(false)
+const enrichingId = ref<number | null>(null)
 const form = reactive<any>({})
 const recentFilters = ['不限', '一天内', '一周内', '半年内']
 
@@ -22,7 +23,7 @@ async function load() {
 function resetForm() {
   Object.keys(form).forEach((key) => delete form[key])
   if (tab.value === 'cities') Object.assign(form, { name: '', keywords: [], recent_filter: '一周内', enabled: true })
-  else Object.assign(form, { platform_user_id: '', username: '', profile_url: '', city_code: '', enabled: true })
+  else Object.assign(form, { platform_user_id: '', username: '', profile_url: '', city_codes: [], enabled: true })
 }
 
 function open(row?: any) {
@@ -64,6 +65,20 @@ async function test() {
   }
 }
 
+async function enrich(row: any) {
+  enrichingId.value = row.id
+  try {
+    await api.enrichBlogger(row.id)
+    ElMessage.success(`已补充 ${row.username} 的主页与用户 ID`)
+    await load()
+  } catch (error: any) {
+    const reason = error.response?.data?.message || error.response?.data?.detail
+    ElMessage.error(reason || '补充博主信息失败')
+  } finally {
+    enrichingId.value = null
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -86,7 +101,7 @@ onMounted(load)
       </ElTableColumn>
       <ElTableColumn prop="recent_filter" label="抓取时间范围" width="150" />
       <ElTableColumn label="状态" width="100"><template #default="scope"><ElTag :type="scope.row.enabled ? 'success' : 'info'">{{ scope.row.enabled ? '已启用' : '已停用' }}</ElTag></template></ElTableColumn>
-      <ElTableColumn label="操作" width="180">
+      <ElTableColumn label="操作" min-width="200" class-name="action-column">
         <template #default="scope">
           <ElButton text type="primary" :icon="Edit" @click="open(scope.row)">编辑</ElButton>
           <ElButton text type="danger" :icon="Delete" @click="remove(scope.row)">删除</ElButton>
@@ -97,9 +112,18 @@ onMounted(load)
     <ElTable v-else :data="rows">
       <ElTableColumn prop="username" label="博主" />
       <ElTableColumn prop="profile_url" label="主页" min-width="280" show-overflow-tooltip />
-      <ElTableColumn label="城市"><template #default="scope">{{ cities.find((city) => city.code === scope.row.city_code)?.name || '未关联' }}</template></ElTableColumn>
+      <ElTableColumn label="城市" min-width="200"><template #default="scope">
+        <template v-if="(scope.row.city_codes || []).length">
+          <ElTag v-for="code in scope.row.city_codes" :key="code" class="keyword-tag">{{ cities.find((city) => city.code === code)?.name || code }}</ElTag>
+        </template>
+        <span v-else>未关联</span>
+      </template></ElTableColumn>
       <ElTableColumn label="状态" width="100"><template #default="scope"><ElTag :type="scope.row.enabled ? 'success' : 'info'">{{ scope.row.enabled ? '已启用' : '已停用' }}</ElTag></template></ElTableColumn>
-      <ElTableColumn label="操作" width="180"><template #default="scope"><ElButton text type="primary" :icon="Edit" @click="open(scope.row)">编辑</ElButton><ElButton text type="danger" :icon="Delete" @click="remove(scope.row)">删除</ElButton></template></ElTableColumn>
+      <ElTableColumn label="操作" min-width="280" class-name="action-column"><template #default="scope">
+        <ElButton v-if="!scope.row.profile_url" text type="warning" :icon="MagicStick" :loading="enrichingId === scope.row.id" @click="enrich(scope.row)">补充博主信息</ElButton>
+        <ElButton text type="primary" :icon="Edit" @click="open(scope.row)">编辑</ElButton>
+        <ElButton text type="danger" :icon="Delete" @click="remove(scope.row)">删除</ElButton>
+      </template></ElTableColumn>
     </ElTable>
   </ElCard>
 
@@ -112,10 +136,14 @@ onMounted(load)
         <ElFormItem label="启用"><ElSwitch v-model="form.enabled" /></ElFormItem>
       </template>
       <template v-else>
-        <ElFormItem label="小红书用户 ID"><ElInput v-model="form.platform_user_id" /></ElFormItem>
+        <ElFormItem label="小红书用户 ID"><ElInput v-model="form.platform_user_id" placeholder="可选；留空后续可补" /></ElFormItem>
         <ElFormItem label="博主名称"><ElInput v-model="form.username" /></ElFormItem>
-        <ElFormItem label="主页地址"><ElInput v-model="form.profile_url" /></ElFormItem>
-        <ElFormItem label="关联城市"><ElSelect v-model="form.city_code" style="width: 100%"><ElOption v-for="city in cities" :key="city.code" :label="city.name" :value="city.code" /></ElSelect></ElFormItem>
+        <ElFormItem label="主页地址"><ElInput v-model="form.profile_url" placeholder="可选；后续可补" /></ElFormItem>
+        <ElFormItem label="关联城市">
+          <ElSelect v-model="form.city_codes" multiple collapse-tags collapse-tags-tooltip placeholder="选择 1 个或多个城市" style="width: 100%">
+            <ElOption v-for="city in cities" :key="city.code" :label="city.name" :value="city.code" />
+          </ElSelect>
+        </ElFormItem>
         <ElFormItem label="启用"><ElSwitch v-model="form.enabled" /></ElFormItem>
       </template>
     </ElForm>

@@ -4,6 +4,7 @@ from io import BytesIO
 from openpyxl import Workbook
 
 from app.models.activity import Activity
+from app.models.note import Note, NoteImage
 
 
 CITY_NAMES = {"shanghai": "上海", "beijing": "北京"}
@@ -47,6 +48,54 @@ def generate_xlsx(activities: list[Activity]) -> bytes:
     sheet.append(["活动名称", "城市", "开始时间", "结束时间", "地点", "费用", "类型", "来源", "简介"])
     for item in approved(activities):
         sheet.append([item.name, CITY_NAMES.get(item.city_code, item.city_code), item.start_time.isoformat() if item.start_time else "", item.end_time.isoformat() if item.end_time else "", item.location, item.price, item.type, item.source_url, item.summary])
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+NoteReportEntry = tuple[Note, list[Activity], list[NoteImage]]
+
+
+def _activity_lines(activities: list[Activity]) -> str:
+    return "\n".join(
+        f"{item.name} | {item.start_time.isoformat() if item.start_time else '时间待确认'} | {item.location} | {item.price} | {item.summary}"
+        for item in activities
+    )
+
+
+def generate_note_markdown(week: str, cities: list[str], entries: list[NoteReportEntry]) -> str:
+    lines = [f"# 本周推文周报（{week}）", "", f"城市：{'、'.join(CITY_NAMES.get(city, city) for city in cities)}", ""]
+    for note, activities, images in entries:
+        published = note.published_at.isoformat() if note.published_at else f"{note.created_at.isoformat()}（发布时间待确认）"
+        links = [image.original_url or image.storage_key for image in images if image.original_url or image.storage_key]
+        ocr = "\n\n".join(image.ocr_text for image in images if image.ocr_text)
+        lines.extend([
+            f"## {note.title}", "",
+            f"- 发布时间：{published}",
+            f"- 原文链接：{note.source_url}",
+            f"- 图片链接：{'、'.join(links) if links else '无'}", "",
+            "### 推文正文", "", note.content or "无", "",
+            "### 图片 OCR", "", ocr or "无", "",
+            f"### 识别活动（{len(activities)}）", "",
+        ])
+        if activities:
+            for item in activities:
+                lines.extend([format_activity_markdown(item), ""])
+        else:
+            lines.extend(["未识别到活动", ""])
+    return "\n".join(lines)
+
+
+def generate_note_xlsx(entries: list[NoteReportEntry]) -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "本周推文"
+    sheet.append(["推文标题", "发布时间", "城市", "原文链接", "正文", "OCR", "图片链接", "活动数", "活动详情"])
+    for note, activities, images in entries:
+        published = note.published_at.isoformat() if note.published_at else f"{note.created_at.isoformat()}（待确认）"
+        links = "\n".join(image.original_url or image.storage_key for image in images if image.original_url or image.storage_key)
+        ocr = "\n".join(image.ocr_text for image in images if image.ocr_text)
+        sheet.append([note.title, published, CITY_NAMES.get(note.city_code, note.city_code), note.source_url, note.content, ocr, links, len(activities), _activity_lines(activities)])
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()

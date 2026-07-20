@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import ElementPlus, { ElMessageBox, ElSelect } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox, ElSelect } from 'element-plus'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import DashboardView from './DashboardView.vue'
@@ -8,7 +8,8 @@ vi.mock('@/api/health', () => ({ getHealth: vi.fn().mockResolvedValue({ status: 
 const mocks = vi.hoisted(() => ({
   settings: vi.fn().mockImplementation((kind: string) => Promise.resolve({ data: { data: kind === 'cities'
     ? [{ id: 1, name: '上海', code: 'shanghai', keywords: ['周末活动', '展览'], recent_filter: '一周内', enabled: true }]
-    : [{ id: 9, username: '活动博主', city_code: 'shanghai', enabled: true }] } })),
+    : [{ id: 9, username: '活动博主', profile_url: 'https://www.xiaohongshu.com/user/profile/abc', city_codes: ['shanghai'], enabled: true },
+       { id: 10, username: '未补充博主', profile_url: '', city_codes: ['shanghai'], enabled: true }] } })),
   createTask: vi.fn().mockResolvedValue({ data: { data: { id: 3 } } }),
   dashboard: vi.fn().mockResolvedValue({ data: { data: { last_task: { id: 4, status: 'FAILED', total_notes: 113, downloaded_notes: 5, ocr_notes: 5, extracted_notes: 5, success_notes: 5, failed_notes: 1, current_stage: null, current_note: null, error_message: 'bad date', progress_percent: 5.3 } } } }),
   restartTask: vi.fn().mockResolvedValue({ data: { data: { id: 4, status: 'PENDING' } } }),
@@ -41,6 +42,25 @@ describe('DashboardView', () => {
     expect(mocks.createTask).toHaveBeenCalledWith({ type: 'mixed', city: 'shanghai', keywords: ['周末活动'], recent_filter: '一天内', blogger_ids: [9] })
   })
 
+  it('blocks task submission when selected blogger has no profile_url', async () => {
+    const warningSpy = vi.spyOn(ElMessage, 'warning').mockImplementation(() => {})
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const selects = wrapper.findAllComponents(ElSelect)
+    selects[0].vm.$emit('update:modelValue', 'shanghai')
+    await flushPromises()
+    selects[3].vm.$emit('update:modelValue', [10])  // id=10 是未补充的博主
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text().includes('开始抓取'))!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.createTask).not.toHaveBeenCalled()
+    expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining('博主信息不完整'))
+    warningSpy.mockRestore()
+  })
+
   it('shows latest crawl progress and restarts a failed task', async () => {
     const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
     await flushPromises()
@@ -51,6 +71,20 @@ describe('DashboardView', () => {
     await restart.trigger('click')
     await flushPromises()
     expect(mocks.restartTask).toHaveBeenCalledWith(4)
+  })
+
+  it('exposes an explicit "结束抓取" button for FAILED tasks', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    mocks.dashboard.mockResolvedValueOnce({ data: { data: { last_task: { id: 7, status: 'FAILED', total_notes: 0, downloaded_notes: 0, ocr_notes: 0, extracted_notes: 0, success_notes: 0, failed_notes: 0, current_stage: 'SEARCHING', current_note: null, error_message: 'Missing url', progress_percent: 0 } } } })
+    mocks.stopTask.mockResolvedValueOnce({ data: { data: { id: 7, status: 'STOPPED' } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const finishButton = wrapper.findAll('button').find((button) => button.text().includes('结束抓取'))
+    expect(finishButton, 'FAILED 任务必须显示"结束抓取"按钮').toBeTruthy()
+    await finishButton!.trigger('click')
+    await flushPromises()
+    expect(mocks.stopTask).toHaveBeenCalledWith(7)
   })
 
   it('shows skipped progress and safely stops a running task', async () => {

@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import ReportsView from './ReportsView.vue'
 
 const { reports, generateReport, settings, downloadReport } = vi.hoisted(() => ({
-  reports: vi.fn().mockResolvedValue({ data: { data: [{ id: 3, week: '2026-W29', cities: ['nb'], activity_count: 2, status: 'GENERATED' }] } }),
+  reports: vi.fn().mockResolvedValue({ data: { data: [{ id: 3, week: '2026-W29', cities: ['nb'], note_count: 1, activity_count: 2, status: 'GENERATED' }] } }),
   generateReport: vi.fn().mockResolvedValue({ data: { data: { id: 4 } } }),
   settings: vi.fn().mockResolvedValue({ data: { data: [{ id: 1, name: '宁波', code: 'nb', enabled: true }] } }),
   downloadReport: vi.fn().mockResolvedValue({ data: new Blob(['report']), headers: {} }),
@@ -20,6 +20,7 @@ describe('ReportsView', () => {
     expect(wrapper.text()).toContain('宁波')
     expect(wrapper.text()).toContain('Markdown')
     expect(wrapper.text()).toContain('Excel')
+    expect(wrapper.text()).toContain('推文数')
     wrapper.getComponent(ElDatePicker).vm.$emit('update:modelValue', new Date('2026-07-13T00:00:00'))
     wrapper.getComponent(ElSelect).vm.$emit('update:modelValue', 'nb')
     await wrapper.findAll('button').find((button) => button.text().includes('生成周报'))!.trigger('click')

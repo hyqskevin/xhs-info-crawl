@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import require_admin
+from app.models.blogger_city import BloggerCity
 from app.models.config import Blogger, City, Keyword
 from app.services.opencli_adapter import OpenCLIAdapter
 from app.services.browser_launcher import BrowserLaunchError, open_xhs_login
@@ -33,10 +34,10 @@ class KeywordIn(BaseModel):
 
 
 class BloggerIn(BaseModel):
-    platform_user_id: str
+    platform_user_id: str | None = None
     username: str
-    profile_url: str
-    city_code: str
+    profile_url: str | None = None
+    city_codes: list[str] = Field(default_factory=list)
     enabled: bool = True
 
 
@@ -139,8 +140,31 @@ def open_login(_: Admin):
         raise HTTPException(503, str(exc)) from exc
 
 
+def _sync_blogger_cities(db: Session, blogger_id: int, city_codes: list[str]) -> None:
+    """全量替换某博主的城市绑定。"""
+    db.execute(delete(BloggerCity).where(BloggerCity.blogger_id == blogger_id))
+    for code in city_codes:
+        if code:
+            db.add(BloggerCity(blogger_id=blogger_id, city_code=code, enabled=True))
+
+
+def _dump_blogger_with_cities(blogger: Blogger, db: Session) -> dict:
+    data = dump(blogger)
+    data["city_codes"] = list(
+        db.scalars(
+            select(BloggerCity.city_code)
+            .where(BloggerCity.blogger_id == blogger.id)
+            .order_by(BloggerCity.id)
+        ).all()
+    )
+    return data
+
+
 @router.get("/{kind}")
 def list_settings(kind: Literal["keywords", "bloggers"], _: Admin, db: DB):
+    if kind == "bloggers":
+        rows = db.scalars(select(Blogger).order_by(Blogger.id)).all()
+        return {"code": 200, "message": "success", "data": [_dump_blogger_with_cities(b, db) for b in rows]}
     rows = db.scalars(select(MODELS[kind]).order_by(MODELS[kind].id)).all()
     return {"code": 200, "message": "success", "data": [dump(row) for row in rows]}
 
@@ -148,10 +172,21 @@ def list_settings(kind: Literal["keywords", "bloggers"], _: Admin, db: DB):
 @router.post("/{kind}", status_code=status.HTTP_201_CREATED)
 def create_setting(kind: Literal["keywords", "bloggers"], payload: dict, _: Admin, db: DB):
     data = SCHEMAS[kind].model_validate(payload)
-    item = MODELS[kind](**data.model_dump())
+    fields = data.model_dump()
+    if kind == "bloggers":
+        city_codes = fields.pop("city_codes", [])
+        fields.pop("city_code", None)  # 兼容旧字段（如有）
+        item = Blogger(**fields)
+    else:
+        item = MODELS[kind](**fields)
     db.add(item)
+    db.flush()
+    if kind == "bloggers":
+        _sync_blogger_cities(db, item.id, city_codes)
     db.commit()
     db.refresh(item)
+    if kind == "bloggers":
+        return {"code": 201, "message": "success", "data": _dump_blogger_with_cities(item, db)}
     return {"code": 201, "message": "success", "data": dump(item)}
 
 
@@ -161,11 +196,57 @@ def update_setting(kind: Literal["keywords", "bloggers"], item_id: int, payload:
     if item is None:
         raise HTTPException(404, "配置不存在")
     data = SCHEMAS[kind].model_validate(payload)
-    for key, value in data.model_dump().items():
-        setattr(item, key, value)
+    fields = data.model_dump()
+    if kind == "bloggers":
+        city_codes = fields.pop("city_codes", None)
+        fields.pop("city_code", None)
+        for key, value in fields.items():
+            setattr(item, key, value)
+        if city_codes is not None:
+            _sync_blogger_cities(db, item.id, city_codes)
+    else:
+        for key, value in fields.items():
+            setattr(item, key, value)
     db.commit()
     db.refresh(item)
+    if kind == "bloggers":
+        return {"code": 200, "message": "success", "data": _dump_blogger_with_cities(item, db)}
     return {"code": 200, "message": "success", "data": dump(item)}
+
+
+@router.post("/bloggers/{item_id}/enrich")
+def enrich_blogger(item_id: int, _: Admin, db: DB):
+    """按博主用户名调用 opencli search，回填 platform_user_id 与 profile_url。
+
+    仅当 profile_url 为空时才需要补充；已配置完整的返回 200 + 不变数据。
+    """
+    from app.services.blogger_enricher import enrich_bloggers
+    from app.services.opencli_adapter import OpenCLIAdapter
+
+    item = db.get(Blogger, item_id)
+    if item is None:
+        raise HTTPException(404, "博主不存在")
+    if (item.profile_url or "").strip():
+        return {"code": 200, "message": "博主信息已完整，无需补充", "data": _dump_blogger_with_cities(item, db)}
+
+    def runner(args: list[str]) -> list[dict]:
+        adapter = OpenCLIAdapter(get_settings())
+        result = adapter.run(args)
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict) and "items" in result:
+            return list(result["items"])
+        return []
+
+    try:
+        filled = enrich_bloggers(db, [item], search_runner=runner, limit=5)
+    except Exception as exc:
+        raise HTTPException(503, f"补充失败：{exc}") from exc
+
+    db.refresh(item)
+    if not filled:
+        raise HTTPException(422, f"未找到匹配 '{item.username}' 的博主主页")
+    return {"code": 200, "message": "success", "data": _dump_blogger_with_cities(item, db)}
 
 
 @router.delete("/{kind}/{item_id}")

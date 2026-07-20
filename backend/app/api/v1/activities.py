@@ -28,8 +28,11 @@ def serialize(activity: Activity) -> dict[str, object]:
     return ActivityRead.model_validate(activity).model_dump(mode="json")
 
 
-def find_activity(db: Session, activity_id: int) -> Activity:
-    activity = db.scalar(select(Activity).where(Activity.id == activity_id, Activity.status.notin_(["DELETED", "MERGED"])))
+def find_activity(db: Session, activity_id: int, include_deleted: bool = False) -> Activity:
+    query = select(Activity).where(Activity.id == activity_id)
+    if not include_deleted:
+        query = query.where(Activity.status.notin_(["DELETED", "MERGED"]))
+    activity = db.scalar(query)
     if activity is None:
         raise HTTPException(status_code=404, detail="活动不存在")
     return activity
@@ -94,8 +97,8 @@ def batch_approve_activities(payload: BatchDeleteRequest, _: auth, db: database)
 
 
 @router.get("/{activity_id}")
-def get_activity(activity_id: int, _: auth, db: database):
-    activity = find_activity(db, activity_id)
+def get_activity(activity_id: int, include_deleted: bool = False, _: auth = None, db: database = None):
+    activity = find_activity(db, activity_id, include_deleted=include_deleted)
     data = serialize(activity)
     note = db.get(Note, activity.note_id) if activity.note_id else None
     images = list(db.scalars(select(NoteImage).where(NoteImage.note_id == note.id).order_by(NoteImage.id)).all()) if note else []

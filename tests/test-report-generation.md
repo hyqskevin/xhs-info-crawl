@@ -383,6 +383,38 @@ def test_regenerate_existing_report(mock_db):
     assert report is not None
 ```
 
+## TC-REPORT-010: 按 ISO 周次和单城市筛选
+
+**优先级**: P0
+**类型**: 集成测试
+**被测接口**: `POST /api/v1/reports/generate`
+
+### Given
+- 选择 `2025-W29` 和单个城市。
+- 数据库同时存在 W29、W30 和非 `APPROVED` 活动。
+
+### Then
+- 只统计 W29 周一零点至 W30 周一零点前的 `APPROVED` 活动。
+- Markdown 与 Excel 包含同一批记录。
+- `2025-W99` 等非法 ISO 周次返回 422。
+
+可执行代码：`backend/tests/test_reports.py::test_generate_filters_approved_activities_to_selected_iso_week` 和 `test_generate_rejects_invalid_iso_week`。
+
+## TC-REPORT-011: 没有已通过活动时拒绝生成
+
+**优先级**: P0
+**类型**: 集成测试
+
+### Given
+- 所选城市和周次只有 `RAW` 或 `NEEDS_REVIEW` 活动。
+
+### Then
+- 返回 HTTP 422。
+- `message` 为“所选城市和周次没有已通过活动，请先在活动管理中审核通过”。
+- 不新增或覆盖为空周报。
+
+可执行代码：`backend/tests/test_reports.py::test_generate_rejects_week_without_approved_activities`。
+
 ---
 
 ## 测试运行命令

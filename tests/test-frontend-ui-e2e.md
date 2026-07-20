@@ -129,6 +129,16 @@
 - 组件测试：`frontend/src/views/ActivitiesView.spec.ts`。
 - 浏览器功能测试：`frontend/e2e/business.spec.ts`。
 
+### TC-UI-018：批量审核通过并生成周报
+
+- 未勾选活动时“批量通过”不可用。
+- 勾选当前页多条活动后确认，通过请求体提交全部活动 ID。
+- 成功后显示通过数量、清空选择并刷新列表。
+- 在周报管理选择相同城市和活动所在周次后，生成结果活动数大于 0。
+- 所选周次没有已通过活动时，Toast 直接展示后端原因，不生成空周报。
+- 组件测试：`frontend/src/views/ActivitiesView.spec.ts`、`frontend/src/views/ReportsView.spec.ts`。
+- 浏览器功能测试：`frontend/e2e/business.spec.ts`。
+
 可执行代码：
 
 - `frontend/e2e/business.spec.ts`：各业务编号主路径。

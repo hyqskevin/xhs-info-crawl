@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -8,41 +9,77 @@ from app.core.config import Settings
 from app.services.crawler import AuthenticationRequired, OpenCLITimeout, OpenCLIError
 
 class OpenCLIAdapter:
-    def __init__(self,settings:Settings,session:str='xhs-crawler') -> None: self.settings=settings; self.session=session
+    def __init__(self,settings:Settings,session:str='xhs-crawler') -> None:
+        self.settings=settings
+        self.session=session
+        self._current_task_id: int | None = None
+        self._current_run_token: str | None = None
+
+    def bind_task(self, task_id: int, run_token: str | None = None) -> None:
+        """绑定当前抓取任务 ID；所有后续 run() 调用都会注册到 task_registry。
+
+        用法：
+            adapter.bind_task(task.id)
+            ... # 所有 run() 调用都会带 task_id
+        """
+        self._current_task_id = task_id
+        self._current_run_token = run_token
     def _command_timeout(self) -> int:
-        # Python 层超时 = opencli 内部超时 + 60 秒缓冲，避免被自身 subprocess 抢先 kill
+        # Python 层超时 = opencli 内部超时 + 30 秒缓冲，缩短超时让 worker 能及时响应停止信号
         try:
-            inner = int(os.environ.get('OPENCLI_BROWSER_COMMAND_TIMEOUT', '60'))
+            inner = int(os.environ.get('OPENCLI_BROWSER_COMMAND_TIMEOUT', '30'))
         except (TypeError, ValueError):
-            inner = 60
-        return max(inner + 60, 120)
-    def run(self,args:list[str]) -> Any:
+            inner = 30
+        return max(inner + 30, 60)
+    def run(self,args:list[str], *, task_id: int | None = None, run_token: str | None = None) -> Any:
+        """执行 opencli 子进程命令。
+
+        Args:
+            args: opencli 子命令及参数
+            task_id: 当前抓取任务 ID；如果传了，会把子进程 PID 注册到 task_registry，
+                让用户点"停止抓取"时能立即 SIGTERM 当前 note。
+                如果没传，使用 adapter._current_task_id（由 bind_task 设置）。
+        """
+        effective_task_id = task_id if task_id is not None else self._current_task_id
+        effective_run_token = run_token if run_token is not None else self._current_run_token
+        timeout = self._command_timeout()
+        proc = subprocess.Popen(
+            ['opencli', *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if effective_task_id is not None:
+            from app.services.task_registry import register, unregister
+            register(effective_task_id, proc.pid, run_token=effective_run_token)
         try:
-            result = subprocess.run(
-                ['opencli', *args],
-                capture_output=True,
-                text=True,
-                timeout=self._command_timeout(),
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise OpenCLITimeout(f'opencli 命令执行超过 {self._command_timeout()}s 被强制终止: {args}')
-        output = result.stdout.strip()
-        if result.returncode == 77:
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+                raise OpenCLITimeout(f'opencli 命令执行超过 {timeout}s 被强制终止: {args}')
+        finally:
+            if effective_task_id is not None:
+                from app.services.task_registry import unregister
+                unregister(effective_task_id, run_token=effective_run_token)
+        output = (stdout or "").strip()
+        if proc.returncode == 77:
             raise AuthenticationRequired('请在 Chrome 登录小红书后重试')
-        if result.returncode == 75:
+        if proc.returncode == 75:
             # opencli 内部命令超时；提示用户调大 OPENCLI_BROWSER_COMMAND_TIMEOUT
-            stderr = result.stderr.strip() or output
+            stderr_str = (stderr or "").strip() or output
             raise OpenCLITimeout(
-                f'opencli 内部命令超时（exit 75）：{stderr}；可调大 .env 中的 OPENCLI_BROWSER_COMMAND_TIMEOUT'
+                f'opencli 内部命令超时（exit 75）：{stderr_str}；可调大 .env 中的 OPENCLI_BROWSER_COMMAND_TIMEOUT'
             )
-        if result.returncode:
-            stderr = result.stderr.strip() or output
+        if proc.returncode:
+            stderr_str = (stderr or "").strip() or output
             # opencli 在 url/参数为空时返回 "✖ Missing url"
-            if 'Missing url' in stderr:
+            if 'Missing url' in stderr_str:
                 raise OpenCLIError(
                     f'opencli 缺少 url 参数：{args}；请检查笔记/博主链接是否为空'
                 )
-            raise OpenCLIError(stderr)
+            raise OpenCLIError(stderr_str)
         try:
             return json.loads(output)
         except json.JSONDecodeError:
@@ -97,19 +134,35 @@ class OpenCLIAdapter:
             self.run(['browser',self.session,'wait','time','1'])
         self.run(['browser',self.session,'close'])
         return self.normalize_note(self.run(['xiaohongshu','note',url,'-f','json','--window','background']))
-    def blogger_notes(self,profile_url:str)->list[dict[str,Any]]:
+    def blogger_notes(self, username: str, profile_url: str = "") -> list[dict[str,Any]]:
+        """博主笔记抓取：通过 user 命令拿带 xsec_token 的完整 URL。
+
+        Args:
+            username: 博主的用户名（返回结果中使用）
+            profile_url: 博主主页 URL，从中提取 user-id（必填）
+
+        Returns:
+            list of {"title": str, "url": str, "author": str}，url 必须带 xsec_token
+        """
         if not profile_url or not profile_url.strip():
-            raise OpenCLIError(f'blogger_notes: 博主 profile_url 为空，跳过该博主')
-        self.check_login(); self.run(['browser',self.session,'open',profile_url,'--window','background']); self.run(['browser',self.session,'wait','time','2'])
-        script=r"""(() => Array.from(document.querySelectorAll('a[href*="/explore/"]')).map(a => ({title:(a.textContent||'博主笔记').trim(),url:new URL(a.getAttribute('href'),location.origin).href})).filter((x,i,all)=>all.findIndex(y=>y.url===x.url)===i))()"""
-        items=[]; previous=0; stagnant=0
-        for _ in range(self.settings.xhs_search_scroll_max_rounds+1):
-            items=self.run(['browser',self.session,'eval',script]) or []
-            if len(items)>=self.settings.xhs_search_target_count: break
-            stagnant=stagnant+1 if len(items)<=previous else 0
-            if stagnant>=self.settings.xhs_scroll_stagnant_rounds: break
-            previous=len(items); self.run(['browser',self.session,'scroll','down','--amount',str(self.settings.xhs_scroll_pixels)]); self.run(['browser',self.session,'wait','time','1'])
-        self.run(['browser',self.session,'close']); return items[:self.settings.xhs_search_target_count]
+            raise OpenCLIError(f'blogger_notes: profile_url 为空，跳过该博主')
+        match = re.search(r'/user/profile/([^/?]+)', profile_url)
+        if not match:
+            raise OpenCLIError(f'blogger_notes: 无法从 profile_url 提取 user-id: {profile_url}')
+        user_id = match.group(1)
+        self.check_login()
+        results = self.run(['xiaohongshu', 'user', user_id, '-f', 'json', '--window', 'background']) or []
+        notes: list[dict[str, Any]] = []
+        for item in results:
+            url = (item.get('url') or '').strip()
+            if not url or 'xsec_token' not in url:
+                continue
+            notes.append({
+                'title': (item.get('title') or '博主笔记').strip(),
+                'url': url,
+                'author': username.strip() if username else '',
+            })
+        return notes[:self.settings.xhs_search_target_count]
     def download(self,url:str,output_dir:Path)->list[Path]:
         if not url or not url.strip():
             raise OpenCLIError(f'download: 笔记 url 为空，无法下载图片')

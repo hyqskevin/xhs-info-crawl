@@ -84,9 +84,10 @@ onMounted(load)
     <ElTable :data="rows">
       <ElTableColumn prop="week" label="周次" />
       <ElTableColumn label="城市"><template #default="scope">{{ (scope.row.cities || []).map((code: string) => cityNames[code] || code).join('、') }}</template></ElTableColumn>
+      <ElTableColumn prop="note_count" label="推文数" />
       <ElTableColumn prop="activity_count" label="活动数" />
       <ElTableColumn prop="status" label="状态" />
-      <ElTableColumn label="操作" min-width="280"><template #default="scope"><ElButton text :icon="View" @click="show(scope.row.id)">预览</ElButton><ElButton text :icon="Download" @click="download(scope.row,'md')">Markdown</ElButton><ElButton text :icon="Download" @click="download(scope.row,'xlsx')">Excel</ElButton></template></ElTableColumn>
+      <ElTableColumn label="操作" min-width="300" class-name="action-column"><template #default="scope"><ElButton text :icon="View" @click="show(scope.row.id)">预览</ElButton><ElButton text :icon="Download" @click="download(scope.row,'md')">Markdown</ElButton><ElButton text :icon="Download" @click="download(scope.row,'xlsx')">Excel</ElButton></template></ElTableColumn>
     </ElTable>
   </ElCard>
   <ElDialog v-model="dialog" title="周报预览" width="760"><div class="report-preview">{{ preview }}</div></ElDialog>

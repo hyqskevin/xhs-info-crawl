@@ -1,9 +1,10 @@
 from difflib import SequenceMatcher
 from typing import Any, Literal
-from sqlalchemy import select
+from sqlalchemy import select, true
 from sqlalchemy.orm import Session
 from app.models.activity import Activity
-from app.models.duplicate import DuplicateCandidate
+from app.models.duplicate import DuplicateCandidate, NoteDuplicateCandidate
+from app.models.note import Note
 
 
 def similarity_score(left: dict[str, Any], right: dict[str, Any]) -> float:
@@ -36,7 +37,8 @@ def merge_activities(left: dict[str, Any], right: dict[str, Any], keep: Literal[
 def create_duplicate_candidates(db: Session, activity: Activity) -> list[DuplicateCandidate]:
     """Create review candidates for same-city activities; exact/high matches are surfaced, not silently deleted."""
     created=[]
-    rows=db.scalars(select(Activity).where(Activity.id != activity.id,Activity.city_code == activity.city_code,Activity.status.notin_(['DELETED','MERGED']))).all()
+    different_note = Activity.note_id != activity.note_id if activity.note_id is not None else true()
+    rows=db.scalars(select(Activity).where(Activity.id != activity.id,different_note,Activity.city_code == activity.city_code,Activity.status.notin_(['DELETED','MERGED']))).all()
     left={c.name:getattr(activity,c.name) for c in activity.__table__.columns}
     for other in rows:
         right={c.name:getattr(other,c.name) for c in other.__table__.columns}; score=similarity_score(left,right)
@@ -47,6 +49,25 @@ def create_duplicate_candidates(db: Session, activity: Activity) -> list[Duplica
         matched=[]
         if activity.city_code==other.city_code: matched.append('city')
         if activity.start_time and other.start_time and activity.start_time.date()==other.start_time.date(): matched.append('date')
-        candidate=DuplicateCandidate(activity_a_id=a,activity_b_id=b,similarity=score,matched_fields=','.join(matched),status='pending')
+        candidate=DuplicateCandidate(activity_a_id=a,activity_b_id=b,similarity=score,matched_fields=matched,status='pending')
+        db.add(candidate); created.append(candidate)
+    return created
+
+
+def create_note_duplicate_candidates(db: Session, note: Note) -> list[NoteDuplicateCandidate]:
+    created = []
+    others = db.scalars(select(Note).where(Note.id != note.id, Note.city_code == note.city_code, Note.review_status.notin_(["DELETED", "MERGED"]))).all()
+    for other in others:
+        title_score = SequenceMatcher(None, note.title or "", other.title or "").ratio()
+        content_score = SequenceMatcher(None, note.content or "", other.content or "").ratio()
+        score = round(title_score * 0.65 + content_score * 0.35, 4)
+        if score < 0.55:
+            continue
+        a, b = sorted((note.id, other.id))
+        exists = db.scalar(select(NoteDuplicateCandidate).where(NoteDuplicateCandidate.note_a_id == a, NoteDuplicateCandidate.note_b_id == b))
+        if exists:
+            continue
+        matched = [field for field, value in (("title", title_score), ("content", content_score)) if value >= 0.6]
+        candidate = NoteDuplicateCandidate(note_a_id=a, note_b_id=b, similarity=score, matched_fields=matched, status="pending")
         db.add(candidate); created.append(candidate)
     return created

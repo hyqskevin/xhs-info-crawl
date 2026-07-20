@@ -8,8 +8,8 @@ const rows = ref<any[]>([])
 async function load() {
   const items = (await api.duplicates()).data.data.items
   rows.value = await Promise.all(items.map(async (row: any) => {
-    const [left, right] = await Promise.all([api.activity(row.activity_a_id), api.activity(row.activity_b_id)])
-    return { ...row, activity_a: left.data.data, activity_b: right.data.data }
+    const [left, right] = await Promise.all([api.note(row.note_a_id), api.note(row.note_b_id)])
+    return { ...row, note_a: left.data.data, note_b: right.data.data }
   }))
 }
 
@@ -31,16 +31,27 @@ onMounted(load)
 <template>
   <ElCard shadow="never">
     <ElTable :data="rows">
-      <ElTableColumn label="活动 A" min-width="220">
-        <template #default="scope"><strong>{{ scope.row.activity_a?.name }}</strong><div>{{ scope.row.activity_a?.start_time }}</div><div>{{ scope.row.activity_a?.location }}</div></template>
+      <ElTableColumn label="推文 A" min-width="220">
+        <template #default="scope"><strong>{{ scope.row.note_a?.title }}</strong><div>{{ scope.row.note_a?.published_at || '发布时间待确认' }}</div><div>识别活动 {{ scope.row.note_a?.activity_count || 0 }} 条</div></template>
       </ElTableColumn>
-      <ElTableColumn label="活动 B" min-width="220">
-        <template #default="scope"><strong>{{ scope.row.activity_b?.name }}</strong><div>{{ scope.row.activity_b?.start_time }}</div><div>{{ scope.row.activity_b?.location }}</div></template>
+      <ElTableColumn label="推文 B" min-width="220">
+        <template #default="scope"><strong>{{ scope.row.note_b?.title }}</strong><div>{{ scope.row.note_b?.published_at || '发布时间待确认' }}</div><div>识别活动 {{ scope.row.note_b?.activity_count || 0 }} 条</div></template>
       </ElTableColumn>
       <ElTableColumn prop="similarity" label="相似度"><template #default="scope"><ElProgress :percentage="Math.round(scope.row.similarity * 100)" /></template></ElTableColumn>
       <ElTableColumn prop="matched_fields" label="匹配字段" />
-      <ElTableColumn label="操作" width="260">
-        <template #default="scope"><ElButton size="small" type="primary" @click="merge(scope.row.id, 'a')">保留 A</ElButton><ElButton size="small" @click="merge(scope.row.id, 'b')">保留 B</ElButton><ElButton size="small" type="warning" @click="ignore(scope.row.id)">不是重复</ElButton></template>
+      <ElTableColumn label="操作" min-width="320" class-name="action-column">
+        <template #default="scope">
+          <ElButton size="small" type="primary" @click="merge(scope.row.id, 'a')">保留 A</ElButton>
+          <ElButton size="small" @click="merge(scope.row.id, 'b')">保留 B</ElButton>
+          <ElDropdown>
+            <ElButton size="small">更多 ▾</ElButton>
+            <template #dropdown>
+              <ElDropdownMenu>
+                <ElDropdownItem @click="ignore(scope.row.id)">不是重复</ElDropdownItem>
+              </ElDropdownMenu>
+            </template>
+          </ElDropdown>
+        </template>
       </ElTableColumn>
     </ElTable>
     <ElEmpty v-if="!rows.length" description="暂无去重候选" />

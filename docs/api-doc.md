@@ -77,7 +77,7 @@
 
 - 描述：活动列表（分页、筛选）
 - Query：
-  - `city`：城市代码
+  - `city`：城市 `code`（如 `city-99f1e469`、`nb`），必须从 `GET /api/v1/settings/cities` 取得，前端按 `City.code` 传参；不允许中文字面量
   - `type`：活动类型
   - `start_date` / `end_date`：举办时间范围
   - `status`：活动状态
@@ -123,6 +123,12 @@
 - 描述：读取该活动来源笔记的本地归档图片
 - 鉴权：必须携带 Bearer Token；图片必须属于活动关联笔记，且文件路径必须位于 `DATA_DIR` 内
 - 响应：图片二进制；不存在、归属不符或路径越界返回 `404`
+
+### POST /api/v1/activities/batch/approve
+
+- 描述：批量将活动标记为已通过，可重复提交。
+- 请求：`{"ids": [1, 2, 3]}`，最多 100 条。
+- 响应：`approved_ids`、`approved_count`；空数组返回 `422`。
 
 ### PUT /api/v1/activities/:id
 
@@ -210,6 +216,11 @@
 - 入口：仪表盘。
 - 城市必须是配置中心已启用城市；关键词和博主必须属于该城市。
 - 时间范围仅允许：不限、一天内、一周内、半年内。
+- `keywords` / `blogger_ids` 字段说明：
+  - 字段省略或 `null` → 用城市 enabled 配置（默认行为）
+  - 字段是 `[]` 空数组 → 用户主动禁用该项（不与默认合并）
+  - 字段是非空列表 → 覆盖默认
+- 入口校验：effective 抓取范围（关键词 ∪ 博主）不能同时为空，否则返回 422 `请至少启用一个关键词或博主`。
 
 ### GET /api/v1/tasks/:id/logs
 
@@ -299,6 +310,8 @@
 ```
 
 - 限制：阶段一只允许选择一个已启用城市，`cities` 数组长度必须为 1；周次由前端周选择器转换为 ISO week。
+- 筛选：只导出所选城市、所选 ISO 周内的 `APPROVED` 活动。
+- 空结果：没有已通过活动时返回 `422`，提示先在活动管理中审核通过，不生成空周报。
 
 ### GET /api/v1/reports/:id
 
@@ -308,3 +321,13 @@
 
 - 描述：下载报告文件
 - Query：`format`（`md` / `xlsx`）
+# 2026-07-20 推文主资源补充
+
+- `GET /api/v1/notes`：按城市、推文发布时间、审核状态分页查询，一行一篇推文。
+- `GET /api/v1/notes/{id}`：返回推文正文、原文链接、图片 OCR 和全部有效子活动。
+- `GET /api/v1/notes/{id}/images/{image_id}`：读取推文来源图片。
+- `POST /api/v1/notes/batch/approve`：推文级批量审核。
+- `DELETE /api/v1/notes/batch`：推文级批量软删除。
+- `/api/v1/duplicates` 已改为推文 A/B 候选，保留一方会将另一方标记为 `MERGED`。
+- 创建与重启抓取任务后，响应中的 `run_token` 会随 Celery 消息传递，用于拒绝陈旧执行。
+- 周报按推文发布时间和单城市生成，响应同时返回 `note_count` 与 `activity_count`。

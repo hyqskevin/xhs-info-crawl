@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from uuid import uuid4
 from typing import Annotated, Literal
 from fastapi import APIRouter,Depends,HTTPException,Query,status
 from pydantic import BaseModel
@@ -7,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import require_admin
 from app.models.task import CrawlTask,TaskLog
+from app.models.blogger_city import BloggerCity
 from app.models.config import Blogger, City, Keyword
 from app.core.config import get_settings
 from app.services.crawler import AuthenticationRequired
@@ -26,17 +28,30 @@ def tasks(_:Admin,db:DB,page:int=1,page_size:Annotated[int,Query(le=100)]=20):
 @router.post('/crawl',status_code=status.HTTP_202_ACCEPTED)
 def crawl(payload:CrawlIn,_:Admin,db:DB):
     running=db.scalar(select(CrawlTask).where(CrawlTask.status.in_(['PENDING','RUNNING','STOP_REQUESTED','SEARCH_DONE','DOWNLOADING','PROCESSING','DEDUPING'])))
-    if running: raise HTTPException(409,'TASK_IN_PROGRESS')
+    if running:
+        from app.services.task_registry import kill as kill_task_pid
+        pid_killed = kill_task_pid(running.id, run_token=running.run_token, timeout=5.0)
+        if running.status == 'PENDING':
+            running.status='STOPPED';running.current_stage=None;running.current_note=None;running.finished_at=datetime.now(timezone.utc)
+        elif running.status in {'RUNNING','FAILED','PAUSED'}:
+            running.status='STOP_REQUESTED';running.current_stage=None;running.current_note=None
+        db.add(TaskLog(task_id=running.id,level='INFO',message=f'被新任务顶替停止（子进程已 kill={pid_killed}）',created_at=datetime.now(timezone.utc)))
+        db.commit()
     city=db.scalar(select(City).where(City.code==payload.city,City.enabled.is_(True)))
     if not city: raise HTTPException(422,'请选择已启用的城市')
     configured_keywords=set(db.scalars(select(Keyword.word).where(Keyword.city_code==city.code,Keyword.enabled.is_(True))).all())
     if any(keyword not in configured_keywords for keyword in payload.keywords): raise HTTPException(422,'关键词不属于所选城市')
-    configured_bloggers=set(db.scalars(select(Blogger.id).where(Blogger.city_code==city.code,Blogger.enabled.is_(True))).all())
+    configured_bloggers=set(db.scalars(select(BloggerCity.blogger_id).where(BloggerCity.city_code==city.code,BloggerCity.enabled.is_(True))).all())
     if any(blogger_id not in configured_bloggers for blogger_id in payload.blogger_ids): raise HTTPException(422,'博主不属于所选城市')
-    if not payload.keywords and not payload.blogger_ids: raise HTTPException(422,'请至少选择一个关键词或博主')
-    task=CrawlTask(type=payload.type,status='PENDING',params=payload.model_dump()); db.add(task); db.commit(); db.refresh(task)
+    if not payload.keywords and not payload.blogger_ids: raise HTTPException(422,'请至少启用一个关键词或博主')
+    # 校验 effective 范围：显式覆盖时 keywords/blogger_ids 已确定；未传时回退到城市 enabled 配置
+    from app.services.crawl_scope import resolve_crawl_scope
+    scope = resolve_crawl_scope(db, city, payload.model_dump())
+    if not scope.keywords and not scope.bloggers:
+        raise HTTPException(422,'请至少启用一个关键词或博主')
+    task=CrawlTask(type=payload.type,status='PENDING',run_token=str(uuid4()),params=payload.model_dump()); db.add(task); db.commit(); db.refresh(task)
     from app.tasks.crawl_task import run_crawl
-    run_crawl.delay(task.id)
+    run_crawl.delay(task.id,task.run_token)
     return {'code':202,'message':'success','data':dump(task)}
 
 @router.post('/{task_id}/restart',status_code=status.HTTP_202_ACCEPTED)
@@ -55,25 +70,28 @@ def restart(task_id:int,_:Admin,db:DB):
         except AuthenticationRequired as exc:
             raise HTTPException(409,'AUTH_REQUIRED') from exc
     if task.status == 'FAILED': task.failed_notes=0
-    task.status='PENDING';task.error_message=None;task.current_stage=None;task.current_note=None;task.finished_at=None
+    task.status='PENDING';task.run_token=str(uuid4());task.error_message=None;task.current_stage=None;task.current_note=None;task.finished_at=None
     db.add(TaskLog(task_id=task.id,level='INFO',message='任务继续抓取',created_at=datetime.now(timezone.utc)))
     db.commit();db.refresh(task)
     from app.tasks.crawl_task import run_crawl
-    run_crawl.delay(task.id)
+    run_crawl.delay(task.id,task.run_token)
     return {'code':202,'message':'success','data':dump(task)}
 
 @router.post('/{task_id}/stop',status_code=status.HTTP_202_ACCEPTED)
 def stop(task_id:int,_:Admin,db:DB):
     task=db.get(CrawlTask,task_id)
     if not task: raise HTTPException(404,'任务不存在')
-    if task.status=='STOP_REQUESTED': return {'code':202,'message':'success','data':dump(task)}
-    if task.status=='PENDING':
+    if task.status in {'STOPPED','STOP_REQUESTED','COMPLETED','COMPLETED_WITH_ERRORS'}:
+        return {'code':202,'message':'success','data':dump(task)}
+    from app.services.task_registry import kill as kill_task_pid
+    pid_killed = kill_task_pid(task_id, run_token=task.run_token, timeout=5.0)
+    if task.status == 'PENDING':
         task.status='STOPPED';task.current_stage=None;task.current_note=None;task.finished_at=datetime.now(timezone.utc)
-    elif task.status=='RUNNING':
-        task.status='STOP_REQUESTED'
+    elif task.status in {'RUNNING','FAILED','PAUSED'}:
+        task.status='STOP_REQUESTED';task.current_stage=None;task.current_note=None
     else:
-        raise HTTPException(409,'仅等待中或抓取中的任务可以停止')
-    db.add(TaskLog(task_id=task.id,level='INFO',message='已请求安全停止',created_at=datetime.now(timezone.utc)))
+        raise HTTPException(409,'当前状态不支持结束抓取')
+    db.add(TaskLog(task_id=task.id,level='INFO',message=f'已请求停止抓取（状态置为 {task.status}, 子进程已 kill={pid_killed}）',created_at=datetime.now(timezone.utc)))
     db.commit();db.refresh(task)
     return {'code':202,'message':'success','data':dump(task)}
 @router.get('/{task_id}/logs')

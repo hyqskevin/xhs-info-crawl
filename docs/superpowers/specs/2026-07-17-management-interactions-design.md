@@ -183,7 +183,10 @@ MiniMax 输出在进入数据库模型前必须经过统一归一化，不允许
 - 显示任务 ID、中文状态、当前阶段、当前笔记、五项计数和整体进度条。
 - `RUNNING`、`DOWNLOADING` 等执行状态展示动态进度。
 - `COMPLETED` 和 `COMPLETED_WITH_ERRORS` 展示最终结果。
-- `FAILED` 时展示错误原因与“继续抓取”按钮。
+- `FAILED` 时展示错误原因与"继续抓取"按钮，以及"结束抓取"按钮：
+  - "继续抓取"：调用 `POST /api/v1/tasks/{task_id}/restart`，按"失败任务续跑"逻辑。
+  - "结束抓取"：调用 `POST /api/v1/tasks/{task_id}/stop`，用于强制清理（详见 [结束抓取](#结束抓取) 一节）。
+- 结束抓取：`POST /api/v1/tasks/{task_id}/stop` 在原有"PENDING → STOPPED"、"RUNNING → STOP_REQUESTED"逻辑基础上，扩展支持 `FAILED`、`COMPLETED_WITH_ERRORS`、`COMPLETED`、`PAUSED` 状态一步置为 `STOPPED`（写日志 `已结束抓取`），用于清理 Browser 残留 tab；`STOPPED`、`STOP_REQUESTED` 状态幂等返回 202。
 - 页面卸载时停止轮询，避免后台请求泄漏。
 
 ## 9. 失败任务续跑

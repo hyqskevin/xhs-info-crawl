@@ -178,7 +178,7 @@
 | related_note_ids | INT[] | 关联笔记 ID 列表 |
 | source_image_indexes | JSON/INT[] | 提供该活动信息的归档图片序号 |
 | name | VARCHAR(256) | 活动名称 |
-| city_code | VARCHAR(32) FK | 城市 |
+| city_code | VARCHAR(32) FK | 城市，必须引用 `cities.code`，不允许中文字面量或其他非 code 值；入库前由 `app.services.crawl_city_guard.assert_city_code_exists` 校验 |
 | start_time | TIMESTAMP NULL | 活动开始时间；无法可靠确定时为空并标记 `NEEDS_REVIEW` |
 | end_time | TIMESTAMP | 活动结束时间 |
 | location | VARCHAR(256) | 地点 |
@@ -240,3 +240,10 @@
 | value | JSONB | 配置值 |
 | description | VARCHAR(256) | 说明 |
 | updated_at | TIMESTAMP | 更新时间 |
+# 2026-07-20 推文聚合与执行权补充
+
+- `crawl_tasks.run_token` 标识一次具体执行，worker 仅能原子领取 `PENDING + run_token` 匹配的任务。
+- `notes.review_status` 独立表达推文审核状态，处理状态继续保存在 `notes.status`。
+- `notes.merged_into_note_id` 保存推文去重后的合并目标。
+- `note_duplicate_candidates` 保存推文 A/B 的相似度、匹配字段和审核结果；旧 `duplicate_candidates` 不再产生新数据。
+- `weekly_reports.note_count` 与 `activity_count` 分别记录入选推文数和子活动数。

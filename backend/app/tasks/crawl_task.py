@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import shutil
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
@@ -12,9 +12,12 @@ from app.models.task import CrawlTask, TaskLog
 from app.services.archive import archive_task_folder, archive_task_result
 from app.services.activity_window import ActivityWindow
 from app.services.crawler import AuthenticationRequired
-from app.services.dedup import create_duplicate_candidates
+from app.services.crawl_city_guard import assert_city_code_exists
+from app.services.crawl_scope import resolve_crawl_scope
+from app.services.dedup import create_duplicate_candidates, create_note_duplicate_candidates
 from app.services.extraction import extract_activities
 from app.services.minimax import MiniMaxClient
+from app.services.note_identity import extract_platform_note_id
 from app.services.ocr import OCRService
 from app.services.opencli_adapter import OpenCLIAdapter
 from app.services.paddleocr_adapter import PaddleOCREngine
@@ -22,19 +25,54 @@ from app.services.pipeline import deduplicate_results, run_stage, title_matches_
 from app.tasks.celery_app import celery_app
 
 
+class ExecutionStopped(Exception):
+    pass
+
+
+class ExecutionSuperseded(Exception):
+    pass
+
+
+def assert_execution_active(db, task_id: int, run_token: str) -> None:
+    row = db.execute(
+        select(CrawlTask.status, CrawlTask.run_token).where(CrawlTask.id == task_id)
+    ).one_or_none()
+    if row is None or row.run_token != run_token:
+        raise ExecutionSuperseded()
+    if row.status in {"STOP_REQUESTED", "STOPPED"}:
+        raise ExecutionStopped()
+    if row.status != "RUNNING":
+        raise ExecutionSuperseded()
+
+
 def log(db, task_id: int, level: str, message: str) -> None:
     db.add(TaskLog(task_id=task_id, level=level, message=message))
     db.commit()
 
 
-def set_progress(db, task: CrawlTask, stage: str, current_note: str | None = None) -> None:
-    task.current_stage = stage
-    task.current_note = current_note
+def set_progress(db, task: CrawlTask, run_token: str, stage: str, current_note: str | None = None) -> None:
+    changed = db.execute(
+        update(CrawlTask)
+        .where(
+            CrawlTask.id == task.id,
+            CrawlTask.run_token == run_token,
+            CrawlTask.status == "RUNNING",
+        )
+        .values(current_stage=stage, current_note=current_note)
+    )
     db.commit()
+    if changed.rowcount != 1:
+        assert_execution_active(db, task.id, run_token)
+    db.refresh(task)
 
 
 def cleanup_incomplete_note(db, source_url: str) -> None:
-    note = db.scalar(select(Note).where(Note.source_url == source_url))
+    platform_note_id = extract_platform_note_id(source_url)
+    note = db.scalar(
+        select(Note).where(
+            Note.platform_note_id == platform_note_id if platform_note_id else Note.source_url == source_url
+        )
+    )
     if note is None or note.status == "PROCESSED":
         return
     db.execute(delete(Activity).where(Activity.note_id == note.id))
@@ -45,37 +83,56 @@ def cleanup_incomplete_note(db, source_url: str) -> None:
 
 def prepare_existing_note(db, source_url: str) -> bool:
     """Return True when a note is already complete; remove partial legacy rows otherwise."""
-    note = db.scalar(select(Note).where(Note.source_url == source_url))
+    platform_note_id = extract_platform_note_id(source_url)
+    note = db.scalar(
+        select(Note).where(
+            Note.platform_note_id == platform_note_id if platform_note_id else Note.source_url == source_url
+        )
+    )
     if note is None:
         return False
     has_activity = db.scalar(select(Activity.id).where(Activity.note_id == note.id).limit(1)) is not None
     if note.status == "PROCESSED" or has_activity:
+        changed = False
+        if note.source_url != source_url:
+            note.source_url = source_url
+            changed = True
         if note.status != "PROCESSED":
             note.status = "PROCESSED"
+            changed = True
+        if changed:
             db.commit()
         return True
     cleanup_incomplete_note(db, source_url)
     return False
 
 
-def finish_stop_if_requested(db, task_id: int) -> bool:
+def finish_stop_if_requested(db, task_id: int, run_token: str) -> bool:
     current = db.get(CrawlTask, task_id)
     db.refresh(current)
-    if current.status != "STOP_REQUESTED":
+    if current.run_token != run_token:
+        raise ExecutionSuperseded()
+    if current.status not in ("STOP_REQUESTED", "STOPPED"):
         return False
-    current.status = "STOPPED"
-    current.current_stage = None
-    current.current_note = None
-    current.finished_at = datetime.now(timezone.utc)
-    db.commit()
-    log(db, current.id, "INFO", "任务已安全停止")
+    if current.status != "STOPPED":
+        current.status = "STOPPED"
+        current.current_stage = None
+        current.current_note = None
+        current.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        log(db, current.id, "INFO", "任务已安全停止")
     return True
 
 
-def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAdapter, settings) -> bool:
+def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, adapter: OpenCLIAdapter, settings) -> bool:
+    assert_execution_active(db, task.id, run_token)
     note_url = (item.get("url") or "").strip()
     if not note_url:
         log(db, task.id, "WARNING", f"跳过笔记：url 为空 title={item.get('title', '')!r}")
+        return False
+    if not assert_city_code_exists(db, city):
+        log(db, task.id, "ERROR", f"city_code 不在 cities 表：{city!r}，跳过该笔记 url={note_url}")
+        task.skipped_activities += 1
         return False
     if prepare_existing_note(db, note_url):
         return False
@@ -83,11 +140,12 @@ def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAda
     attempts = settings.pipeline_stage_max_retries
     delay = settings.pipeline_stage_retry_delay_seconds
     started_at = task.started_at or datetime.now(timezone.utc)
-    set_progress(db, task, "DOWNLOADING", item.get("title") or note_url)
+    set_progress(db, task, run_token, "DOWNLOADING", item.get("title") or note_url)
     detail = run_stage(lambda: adapter.note(note_url), attempts, delay)
+    assert_execution_active(db, task.id, run_token)
     note = Note(
         task_id=task.id,
-        platform_note_id=note_url.split("/")[-1].split("?")[0],
+        platform_note_id=extract_platform_note_id(note_url) or note_url.split("/")[-1].split("?")[0],
         title=item.get("title", ""),
         content=detail.get("content", ""),
         source_url=note_url,
@@ -100,14 +158,16 @@ def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAda
     folder = archive_task_folder(settings.archive_dir, started_at, task.id)
     download_dir = folder / ".downloads" / note.platform_note_id
     images = run_stage(lambda: adapter.download(note_url, download_dir), attempts, delay)
+    assert_execution_active(db, task.id, run_token)
     task.downloaded_notes += 1
     db.commit()
 
-    set_progress(db, task, "OCR", note.title)
+    set_progress(db, task, run_token, "OCR", note.title)
     ocr = OCRService(PaddleOCREngine(settings), settings.ocr_min_confidence) if settings.ocr_enabled else None
     ocr_texts: list[str] = []
     image_rows: list[tuple] = []
     for index, image in enumerate(images, 1):
+        assert_execution_active(db, task.id, run_token)
         result = {"status": "disabled", "text": "", "error": ""}
         if ocr:
             def recognize():
@@ -119,6 +179,7 @@ def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAda
                 result = run_stage(recognize, attempts, delay)
             except Exception as exc:
                 result = {"status": "failed", "text": "", "error": str(exc)}
+        assert_execution_active(db, task.id, run_token)
         image_row = NoteImage(note_id=note.id, storage_key="", ocr_text=result["text"], ocr_status=result["status"], ocr_error=result["error"])
         db.add(image_row)
         image_rows.append((image, image_row))
@@ -128,7 +189,7 @@ def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAda
     task.ocr_notes += 1
     db.commit()
 
-    set_progress(db, task, "EXTRACTING", note.title)
+    set_progress(db, task, run_token, "EXTRACTING", note.title)
     combined = f"标题：{note.title}\n正文：{note.content}\n" + "\n".join(ocr_texts)
     now = started_at.replace(tzinfo=None)
     if settings.minimax_api_key:
@@ -140,9 +201,11 @@ def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAda
             extracted = extract_activities(combined, now, None)
     else:
         extracted = extract_activities(combined, now, None)
+    assert_execution_active(db, task.id, run_token)
 
     window = ActivityWindow(started_at, settings.activity_future_window_days, settings.celery_timezone)
     for fields in extracted:
+        assert_execution_active(db, task.id, run_token)
         window_status = window.classify(fields.get("start_time"), fields.get("end_time"))
         if window_status in {"past", "future"}:
             task.skipped_activities += 1
@@ -167,10 +230,13 @@ def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAda
         db.flush()
         create_duplicate_candidates(db, activity)
 
-    set_progress(db, task, "ARCHIVING", note.title)
+    set_progress(db, task, run_token, "ARCHIVING", note.title)
+    assert_execution_active(db, task.id, run_token)
     task_note_ids = select(Note.id).where(Note.task_id == task.id)
     task_activities = list(db.scalars(select(Activity).where(Activity.note_id.in_(task_note_ids)).order_by(Activity.id)).all())
     archive_task_result(settings.archive_dir, started_at, task.id, note, image_rows, task_activities)
+    assert_execution_active(db, task.id, run_token)
+    create_note_duplicate_candidates(db, note)
     shutil.rmtree(folder / ".downloads", ignore_errors=True)
     note.status = "PROCESSED"
     task.extracted_notes += 1
@@ -180,19 +246,31 @@ def process_note(db, task: CrawlTask, city: str, item: dict, adapter: OpenCLIAda
 
 
 @celery_app.task(name="app.tasks.crawl_task.run", bind=True)
-def run_crawl(self, task_id: int):
+def run_crawl(self, task_id: int, run_token: str | None = None):
     db = SessionLocal()
-    task = db.get(CrawlTask, task_id)
-    if task is None or task.status == "STOPPED":
+    if not run_token:
         db.close()
         return
+    claimed = db.execute(
+        update(CrawlTask)
+        .where(
+            CrawlTask.id == task_id,
+            CrawlTask.status == "PENDING",
+            CrawlTask.run_token == run_token,
+        )
+        .values(status="RUNNING", current_stage="SEARCHING", current_note=None, error_message=None)
+    )
+    db.commit()
+    if claimed.rowcount != 1:
+        db.close()
+        return
+    task = db.get(CrawlTask, task_id)
     settings = get_settings()
     adapter = OpenCLIAdapter(settings)
+    # 注册 task_id 到 adapter 让 run() 自动绑定 PID（如果 adapter 支持）
+    if hasattr(adapter, "bind_task"):
+        adapter.bind_task(task.id, run_token)
     try:
-        task.status = "RUNNING"
-        task.current_stage = "SEARCHING"
-        task.current_note = None
-        task.error_message = None
         if task.started_at is None:
             task.started_at = datetime.now(timezone.utc)
         db.commit()
@@ -205,23 +283,25 @@ def run_crawl(self, task_id: int):
         cities = list(db.scalars(city_query.order_by(City.id)).all())
         if cities:
             for city in cities:
-                configured_keywords = list(db.scalars(select(Keyword.word).where(Keyword.city_code == city.code, Keyword.enabled.is_(True)).order_by(Keyword.id)).all())
-                keywords = task.params.get("keywords") or configured_keywords
+                scope = resolve_crawl_scope(db, city, task.params)
+                override = "任务参数" if ("keywords" in task.params or "blogger_ids" in task.params) else "配置默认"
+                log(db, task.id, "INFO", f"抓取范围生效：keywords={len(scope.keywords)} bloggers={len(scope.bloggers)} (override={override})")
                 recent_filter = task.params.get("recent_filter") or city.recent_filter
-                for keyword in keywords:
+                for keyword in scope.keywords:
                     for item in adapter.search_recent(f"{city.name} {keyword}", recent_filter):
                         tagged = dict(item)
                         tagged["_matched_keywords"] = [keyword]
                         results.append((city.code, tagged))
-                blogger_ids = task.params.get("blogger_ids", [])
-                if blogger_ids:
-                    bloggers = list(db.scalars(select(Blogger).where(Blogger.id.in_(blogger_ids), Blogger.city_code == city.code, Blogger.enabled.is_(True))).all())
-                    for blogger in bloggers:
-                        profile_url = (blogger.profile_url or "").strip()
-                        if not profile_url:
-                            log(db, task.id, "WARNING", f"跳过博主：profile_url 为空 id={blogger.id} name={blogger.name!r}")
-                            continue
-                        results.extend((city.code, item) for item in adapter.blogger_notes(profile_url))
+                    assert_execution_active(db, task.id, run_token)
+                for blogger in scope.bloggers:
+                    username = (blogger.username or "").strip()
+                    if not username:
+                        log(db, task.id, "WARNING", f"跳过博主：username 为空 id={blogger.id}")
+                        continue
+                    items = adapter.blogger_notes(username, blogger.profile_url or "")
+                    assert_execution_active(db, task.id, run_token)
+                    log(db, task.id, "INFO", f"博主 {username!r} 命中 {len(items)} 篇（带 xsec_token 的）")
+                    results.extend((city.code, item) for item in items)
         else:
             for city_code in requested_cities:
                 for keyword in task.params.get("keywords", []):
@@ -229,6 +309,7 @@ def run_crawl(self, task_id: int):
                         tagged = dict(item)
                         tagged["_matched_keywords"] = [keyword]
                         results.append((city_code, tagged))
+                    assert_execution_active(db, task.id, run_token)
 
         results = deduplicate_results(results)
         task.total_notes = len(results)
@@ -241,7 +322,7 @@ def run_crawl(self, task_id: int):
                 db.commit()
                 log(db, task.id, "INFO", f"标题未包含关键词，已跳过 [{entry[1]['url']}] 标题={entry[1].get('title', '')!r} 关键词={matched_keywords}")
                 return
-            process_note(db, task, entry[0], entry[1], adapter, settings)
+            process_note(db, task, run_token, entry[0], entry[1], adapter, settings)
 
         def on_failure(entry: tuple[str, dict], exc: Exception) -> None:
             db.rollback()
@@ -253,15 +334,23 @@ def run_crawl(self, task_id: int):
             log(db, current.id, "ERROR", f"笔记处理失败 [{entry[1]['url']}]：{exc}")
 
         for entry in results:
-            if finish_stop_if_requested(db, task.id):
+            if finish_stop_if_requested(db, task.id, run_token):
                 return
             try:
                 processor(entry)
+            except ExecutionStopped:
+                db.rollback()
+                cleanup_incomplete_note(db, entry[1]["url"])
+                finish_stop_if_requested(db, task.id, run_token)
+                return
+            except ExecutionSuperseded:
+                db.rollback()
+                return
             except AuthenticationRequired:
                 raise
             except Exception as exc:
                 on_failure(entry, exc)
-        if finish_stop_if_requested(db, task.id):
+        if finish_stop_if_requested(db, task.id, run_token):
             return
         task = db.get(CrawlTask, task.id)
         task.status = "COMPLETED_WITH_ERRORS" if task.failed_notes else "COMPLETED"
@@ -270,6 +359,11 @@ def run_crawl(self, task_id: int):
         task.finished_at = datetime.now(timezone.utc)
         db.commit()
         log(db, task.id, "INFO", "completed")
+    except ExecutionStopped:
+        db.rollback()
+        finish_stop_if_requested(db, task_id, run_token)
+    except ExecutionSuperseded:
+        db.rollback()
     except AuthenticationRequired as exc:
         task = db.get(CrawlTask, task_id)
         task.status = "PAUSED"

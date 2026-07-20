@@ -156,4 +156,38 @@ test.describe('已登录业务流程', () => {
     await page.getByRole('button', { name: '确定' }).click()
     await expect.poll(() => deletedIds).toEqual([1, 2])
   })
+
+  test('TC-UI-018 批量通过后生成单城市周报', async ({ page }) => {
+    let approvedIds: number[] = []
+    let reportPayload: { week: string; cities: string[] } | null = null
+    const items = [1, 2].map((id) => ({ id, name: `活动 ${id}`, city_code: 'shanghai', start_time: '2026-07-18T10:00:00Z', location: '静安', status: 'RAW' }))
+    await page.route('**/api/v1/activities**', async (route) => {
+      if (route.request().method() === 'POST' && route.request().url().endsWith('/batch/approve')) {
+        approvedIds = route.request().postDataJSON().ids
+        return route.fulfill({ json: response({ approved_ids: approvedIds, approved_count: approvedIds.length }) })
+      }
+      return route.fulfill({ json: { ...response({ items }), pagination: { total: 2 } } })
+    })
+    await page.route('**/api/v1/reports**', async (route) => {
+      if (route.request().method() === 'POST') {
+        reportPayload = route.request().postDataJSON()
+        return route.fulfill({ json: response({ id: 8, week: reportPayload!.week, cities: reportPayload!.cities, activity_count: 2, status: 'draft' }) })
+      }
+      return route.fulfill({ json: response([]) })
+    })
+
+    await page.goto('/activities')
+    await expect(page.getByRole('button', { name: '批量通过' })).toBeDisabled()
+    await page.locator('.el-table__header .el-checkbox').click()
+    await page.getByRole('button', { name: '批量通过' }).click()
+    await page.getByRole('button', { name: '确定' }).click()
+    await expect.poll(() => approvedIds).toEqual([1, 2])
+    await expect(page.getByText('已通过 2 条活动')).toBeVisible()
+
+    await page.goto('/reports')
+    await page.getByRole('button', { name: '生成周报' }).click()
+    await expect.poll(() => reportPayload).not.toBeNull()
+    expect(reportPayload!.cities).toEqual(['shanghai'])
+    await expect(page.getByText('周报生成成功')).toBeVisible()
+  })
 })
