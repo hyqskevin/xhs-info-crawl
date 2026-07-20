@@ -7,9 +7,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-# Celery reads its broker while app modules are imported.  Force pytest onto a
-# process-local transport before importing the application so tests can never
-# publish messages to the developer's filesystem broker.
+# Settings and Celery read environment values while app modules are imported.
+# Keep pytest isolated from the developer's JWT secret and filesystem broker.
+os.environ["SECRET_KEY"] = "pytest-only-jwt-secret-at-least-32-bytes"
 os.environ["CELERY_BROKER_URL"] = "memory://"
 
 from app.core.database import Base, get_db
