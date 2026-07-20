@@ -12,11 +12,10 @@
 
 ## 当前待办
 
-- [ ] 跑任务 #7 重新抓取验证博主笔记 URL 不再缺 xsec_token
-  - 目标：验证博主抓取修复后，note 命令能正常打开笔记详情。
-  - 验收：选 nb + 博主 1 提交任务，日志 `博主 '从零发现宁波' 命中 N 篇（带 xsec_token 的）`；`downloaded > 0`；无 `xsec_token` 或 `Missing url` 错误。
-  - 2026-07-20 复测：前三个博主均命中 15 篇带签名笔记；第 4 个博主 `user store was not found` 导致整批在下载前失败，转入失败隔离修复。
-  - 关联 spec：`docs/superpowers/specs/2026-07-20-blogger-discovery-resilience-design.md`（持续授权已审核）。
+- [ ] 修复博主 `user/profile` 笔记 URL 的稳定身份识别与重复抓取唯一键冲突
+  - 目标：把 `user/profile/<user-id>/<note-id>` 与同一笔记的其他 URL 形式识别为同一 `platform_note_id`，重复抓取时复用已处理笔记，不重复插入。
+  - 验收：不同 token 的同一 `user/profile` URL 提取相同 note ID；已处理笔记再次发现时不调用详情下载且不触发 `notes.platform_note_id` 唯一约束；现有 explore/search_result/discovery URL 行为不回退。
+  - 证据：任务 #7 在已有 `platform_note_id=6a5739490000000016024c14` 时，因预检查未识别 `user/profile` 路径而再次 INSERT，触发 SQLite UNIQUE constraint。
 - [x] 修复worker在opencli阻塞时无法响应停止信号的问题
   - 目标：celery worker在执行opencli调用时（CDP超时115秒），能够及时检测到STOP_REQUESTED状态并退出。
   - 验收：点击停止后，worker在10秒内检测到停止信号并退出当前任务；不再需要手动kill worker进程。
@@ -51,6 +50,10 @@
 
 ## 已完成
 
+- [x] 跑任务 #7 验证签名 URL，并隔离单博主发现失败
+  - 结果：真实范围 `keywords=0 bloggers=5`；成功博主命中 15、15、15、13 篇，另一个博主解析失败后任务继续进入下载。
+  - 验收：安全停止时发现 58、下载 2、OCR 2、提取 2；本轮 `Missing url` 和 `requires a full signed URL` 均为 0；后端 `212 passed, 1 skipped`、前端 `28 passed`、E2E `38 passed`。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-blogger-discovery-resilience-design.md`；测试案例：`tests/test-blogger-discovery-resilience.md`。
 - [x] 建立 TODO 持续执行授权
   - 结果：保留“先澄清根因、写 spec、TDD、全量验证、更新 TODO、独立提交”的流程；spec 完成后可按 TODO 顺序自动开发，不再逐项等待确认。
   - 例外：新增外部权限、敏感登录、不可逆操作或会改变产品方向的实质歧义仍需用户确认。

@@ -27,15 +27,15 @@
 - Consumes: `OpenCLIAdapter.blogger_notes(username: str, profile_url: str) -> list[dict]`.
 - Produces: existing `run_crawl(task_id: int, run_token: str | None)` with per-blogger ordinary-error isolation and unchanged external API.
 
-- [ ] **Step 1: Write failing ordinary-error isolation test**
+- [x] **Step 1: Write failing ordinary-error isolation test**
 
 Create two enabled bloggers bound to `nb`. Make the first `blogger_notes()` raise `RuntimeError("user store was not found")`, make the second return one signed note, and replace `process_note()` with a recorder. Assert the second blogger is called, the signed note reaches the recorder, the task is `COMPLETED_WITH_ERRORS`, and the failed blogger appears in task logs.
 
-- [ ] **Step 2: Write failing authentication-boundary test**
+- [x] **Step 2: Write failing authentication-boundary test**
 
 Make the first blogger raise `AuthenticationRequired("login")`. Assert the task becomes `PAUSED` and the second blogger is not called.
 
-- [ ] **Step 3: Run the two tests and verify RED**
+- [x] **Step 3: Run the two tests and verify RED**
 
 Run:
 
@@ -47,7 +47,7 @@ uv run --project backend pytest -q \
 
 Expected: the ordinary-error test fails because `run_crawl` currently enters `FAILED`; the authentication test documents the existing boundary.
 
-- [ ] **Step 4: Implement minimal blogger isolation**
+- [x] **Step 4: Implement minimal blogger isolation**
 
 Before discovery, initialize:
 
@@ -80,7 +80,7 @@ if last_discovery_error and not task.error_message:
     task.error_message = last_discovery_error
 ```
 
-- [ ] **Step 5: Run focused regressions**
+- [x] **Step 5: Run focused regressions**
 
 Run:
 
@@ -93,7 +93,7 @@ uv run --project backend pytest -q \
 
 Expected: all pass; stop and authentication semantics remain unchanged.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 ```bash
 git add backend/app/tasks/crawl_task.py backend/tests/test_crawl_task_resilience.py
@@ -113,7 +113,7 @@ git commit -m "fix: isolate blogger discovery failures"
 - Consumes: the updated `run_crawl` and existing `POST /tasks/7/restart` behavior.
 - Produces: real-run evidence without sensitive signed URLs.
 
-- [ ] **Step 1: Run full automated verification**
+- [x] **Step 1: Run full automated verification**
 
 Run:
 
@@ -124,11 +124,11 @@ git diff --check
 
 Expected: backend and frontend component suites exit 0; formatting check is clean.
 
-- [ ] **Step 2: Reload the worker and restart task #7**
+- [x] **Step 2: Reload the worker and restart task #7**
 
 Ensure the worker uses the new code, restart task `#7` with its stored parameters, and monitor only sanitized counters and log summaries.
 
-- [ ] **Step 3: Verify real acceptance**
+- [x] **Step 3: Verify real acceptance**
 
 Assert:
 
@@ -138,7 +138,7 @@ Assert:
 - `downloaded_notes > 0`;
 - current-run logs contain neither `Missing url` nor “requires a full signed URL”.
 
-- [ ] **Step 4: Update docs and TODO**
+- [x] **Step 4: Update docs and TODO**
 
 Set the spec status to `已通过持续授权审核并实现`, add automated and real task results to the test document, and move the task #7 TODO into `已完成`.
 
