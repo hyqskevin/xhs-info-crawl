@@ -15,6 +15,8 @@
 - [ ] 跑任务 #7 重新抓取验证博主笔记 URL 不再缺 xsec_token
   - 目标：验证博主抓取修复后，note 命令能正常打开笔记详情。
   - 验收：选 nb + 博主 1 提交任务，日志 `博主 '从零发现宁波' 命中 N 篇（带 xsec_token 的）`；`downloaded > 0`；无 `xsec_token` 或 `Missing url` 错误。
+  - 2026-07-20 复测：前三个博主均命中 15 篇带签名笔记；第 4 个博主 `user store was not found` 导致整批在下载前失败，转入失败隔离修复。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-blogger-discovery-resilience-design.md`（持续授权已审核）。
 - [x] 修复worker在opencli阻塞时无法响应停止信号的问题
   - 目标：celery worker在执行opencli调用时（CDP超时115秒），能够及时检测到STOP_REQUESTED状态并退出。
   - 验收：点击停止后，worker在10秒内检测到停止信号并退出当前任务；不再需要手动kill worker进程。
