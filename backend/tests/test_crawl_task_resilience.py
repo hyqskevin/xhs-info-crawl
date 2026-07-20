@@ -259,6 +259,56 @@ def test_existing_note_is_found_by_platform_id_when_access_token_changes(db_sess
     assert note.source_url.endswith("xsec_token=new")
 
 
+def test_processed_blogger_note_with_new_token_skips_detail_and_download(db_session):
+    db_session.add(City(name="宁波", code="nb", enabled=True))
+    task = CrawlTask(
+        type="mixed",
+        status="RUNNING",
+        run_token="active-token",
+        params={"city": "nb"},
+    )
+    db_session.add(task)
+    db_session.flush()
+    note = Note(
+        task_id=task.id,
+        platform_note_id="note456",
+        title="已完成活动",
+        content="正文",
+        source_url="https://www.xiaohongshu.com/user/profile/user123/note456?xsec_token=old",
+        city_code="nb",
+        status="PROCESSED",
+        raw_data={},
+    )
+    db_session.add(note)
+    db_session.commit()
+
+    class AdapterThatMustNotRun:
+        def note(self, _url):
+            raise AssertionError("existing note must not request detail")
+
+        def download(self, _url, _folder):
+            raise AssertionError("existing note must not download")
+
+    processed = crawl_task.process_note(
+        db_session,
+        task,
+        "active-token",
+        "nb",
+        {
+            "title": "已完成活动",
+            "url": "https://www.xiaohongshu.com/user/profile/user123/note456?xsec_token=new",
+        },
+        AdapterThatMustNotRun(),
+        SimpleNamespace(),
+    )
+
+    assert processed is False
+    db_session.refresh(note)
+    assert note.source_url.endswith("xsec_token=new")
+    assert task.downloaded_notes == 0
+    assert task.extracted_notes == 0
+
+
 def test_one_note_keeps_valid_and_unknown_activities_but_skips_window_outliers(db_session, monkeypatch, tmp_path):
     db_session.add(City(name="宁波", code="nb", enabled=True))
     db_session.flush()

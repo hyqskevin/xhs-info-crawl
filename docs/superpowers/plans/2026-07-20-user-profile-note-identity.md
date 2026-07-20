@@ -12,19 +12,19 @@
 - Modify: `backend/tests/test_note_identity.py`
 - Modify: `backend/tests/test_crawl_task_resilience.py`
 
-- [ ] Add different-token `user/profile` URL identity assertions.
-- [ ] Add a pure profile URL negative assertion.
-- [ ] Add an existing processed-note assertion that refreshes the signed URL.
-- [ ] Run the focused tests and confirm RED for the missing path rule.
+- [x] Add different-token `user/profile` URL identity assertions.
+- [x] Add a pure profile URL negative assertion.
+- [x] Add an existing processed-note assertion that refreshes the signed URL.
+- [x] Run the focused tests and confirm RED for the missing path rule.
 
 ### Task 2: Add the minimal centralized rule
 
 **Files:**
 - Modify: `backend/app/services/note_identity.py`
 
-- [ ] Add a strict pattern capturing the second segment after `/user/profile/`.
-- [ ] Run note identity and crawl resilience tests GREEN.
-- [ ] Run execution ownership and auto-stop regressions.
+- [x] Add a strict pattern capturing the second segment after `/user/profile/`.
+- [x] Run note identity and crawl resilience tests GREEN.
+- [x] Run execution ownership and auto-stop regressions.
 
 ### Task 3: Verify and close
 
@@ -33,6 +33,6 @@
 - Modify: `docs/TODO.md`
 - Modify: `docs/superpowers/specs/2026-07-20-user-profile-note-identity-design.md`
 
-- [ ] Run `make test`, `make test-e2e`, and `git diff --check`.
-- [ ] Record results and move the TODO to completed.
-- [ ] Commit implementation and acceptance evidence with the TODO association.
+- [x] Run `make test`, `make test-e2e`, and `git diff --check`.
+- [x] Record results and move the TODO to completed.
+- [x] Commit implementation and acceptance evidence with the TODO association.

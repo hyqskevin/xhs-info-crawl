@@ -12,11 +12,6 @@
 
 ## 当前待办
 
-- [ ] 修复博主 `user/profile` 笔记 URL 的稳定身份识别与重复抓取唯一键冲突
-  - 目标：把 `user/profile/<user-id>/<note-id>` 与同一笔记的其他 URL 形式识别为同一 `platform_note_id`，重复抓取时复用已处理笔记，不重复插入。
-  - 验收：不同 token 的同一 `user/profile` URL 提取相同 note ID；已处理笔记再次发现时不调用详情下载且不触发 `notes.platform_note_id` 唯一约束；现有 explore/search_result/discovery URL 行为不回退。
-  - 证据：任务 #7 在已有 `platform_note_id=6a5739490000000016024c14` 时，因预检查未识别 `user/profile` 路径而再次 INSERT，触发 SQLite UNIQUE constraint。
-  - 关联 spec：`docs/superpowers/specs/2026-07-20-user-profile-note-identity-design.md`（持续授权已审核）。
 - [x] 修复worker在opencli阻塞时无法响应停止信号的问题
   - 目标：celery worker在执行opencli调用时（CDP超时115秒），能够及时检测到STOP_REQUESTED状态并退出。
   - 验收：点击停止后，worker在10秒内检测到停止信号并退出当前任务；不再需要手动kill worker进程。
@@ -51,6 +46,10 @@
 
 ## 已完成
 
+- [x] 修复博主 `user/profile` 笔记 URL 的稳定身份识别与重复抓取唯一键冲突
+  - 结果：统一身份函数严格识别 `/user/profile/<user-id>/<note-id>`，不同 token 得到同一 note ID；纯博主主页不误判。已处理笔记会刷新有效 URL 并跳过详情、下载及重复 INSERT。
+  - 验收：身份与任务回归 `30 passed`；后端 `215 passed, 1 skipped`、前端 `28 passed`、E2E `38 passed`；任务 #7 真实记录只读核对通过。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-user-profile-note-identity-design.md`；测试案例：`tests/test-user-profile-note-identity.md`。
 - [x] 跑任务 #7 验证签名 URL，并隔离单博主发现失败
   - 结果：真实范围 `keywords=0 bloggers=5`；成功博主命中 15、15、15、13 篇，另一个博主解析失败后任务继续进入下载。
   - 验收：安全停止时发现 58、下载 2、OCR 2、提取 2；本轮 `Missing url` 和 `requires a full signed URL` 均为 0；后端 `212 passed, 1 skipped`、前端 `28 passed`、E2E `38 passed`。

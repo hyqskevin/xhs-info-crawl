@@ -5,6 +5,7 @@ from urllib.parse import urlsplit, urlunsplit
 _NOTE_PATTERNS = (
     re.compile(r"/(?:explore|search_result)/([^/?#]+)"),
     re.compile(r"/discovery/item/([^/?#]+)"),
+    re.compile(r"/user/profile/[^/?#]+/([^/?#]+)"),
 )
 
 

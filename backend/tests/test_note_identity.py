@@ -11,6 +11,20 @@ def test_xhs_url_variants_share_platform_note_id() -> None:
     assert canonicalize_note_url(explore) == "https://www.xiaohongshu.com/explore/abc123"
 
 
+def test_blogger_profile_note_urls_share_platform_note_id_across_tokens() -> None:
+    old = "https://www.xiaohongshu.com/user/profile/user123/note456?xsec_token=old"
+    new = "https://www.xiaohongshu.com/user/profile/user123/note456?xsec_token=new"
+
+    assert extract_platform_note_id(old) == "note456"
+    assert extract_platform_note_id(new) == "note456"
+
+
+def test_blogger_profile_page_is_not_treated_as_a_note() -> None:
+    profile = "https://www.xiaohongshu.com/user/profile/user123?xsec_token=profile"
+
+    assert extract_platform_note_id(profile) is None
+
+
 def test_search_dedup_merges_url_variants_and_keeps_latest_access_url() -> None:
     rows = [
         ("nb", {"title": "活动", "url": "https://www.xiaohongshu.com/explore/abc123?xsec_token=old", "_matched_keywords": ["活动"]}),
