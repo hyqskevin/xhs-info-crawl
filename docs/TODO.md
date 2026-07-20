@@ -14,7 +14,8 @@
 - [ ] 写 spec 前先把问题解答清楚，spec 写完后必须过用户审核再开发（流程规则，永久保留）
 - [ ] 消除测试环境 JWT 短密钥安全警告
   - 目标：为测试环境提供不少于 32 字节的独立 JWT 密钥，消除 PyJWT `InsecureKeyLengthWarning`，且不读取或暴露本地 `.env` 真实密钥。
-  - 验收：后端全量测试退出码为 0，输出中不再出现 `InsecureKeyLengthWarning`；生产和本地运行时密钥读取逻辑不变；需先编写并审核独立 spec。
+  - 验收：后端全量测试退出码为 0，输出中不再出现 `InsecureKeyLengthWarning`；生产和本地运行时密钥读取逻辑不变。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-test-jwt-secret-design.md`（待审核）。
 - [ ] 一次性爬虫模式（生产场景启动一次爬虫 → 跑完 → worker 自动退出）
   - 目标：与 `docs/crawler-design.md` 第 168 行一致，"worker 完成当前单篇笔记... 然后写入 STOPPED 并退出"。
   - 验收：**待写 spec 过审后再列具体验收条件**。
