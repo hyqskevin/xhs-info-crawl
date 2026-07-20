@@ -15,7 +15,7 @@
 - [ ] 停止执行栅栏与浏览器标签页清理
   - 目标：停止后不再启动新的 OpenCLI 命令，结束当前子进程并清理本次抓取打开的标签页；Celery worker 保持运行并可接收下一任务。
   - 验收：5 秒内不再启动新的业务命令，包含标签页清理时最迟 15 秒进入 `STOPPED`；PID 注册表无活动记录；抓取标签页关闭；同一 worker 能执行后续新任务。
-  - 关联 spec：`docs/superpowers/specs/2026-07-20-stop-execution-fence-browser-cleanup-design.md`（待审核）。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-stop-execution-fence-browser-cleanup-design.md`（已审核，待实现）。
 - [ ] 跑任务 #7 重新抓取验证博主笔记 URL 不再缺 xsec_token
   - 目标：验证博主抓取修复后，note 命令能正常打开笔记详情。
   - 验收：选 nb + 博主 1 提交任务，日志 `博主 '从零发现宁波' 命中 N 篇（带 xsec_token 的）`；`downloaded > 0`；无 `xsec_token` 或 `Missing url` 错误。
