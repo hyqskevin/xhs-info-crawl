@@ -1,6 +1,7 @@
 from datetime import datetime,timezone
 from pathlib import Path
 import subprocess
+import pytest
 from app.core.config import Settings
 from app.models.activity import Activity
 from app.models.duplicate import DuplicateCandidate
@@ -113,6 +114,24 @@ def test_download_rejects_empty_url(tmp_path:Path,monkeypatch):
     else:
         raise AssertionError('expected OpenCLIError for empty url')
     assert called is False
+
+
+def test_run_translates_security_challenge_before_generic_error(tmp_path: Path, monkeypatch):
+    from app.services.crawler import VerificationRequired
+
+    adapter = OpenCLIAdapter(Settings(project_root=tmp_path))
+
+    class FakeProc:
+        pid = 12346
+        returncode = 1
+
+        def communicate(self, timeout=None):
+            return "", "检测到 captcha，请完成安全验证"
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: FakeProc())
+
+    with pytest.raises(VerificationRequired, match="安全验证"):
+        adapter.run(["xiaohongshu", "search", "宁波活动"])
 
 def test_run_translates_missing_url_error(tmp_path: Path, monkeypatch):
     from app.services.crawler import OpenCLIError

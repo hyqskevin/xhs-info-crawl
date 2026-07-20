@@ -11,7 +11,8 @@ from app.models.note import Note, NoteImage
 from app.models.task import CrawlTask, TaskLog
 from app.services.archive import archive_task_folder, archive_task_result
 from app.services.activity_window import ActivityWindow
-from app.services.crawler import AuthenticationRequired
+from app.services.crawler import AuthenticationRequired, VerificationRequired
+from app.services.browser_launcher import open_xhs_login
 from app.services.crawl_city_guard import assert_city_code_exists
 from app.services.crawl_scope import resolve_crawl_scope
 from app.services.dedup import create_duplicate_candidates, create_note_duplicate_candidates
@@ -385,6 +386,12 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         task.error_message = str(exc)
         db.commit()
         log(db, task.id, "ERROR", str(exc))
+        if isinstance(exc, VerificationRequired):
+            try:
+                open_xhs_login(settings)
+                log(db, task.id, "INFO", "已自动打开 Chrome 小红书验证页面")
+            except Exception as launch_exc:
+                log(db, task.id, "WARNING", f"自动打开 Chrome 失败：{launch_exc}")
     except Exception as exc:
         db.rollback()
         task = db.get(CrawlTask, task_id)

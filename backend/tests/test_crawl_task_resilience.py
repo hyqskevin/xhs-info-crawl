@@ -1,4 +1,4 @@
-from app.services.crawler import AuthenticationRequired
+from app.services.crawler import AuthenticationRequired, VerificationRequired
 from app.services.pipeline import deduplicate_results, process_with_isolation, run_stage, title_matches_keywords
 from app.models.activity import Activity
 from app.models.blogger_city import BloggerCity
@@ -127,6 +127,69 @@ def test_blogger_authentication_failure_still_pauses_the_batch(db_session, monke
     assert calls == ["需登录账号"]
     assert task.status == "PAUSED"
     assert task.error_message == "login"
+
+
+def test_verification_failure_pauses_and_opens_chrome(db_session, monkeypatch):
+    blogger, = _configured_bloggers(db_session, ["需验证账号"])
+    task = CrawlTask(
+        type="mixed",
+        status="PENDING",
+        run_token="verify-token",
+        params={"city": "nb", "keywords": [], "recent_filter": "一周内", "blogger_ids": [blogger.id]},
+    )
+    db_session.add(task)
+    db_session.commit()
+    opened = []
+
+    class FakeAdapter:
+        def __init__(self, _settings):
+            pass
+
+        def bind_task(self, *_args, **_kwargs):
+            pass
+
+        def blogger_notes(self, _username, _profile_url):
+            raise VerificationRequired("检测到小红书安全验证，请人工处理")
+
+    monkeypatch.setattr(crawl_task, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(crawl_task, "OpenCLIAdapter", FakeAdapter)
+    monkeypatch.setattr(crawl_task, "open_xhs_login", lambda settings: opened.append(settings.xhs_login_url))
+
+    crawl_task.run_crawl.run(task.id, "verify-token")
+
+    current = db_session.get(CrawlTask, task.id)
+    assert current.status == "PAUSED"
+    assert "安全验证" in current.error_message
+    assert len(opened) == 1
+
+
+def test_verification_browser_launch_failure_does_not_override_paused(db_session, monkeypatch):
+    blogger, = _configured_bloggers(db_session, ["需验证账号"])
+    task = CrawlTask(
+        type="mixed",
+        status="PENDING",
+        run_token="verify-launch-failure",
+        params={"city": "nb", "keywords": [], "recent_filter": "一周内", "blogger_ids": [blogger.id]},
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    class FakeAdapter:
+        def __init__(self, _settings): pass
+        def bind_task(self, *_args, **_kwargs): pass
+        def blogger_notes(self, _username, _profile_url):
+            raise VerificationRequired("检测到小红书安全验证，请人工处理")
+
+    monkeypatch.setattr(crawl_task, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(crawl_task, "OpenCLIAdapter", FakeAdapter)
+    monkeypatch.setattr(crawl_task, "open_xhs_login", lambda _settings: (_ for _ in ()).throw(RuntimeError("Chrome unavailable")))
+
+    crawl_task.run_crawl.run(task.id, "verify-launch-failure")
+
+    current = db_session.get(CrawlTask, task.id)
+    messages = list(db_session.scalars(select(TaskLog.message).where(TaskLog.task_id == task.id)))
+    assert current.status == "PAUSED"
+    assert any("自动打开 Chrome 失败" in message for message in messages)
 
 
 def test_run_stage_retries_a_temporary_failure():

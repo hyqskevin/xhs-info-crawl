@@ -12,18 +12,18 @@
 
 **Files:** `backend/app/services/crawler.py`, `backend/app/services/opencli_adapter.py`, relevant tests.
 
-- [ ] Write red tests for explicit verification phrases and false-positive exclusions.
-- [ ] Add `VerificationRequired` and centralized classifier.
-- [ ] Classify command output before generic timeout/error mapping.
+- [x] Write red tests for explicit verification phrases and false-positive exclusions.
+- [x] Add `VerificationRequired` and centralized classifier.
+- [x] Classify command output before generic timeout/error mapping.
 
 ### Task 2: Preserve verification page and pause task
 
 **Files:** `backend/app/services/opencli_adapter.py`, `backend/app/tasks/crawl_task.py`, backend tests.
 
-- [ ] Write red tests that verification skips close while ordinary failure/stop still closes.
-- [ ] Preserve only verification sessions.
-- [ ] Write red task test for PAUSED plus best-effort browser launch warning.
-- [ ] Implement task pause and automatic Chrome launch without masking PAUSED.
+- [x] Write red tests that verification skips close while ordinary failure/stop still closes.
+- [x] Preserve only verification sessions.
+- [x] Write red task test for PAUSED plus best-effort browser launch warning.
+- [x] Implement task pause and automatic Chrome launch without masking PAUSED.
 
 ### Task 3: UI/E2E/docs
 

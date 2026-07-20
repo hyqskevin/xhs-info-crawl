@@ -83,6 +83,7 @@ def stop(task_id:int,_:Admin,db:DB):
     if not task: raise HTTPException(404,'任务不存在')
     if task.status in {'STOPPED','STOP_REQUESTED','COMPLETED','COMPLETED_WITH_ERRORS'}:
         return {'code':202,'message':'success','data':dump(task)}
+    close_verification_session = task.status == 'PAUSED' and '安全验证' in (task.error_message or '')
     if task.status in {'PENDING','FAILED','PAUSED'}:
         task.status='STOPPED';task.current_stage=None;task.current_note=None;task.finished_at=datetime.now(timezone.utc)
     elif task.status == 'RUNNING':
@@ -92,6 +93,12 @@ def stop(task_id:int,_:Admin,db:DB):
     # 必须先提交停止状态再 kill 子进程。worker 在子进程退出后会重新检查数据库；
     # 如果先 kill，它可能仍读到 RUNNING 并把正常停止误判为 FAILED。
     db.commit()
+    if close_verification_session:
+        try:
+            OpenCLIAdapter(get_settings()).close_session()
+        except Exception as exc:
+            db.add(TaskLog(task_id=task.id,level='WARNING',message=f'关闭验证页面失败：{exc}',created_at=datetime.now(timezone.utc)))
+            db.commit()
     from app.services.task_registry import kill as kill_task_pid
     pid_killed = kill_task_pid(task_id, run_token=task.run_token, timeout=5.0)
     db.add(TaskLog(task_id=task.id,level='INFO',message=f'已请求停止抓取（状态置为 {task.status}, 子进程已 kill={pid_killed}）',created_at=datetime.now(timezone.utc)))

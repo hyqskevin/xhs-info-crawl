@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.crawler import AuthenticationRequired, OpenCLIError, OpenCLITimeout, ScrollPolicy, check_login, collect_with_scroll, filter_recent_notes, map_opencli_error, search_recent_notes
+from app.services.crawler import AuthenticationRequired, OpenCLIError, OpenCLITimeout, ScrollPolicy, VerificationRequired, check_login, collect_with_scroll, filter_recent_notes, is_verification_required, map_opencli_error, search_recent_notes
 from app.services.dedup import classify_similarity, merge_activities, similarity_score
 from app.services.extraction import extract_activity_fields
 from app.services.ocr import OCRService
@@ -61,6 +61,27 @@ def test_crawler_filters_recent_notes_and_maps_typed_errors() -> None:
     assert isinstance(map_opencli_error(75), OpenCLITimeout)
     assert isinstance(map_opencli_error(77), AuthenticationRequired)
     assert isinstance(map_opencli_error(78), OpenCLIError)
+
+
+@pytest.mark.parametrize("message", [
+    "captcha challenge detected",
+    "请完成安全验证后继续访问",
+    "请扫码验证",
+    "risk verification required",
+])
+def test_explicit_xhs_verification_signals_are_classified(message: str) -> None:
+    assert is_verification_required(message) is True
+    assert isinstance(VerificationRequired("verify"), AuthenticationRequired)
+
+
+@pytest.mark.parametrize("message", [
+    "opencli command timeout",
+    "验证结果已保存",
+    "参数验证失败",
+    "network connection reset",
+])
+def test_unrelated_messages_are_not_verification_signals(message: str) -> None:
+    assert is_verification_required(message) is False
 
 
 def test_crawler_checks_login_before_search_and_pauses_on_auth_error() -> None:

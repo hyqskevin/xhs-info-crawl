@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 from app.core.config import Settings
-from app.services.crawler import AuthenticationRequired, OpenCLITimeout, OpenCLIError
+from app.services.crawler import AuthenticationRequired, OpenCLITimeout, OpenCLIError, VerificationRequired, is_verification_required
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ class OpenCLIAdapter:
         self._current_run_token: str | None = None
         self._execution_guard: Callable[[], None] | None = None
         self._warning_sink: Callable[[str], None] | None = None
+        self._preserve_browser_tab = False
 
     def bind_task(
         self,
@@ -54,6 +55,8 @@ class OpenCLIAdapter:
             logger.exception("OpenCLI warning sink failed")
 
     def _close_browser_tab(self) -> None:
+        if self._preserve_browser_tab:
+            return
         try:
             self.run(
                 ["browser", self.session, "close"],
@@ -62,6 +65,11 @@ class OpenCLIAdapter:
             )
         except Exception as exc:
             self._warn(f"浏览器标签页清理失败: {exc}")
+
+    def close_session(self) -> None:
+        """Explicitly close a preserved crawler session after the user ends a paused task."""
+        self._preserve_browser_tab = False
+        self._close_browser_tab()
 
     @staticmethod
     def _kill_and_reap(proc: subprocess.Popen) -> None:
@@ -126,16 +134,20 @@ class OpenCLIAdapter:
         # 必须先重新读取任务所有权，避免把正常停止误写成 OpenCLIError/FAILED。
         self._assert_execution_active(enforce_execution)
         output = (stdout or "").strip()
+        error_output = (stderr or "").strip() or output
+        if proc.returncode and is_verification_required(f"{output}\n{error_output}"):
+            self._preserve_browser_tab = True
+            raise VerificationRequired("检测到小红书安全验证，请在 Chrome 完成后点击检测登录并继续")
         if proc.returncode == 77:
             raise AuthenticationRequired('请在 Chrome 登录小红书后重试')
         if proc.returncode == 75:
             # opencli 内部命令超时；提示用户调大 OPENCLI_BROWSER_COMMAND_TIMEOUT
-            stderr_str = (stderr or "").strip() or output
+            stderr_str = error_output
             raise OpenCLITimeout(
                 f'opencli 内部命令超时（exit 75）：{stderr_str}；可调大 .env 中的 OPENCLI_BROWSER_COMMAND_TIMEOUT'
             )
         if proc.returncode:
-            stderr_str = (stderr or "").strip() or output
+            stderr_str = error_output
             # opencli 在 url/参数为空时返回 "✖ Missing url"
             if 'Missing url' in stderr_str:
                 raise OpenCLIError(

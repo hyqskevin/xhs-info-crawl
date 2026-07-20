@@ -5,6 +5,7 @@ import pytest
 from app.core.config import Settings
 from app.services import task_registry
 from app.services.opencli_adapter import OpenCLIAdapter
+from app.services.crawler import VerificationRequired
 
 
 class ExecutionStoppedForTest(Exception):
@@ -140,6 +141,25 @@ def test_search_closes_session_tab_when_middle_command_stops(monkeypatch) -> Non
     assert close_calls == [
         (["browser", adapter.session, "close"], {"enforce_execution": False, "timeout": 10})
     ]
+
+
+def test_search_keeps_session_tab_open_when_verification_is_required(monkeypatch) -> None:
+    adapter = OpenCLIAdapter(Settings())
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args[:3] == ["browser", adapter.session, "click"]:
+            adapter._preserve_browser_tab = True
+            raise VerificationRequired("检测到小红书安全验证")
+        return {} if args[:2] == ["xiaohongshu", "whoami"] else True
+
+    monkeypatch.setattr(adapter, "run", fake_run)
+
+    with pytest.raises(VerificationRequired):
+        adapter.search_recent("宁波 活动")
+
+    assert not any(args[:3] == ["browser", adapter.session, "close"] for args in calls)
 
 
 def test_note_attempts_cleanup_when_open_command_is_interrupted(monkeypatch) -> None:

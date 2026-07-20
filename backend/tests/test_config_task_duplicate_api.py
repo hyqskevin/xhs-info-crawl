@@ -122,6 +122,25 @@ def test_task_stop_transitions_are_safe_and_idempotent(client: TestClient, db_se
     assert client.post('/api/v1/tasks/99999/stop', headers=headers).status_code == 404
 
 
+def test_stopping_paused_verification_task_closes_preserved_session(client: TestClient, db_session: Session, headers, monkeypatch):
+    task = CrawlTask(
+        type='mixed',
+        status='PAUSED',
+        params={},
+        error_message='检测到小红书安全验证，请人工处理',
+    )
+    db_session.add(task)
+    db_session.commit()
+    closed = []
+    monkeypatch.setattr('app.api.v1.tasks.OpenCLIAdapter.close_session', lambda self: closed.append(self.session))
+
+    response = client.post(f'/api/v1/tasks/{task.id}/stop', headers=headers)
+
+    assert response.status_code == 202
+    assert response.json()['data']['status'] == 'STOPPED'
+    assert closed == ['xhs-crawler']
+
+
 def test_stopped_task_can_restart_with_same_id(client: TestClient, db_session: Session, headers, monkeypatch):
     city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'keywords': ['活动'], 'recent_filter': '一周内'}, headers=headers).json()['data']
     task = CrawlTask(type='mixed', status='STOPPED', params={'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一周内', 'blogger_ids': []}, total_notes=10, extracted_notes=3, success_notes=3)
