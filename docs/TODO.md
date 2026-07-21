@@ -12,7 +12,8 @@
 
 ## 当前待办
 
-- [ ] 推文 ID 雪花算法服务是什么，整个项目有用到算法的都整理出来写一份文档md
+- [x] 推文 ID 雪花算法服务是什么，整个项目有用到算法的都整理出来写一份文档md
+  - 结果：`docs/superpowers/qa/algorithms.md` 梳理项目所有算法位置（含 XHS 雪花、UUID v4、JWT HS256、Argon2、SequenceMatcher、Celery 文件 broker 等），每一项给出文件 / 触发点 / 入参出参 / 强度评估 / 阶段二待替换路径。
 - [ ] 多账号体系 + RBAC（分组 + 权限）
   - 目标：当前只有 admin。升级为多账号平等（`Administrator` 组默认有全部权限），新增"账号管理"左侧 nav；账号可以分组、分组关联权限集；`sub` 角色划分保留为未来"子账号"扩展。
   - 验收：新 `users/groups/permissions/group_permissions/user_groups` 表；新 `AccountsView.vue`（左 nav 新增），含账号 / 分组 / 权限 三 tab；后端 `require_permission(code)` 替换 `require_admin`；前端 49+ 测试，build 通过；实操：用 admin 新建 editor 账号 → 限定权限 → editor 登录验证无权页面 403。
