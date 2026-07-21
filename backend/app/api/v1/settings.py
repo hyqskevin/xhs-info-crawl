@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.core.security import require_admin
 from app.models.blogger_city import BloggerCity
 from app.models.config import Blogger, City, Keyword
+from app.models.keyword_group import KeywordGroup, KeywordGroupCity, KeywordGroupWord
 from app.services.opencli_adapter import OpenCLIAdapter
 from app.services.browser_launcher import BrowserLaunchError, open_xhs_login
 from app.services.blogger_import import BloggerImportError, generate_blogger_template, import_bloggers
@@ -26,6 +27,129 @@ class CityIn(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     recent_filter: RecentFilter = "一周内"
     enabled: bool = True
+
+
+class KeywordGroupIn(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = None
+    city_codes: list[str] = Field(default_factory=list)
+    words: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class KeywordGroupWordsIn(BaseModel):
+    words: list[str]
+
+
+class KeywordGroupCitiesIn(BaseModel):
+    city_codes: list[str]
+
+
+def _dump_keyword_group(db: Session, kg: KeywordGroup) -> dict:
+    city_codes = sorted(
+        row.city_code for row in db.scalars(
+            select(KeywordGroupCity).where(KeywordGroupCity.keyword_group_id == kg.id)
+        ).all()
+    )
+    words = sorted(
+        row.word for row in db.scalars(
+            select(KeywordGroupWord).where(KeywordGroupWord.keyword_group_id == kg.id)
+        ).all()
+    )
+    return {
+        "id": kg.id,
+        "name": kg.name,
+        "description": kg.description,
+        "enabled": kg.enabled,
+        "city_codes": city_codes,
+        "words": words,
+        "created_at": kg.created_at,
+    }
+
+
+@router.get("/keyword-groups")
+def list_keyword_groups(city_code: str | None = None, _: Admin = None, db: DB = None) -> dict:
+    stmt = select(KeywordGroup).order_by(KeywordGroup.id)
+    if city_code:
+        stmt = stmt.join(
+            KeywordGroupCity, KeywordGroupCity.keyword_group_id == KeywordGroup.id
+        ).where(KeywordGroupCity.city_code == city_code)
+    groups = db.scalars(stmt.distinct()).all()
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {"items": [_dump_keyword_group(db, g) for g in groups]},
+    }
+
+
+@router.get("/keyword-groups/{kg_id}")
+def get_keyword_group(kg_id: int, _: Admin, db: DB) -> dict:
+    kg = db.get(KeywordGroup, kg_id)
+    if kg is None:
+        raise HTTPException(404, "关键词组不存在")
+    return {"code": 200, "message": "success", "data": _dump_keyword_group(db, kg)}
+
+
+@router.post("/keyword-groups")
+def create_keyword_group(payload: KeywordGroupIn, _: Admin, db: DB) -> dict:
+    existing = db.scalar(select(KeywordGroup).where(KeywordGroup.name == payload.name))
+    if existing is not None:
+        raise HTTPException(409, f"关键词组名称 '{payload.name}' 已存在")
+
+    kg = KeywordGroup(name=payload.name, description=payload.description, enabled=payload.enabled)
+    db.add(kg)
+    db.flush()
+    for code in dict.fromkeys(payload.city_codes):
+        if db.scalar(select(City).where(City.code == code)) is None:
+            raise HTTPException(422, f"城市代码 '{code}' 不存在")
+        db.add(KeywordGroupCity(keyword_group_id=kg.id, city_code=code, enabled=True))
+    for word in dict.fromkeys(payload.words):
+        if not word.strip():
+            continue
+        db.add(KeywordGroupWord(keyword_group_id=kg.id, word=word.strip(), enabled=True))
+    db.commit()
+    db.refresh(kg)
+    return {"code": 200, "message": "success", "data": _dump_keyword_group(db, kg)}
+
+
+@router.put("/keyword-groups/{kg_id}/words")
+def replace_keyword_group_words(kg_id: int, payload: KeywordGroupWordsIn, _: Admin, db: DB) -> dict:
+    kg = db.get(KeywordGroup, kg_id)
+    if kg is None:
+        raise HTTPException(404, "关键词组不存在")
+    db.execute(delete(KeywordGroupWord).where(KeywordGroupWord.keyword_group_id == kg_id))
+    for word in dict.fromkeys(payload.words):
+        if not word.strip():
+            continue
+        db.add(KeywordGroupWord(keyword_group_id=kg_id, word=word.strip(), enabled=True))
+    db.commit()
+    db.refresh(kg)
+    return {"code": 200, "message": "success", "data": _dump_keyword_group(db, kg)}
+
+
+@router.put("/keyword-groups/{kg_id}/cities")
+def replace_keyword_group_cities(kg_id: int, payload: KeywordGroupCitiesIn, _: Admin, db: DB) -> dict:
+    kg = db.get(KeywordGroup, kg_id)
+    if kg is None:
+        raise HTTPException(404, "关键词组不存在")
+    db.execute(delete(KeywordGroupCity).where(KeywordGroupCity.keyword_group_id == kg_id))
+    for code in dict.fromkeys(payload.city_codes):
+        if db.scalar(select(City).where(City.code == code)) is None:
+            raise HTTPException(422, f"城市代码 '{code}' 不存在")
+        db.add(KeywordGroupCity(keyword_group_id=kg_id, city_code=code, enabled=True))
+    db.commit()
+    db.refresh(kg)
+    return {"code": 200, "message": "success", "data": _dump_keyword_group(db, kg)}
+
+
+@router.delete("/keyword-groups/{kg_id}")
+def delete_keyword_group(kg_id: int, _: Admin, db: DB) -> dict:
+    kg = db.get(KeywordGroup, kg_id)
+    if kg is None:
+        raise HTTPException(404, "关键词组不存在")
+    db.delete(kg)
+    db.commit()
+    return {"code": 200, "message": "success", "data": {"deleted_id": kg_id}}
 
 
 class KeywordIn(BaseModel):
