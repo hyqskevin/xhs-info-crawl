@@ -25,11 +25,13 @@ def test_window_treats_missing_start_as_unknown() -> None:
     assert window.classify(None, None) == "unknown"
 
 
-def test_yearless_date_uses_next_year_only_when_inside_window() -> None:
+def test_yearless_date_uses_next_year_when_past_now() -> None:
+    """新规则：无年份月日若 < now，加 1 年。不再因 60 天窗口返回 None。"""
     reference = datetime(2026, 12, 20)
 
     assert normalize_activity_datetime("1月5日", reference, 60).startswith("2027-01-05")
-    assert normalize_activity_datetime("7月1日", reference, 60) is None
+    # 7月1日 (now=2026-12-20 已过) 也加 1 年到 2027-07-01
+    assert normalize_activity_datetime("7月1日", reference, 60).startswith("2027-07-01")
 
 
 def test_explicit_year_is_never_rewritten() -> None:

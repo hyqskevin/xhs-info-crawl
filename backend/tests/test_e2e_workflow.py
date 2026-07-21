@@ -18,7 +18,7 @@ def test_editorial_workflow_from_login_to_dual_report_download(client: TestClien
 
     note = Note(task_id=1, platform_note_id="summer-post", title="夏日音乐节推文", content="正文", source_url="https://www.xiaohongshu.com/explore/summer-post", city_code="shanghai", status="PROCESSED", review_status="PENDING", published_at=datetime(2025, 7, 20, 12, tzinfo=timezone.utc), raw_data={})
     db_session.add(note); db_session.flush()
-    crawled = Activity(note_id=note.id, name="夏日音乐节", city_code="shanghai", start_time=datetime(2025, 7, 20, 18, tzinfo=timezone.utc), end_time=datetime(2025, 7, 20, 22, tzinfo=timezone.utc), location="徐汇滨江", price="免费", type="演出", source_url=note.source_url, summary="户外音乐节", status="RAW")
+    crawled = Activity(note_id=note.id, name="夏日音乐节", city_code="shanghai", start_time=datetime(2025, 7, 20, 18, tzinfo=timezone.utc), end_time=datetime(2025, 7, 20, 22, tzinfo=timezone.utc), location="徐汇滨江", price="免费", type="演出", source_url=note.source_url, summary="户外音乐节")
     db_session.add(crawled)
     db_session.commit()
     activity_id = crawled.id

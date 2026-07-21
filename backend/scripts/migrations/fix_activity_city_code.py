@@ -22,7 +22,7 @@ def run_migration(db: Session) -> int:
     fixed = 0
     activities = (
         db.query(Activity)
-        .filter(Activity.status.notin_(["DELETED", "MERGED"]))
+        .filter(Activity.deleted_at.is_(None))
         .all()
     )
     for activity in activities:
@@ -40,7 +40,7 @@ def main() -> None:
 
     db = SessionLocal()
     try:
-        total = db.query(Activity).filter(Activity.status.notin_(["DELETED", "MERGED"])).count()
+        total = db.query(Activity).filter(Activity.deleted_at.is_(None)).count()
         fixed = run_migration(db)
         print(f"扫描 {total} / 已修正 {fixed}")
     finally:

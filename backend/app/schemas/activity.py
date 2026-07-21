@@ -13,11 +13,11 @@ class ActivityCreate(BaseModel):
     type: str
     source_url: str = ""
     summary: str = ""
-    status: str = "RAW"
     confidence: float = 1.0
 
 
 class ActivityUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str | None = None
     city_code: str | None = None
     start_time: datetime | None = None
@@ -27,7 +27,6 @@ class ActivityUpdate(BaseModel):
     type: str | None = None
     source_url: str | None = None
     summary: str | None = None
-    status: str | None = None
 
 
 class ActivityRead(ActivityCreate):
@@ -37,3 +36,4 @@ class ActivityRead(ActivityCreate):
     source_image_indexes: list[int] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+    deleted_at: datetime | None = None

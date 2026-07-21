@@ -20,6 +20,8 @@ from app.services.extraction import extract_activities
 from app.services.minimax import MiniMaxClient
 from app.services.note_identity import extract_platform_note_id
 from app.services.ocr import OCRService
+from app.services.note_id_published_at import note_id_published_at
+from app.services.published_at import extract_published_at
 from app.services.opencli_adapter import OpenCLIAdapter
 from app.services.paddleocr_adapter import PaddleOCREngine
 from app.services.pipeline import deduplicate_results, run_stage, title_matches_keywords
@@ -144,6 +146,19 @@ def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, ada
     set_progress(db, task, run_token, "DOWNLOADING", item.get("title") or note_url)
     detail = run_stage(lambda: adapter.note(note_url), attempts, delay)
     assert_execution_active(db, task.id, run_token)
+    # 优先级 1：基于 note ID（雪花算法）反推时间戳，精度到秒，最可靠。
+    # 优先级 2：DOM 文本解析（"3天前" / "07-19" 等）。
+    # 优先级 3：started_at 兜底。
+    snowflake_at = note_id_published_at(note_url)
+    dom_at = extract_published_at(detail, fallback_now=started_at)
+    if snowflake_at is not None:
+        published_at = snowflake_at
+    elif dom_at is not None:
+        published_at = dom_at
+    else:
+        published_at = None
+    if published_at is None:
+        log(db, task.id, "INFO", f"未解析真实发布时间：{item.get('title') or note_url}")
     note = Note(
         task_id=task.id,
         platform_note_id=extract_platform_note_id(note_url) or note_url.split("/")[-1].split("?")[0],
@@ -152,6 +167,7 @@ def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, ada
         source_url=note_url,
         city_code=city,
         status="DOWNLOADED",
+        published_at=published_at,
         raw_data=detail,
     )
     db.add(note)
@@ -192,26 +208,50 @@ def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, ada
 
     set_progress(db, task, run_token, "EXTRACTING", note.title)
     combined = f"标题：{note.title}\n正文：{note.content}\n" + "\n".join(ocr_texts)
-    now = started_at.replace(tzinfo=None)
+    # now 以 Note.published_at 为基准（如已解析），否则 fallback 到任务开始时间
+    reference_now = note.published_at.replace(tzinfo=None) if note.published_at else started_at.replace(tzinfo=None)
     if settings.minimax_api_key:
         client = MiniMaxClient(settings)
         try:
-            extracted = run_stage(lambda: extract_activities(combined, now, lambda text: client.extract_many(text, started_at)), attempts, delay)
+            extracted = run_stage(lambda: extract_activities(combined, reference_now, lambda text: client.extract_many(text, started_at)), attempts, delay)
         except Exception as exc:
             log(db, task.id, "WARNING", f"MiniMax 提取失败，已降级规则提取：{exc}")
-            extracted = extract_activities(combined, now, None)
+            extracted = extract_activities(combined, reference_now, None)
     else:
-        extracted = extract_activities(combined, now, None)
+        extracted = extract_activities(combined, reference_now, None)
     assert_execution_active(db, task.id, run_token)
 
-    window = ActivityWindow(started_at, settings.activity_future_window_days, settings.celery_timezone)
-    for fields in extracted:
+    from app.services.activity_validator import classify_zero_activity, validate_activities
+
+    classification = classify_zero_activity(note, extracted)
+    if classification in {"all_before_publish", "no_activity_signals"}:
+        note.status = "NO_ACTIVITIES"
+        log(db, task.id, "INFO", f"未提取到有效活动 原因={classification} url={note.source_url}")
+        task.extracted_notes += 1
+        db.commit()
+        set_progress(db, task, run_token, "ARCHIVING", note.title)
+        return False
+    if classification == "minimax_empty_retryable":
+        note.status = "EMPTY_RESULT_RETRYABLE"
+        log(db, task.id, "INFO", f"MiniMax 返回空但有信号，可重试 url={note.source_url}")
+        task.extracted_notes += 1
+        db.commit()
+        set_progress(db, task, run_token, "ARCHIVING", note.title)
+        return False
+
+    accepted, rejected = validate_activities(note, extracted)
+    for reason in rejected:
+        log(db, task.id, "INFO", f"跳过活动 原因={reason}")
+    if not accepted:
+        note.status = "NO_ACTIVITIES"
+        log(db, task.id, "INFO", f"全部活动被过滤 url={note.source_url}")
+        task.extracted_notes += 1
+        db.commit()
+        set_progress(db, task, run_token, "ARCHIVING", note.title)
+        return False
+
+    for fields in accepted:
         assert_execution_active(db, task.id, run_token)
-        window_status = window.classify(fields.get("start_time"), fields.get("end_time"))
-        if window_status in {"past", "future"}:
-            task.skipped_activities += 1
-            log(db, task.id, "INFO", f"活动时间超出有效窗口，已跳过：{fields.get('name') or note.title} 日期={fields.get('start_time')} 原因={window_status}")
-            continue
         activity = Activity(
             note_id=note.id,
             name=fields.get("name") or note.title,
@@ -224,7 +264,6 @@ def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, ada
             source_url=note.source_url,
             source_image_indexes=fields.get("source_image_indexes") or [],
             summary=fields.get("summary") or note.content[:300],
-            status=fields["status"],
             confidence=float(fields.get("confidence") or 0),
         )
         db.add(activity)

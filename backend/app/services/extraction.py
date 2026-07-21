@@ -7,6 +7,13 @@ LLM = Callable[[str], dict[str, Any]]
 
 
 def normalize_activity_datetime(value: Any, now: datetime, future_window_days: int = 60) -> str | None:
+    """解析活动日期。
+
+    支持：
+    - 绝对日期（含年）：2025-07-20、2025/07/20、2025年7月20日（可带时分）
+    - 无年份格式：MM-DD / M.DD / 7月18日，结合 `now` 推断年份
+      - 解析结果超过 now 2 天，回退 1 年
+    """
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
@@ -16,7 +23,7 @@ def normalize_activity_datetime(value: Any, now: datetime, future_window_days: i
         return datetime.fromisoformat(text.replace("Z", "+00:00")).isoformat()
     except ValueError:
         pass
-    match = re.fullmatch(r"(?:(20\d{2})[-/.年])?(\d{1,2})(?:[-/.]|月)(\d{1,2})(?:日)?(?:[ T]?(\d{1,2})(?::(\d{1,2}))?)?", text)
+    match = re.fullmatch(r"(?:(20\d{2})[-/.年])?(\d{1,2})(?:[-/.月])(\d{1,2})(?:日)?(?:[ T]?(\d{1,2})(?::(\d{1,2}))?)?", text)
     if not match:
         return None
     try:
@@ -28,10 +35,11 @@ def normalize_activity_datetime(value: Any, now: datetime, future_window_days: i
             int(match.group(4) or 0),
             int(match.group(5) or 0),
         )
-        if not explicit_year and parsed < now.replace(tzinfo=None):
-            parsed = parsed.replace(year=parsed.year + 1)
-        if not explicit_year and parsed > now.replace(tzinfo=None) + timedelta(days=future_window_days):
-            return None
+        if not explicit_year:
+            now_naive = now.replace(tzinfo=None) if isinstance(now, datetime) else now
+            # 无年份：先按当前年解析；若早于 now（比如 7-17 推断 1-5），加 1 年（指向未来）
+            if parsed < now_naive:
+                parsed = parsed.replace(year=parsed.year + 1)
         return parsed.isoformat()
     except ValueError:
         return None
@@ -49,20 +57,26 @@ def normalize_activity_row(row: dict[str, Any], now: datetime, future_window_day
     if isinstance(confidence, str):
         confidence = {"high": 0.9, "medium": 0.6, "low": 0.3}.get(confidence.lower(), 0)
     item["confidence"] = max(0.0, min(1.0, float(confidence or 0)))
-    item["status"] = "RAW" if item.get("start_time") and item.get("location") else "NEEDS_REVIEW"
     return item
 
 
 def extract_activity_fields(text: str, now: datetime, llm: LLM | None) -> dict[str, Any]:
     iso = re.search(r"(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?", text)
     cn = re.search(r"(\d{1,2})月(\d{1,2})日(?:\s*(\d{1,2}):(\d{2}))?", text)
+    short_dot = re.search(r"(?<!\d)(\d{1,2})\.(\d{1,2})(?:[ T]?(\d{1,2}):(\d{1,2}))?", text)
     start_time = None
     if iso:
         start_time = datetime(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)), int(iso.group(4) or 0), int(iso.group(5) or 0)).isoformat()
     elif cn:
         start_time = datetime(now.year, int(cn.group(1)), int(cn.group(2)), int(cn.group(3) or 0), int(cn.group(4) or 0)).isoformat()
+    elif short_dot:
+        candidate = datetime(now.year, int(short_dot.group(1)), int(short_dot.group(2)), int(short_dot.group(3) or 0), int(short_dot.group(4) or 0))
+        now_naive = now.replace(tzinfo=None) if isinstance(now, datetime) else now
+        if candidate < now_naive:
+            candidate = candidate.replace(year=candidate.year + 1)
+        start_time = candidate.isoformat()
     price_match = re.search(r"(免费|\d+(?:\.\d+)?\s*元(?:起)?)", text)
-    location_match = re.search(r"(?:地点[:：]?\s*)?([\u4e00-\u9fa5]{2,}(?:中心|滨江|广场|公园|书局|剧场|博物馆))", text)
+    location_match = re.search(r"(?:地点[:：]?\s*)?([一-龥]{2,}(?:中心|滨江|广场|公园|书局|剧场|博物馆))", text)
     kind = "演出" if re.search(r"音乐|演出|相声|乐队", text) else "展览" if re.search(r"展览|艺术展", text) else "其他"
     result: dict[str, Any] = {"name": text.strip()[:30] or None, "start_time": start_time, "location": location_match.group(1) if location_match else None, "price": price_match.group(1) if price_match else None, "type": kind}
     if (not result["start_time"] or not result["location"]) and llm:

@@ -25,8 +25,8 @@ def test_weekly_report_selects_approved_posts_by_publish_time_and_keeps_all_chil
     db_session.add(note)
     db_session.flush()
     db_session.add_all([
-        Activity(note_id=note.id, name="本周活动", city_code="nb", type="展览", status="RAW", start_time=datetime(2026, 7, 17, tzinfo=timezone.utc)),
-        Activity(note_id=note.id, name="下月活动", city_code="nb", type="演出", status="NEEDS_REVIEW", start_time=datetime(2026, 8, 17, tzinfo=timezone.utc)),
+        Activity(note_id=note.id, name="本周活动", city_code="nb", type="展览", start_time=datetime(2026, 7, 17, tzinfo=timezone.utc)),
+        Activity(note_id=note.id, name="下月活动", city_code="nb", type="演出", start_time=datetime(2026, 8, 17, tzinfo=timezone.utc)),
         NoteImage(note_id=note.id, storage_key="images/post.jpg", original_url="https://img.example/post.jpg", ocr_text="OCR文字", ocr_status="success"),
     ])
     db_session.commit()

@@ -73,6 +73,8 @@
 
 ## 活动接口
 
+子活动无审核状态，审核完全收敛到推文维度（`/api/v1/notes`）。
+
 ### GET /api/v1/activities
 
 - 描述：活动列表（分页、筛选）
@@ -80,8 +82,8 @@
   - `city`：城市 `code`（如 `city-99f1e469`、`nb`），必须从 `GET /api/v1/settings/cities` 取得，前端按 `City.code` 传参；不允许中文字面量
   - `type`：活动类型
   - `start_date` / `end_date`：举办时间范围
-  - `status`：活动状态
   - `page` / `page_size`
+- 默认不含已软删除活动（`deleted_at IS NOT NULL`）。
 
 - 响应：
 
@@ -100,8 +102,9 @@
         "price": "免费",
         "type": "演出",
         "source_url": "https://www.xiaohongshu.com/...",
-        "status": "APPROVED",
-        "created_at": "2025-07-14T02:30:00Z"
+        "confidence": 0.85,
+        "created_at": "2025-07-14T02:30:00Z",
+        "deleted_at": null
       }
     ]
   },
@@ -117,6 +120,7 @@
 
 - 描述：活动详情
 - 响应：包含活动字段、原始笔记 `note`、来源图片 `images` 和图片 OCR 状态
+- 默认不含软删除活动；可加 `?include_deleted=true` 查询已软删活动
 
 ### GET /api/v1/activities/:id/images/:image_id
 
@@ -126,18 +130,18 @@
 
 ### POST /api/v1/activities/batch/approve
 
-- 描述：批量将活动标记为已通过，可重复提交。
-- 请求：`{"ids": [1, 2, 3]}`，最多 100 条。
-- 响应：`approved_ids`、`approved_count`；空数组返回 `422`。
+- 描述：**已下线**。
+- 响应：`410 Gone`，`detail="活动审核已迁到推文维度，请使用 /api/v1/notes/{id}/review"`。
 
 ### PUT /api/v1/activities/:id
 
-- 描述：更新活动
+- 描述：更新活动（名称、地点、城市、开始/结束时间、简介、来源 URL）
 - 请求：活动字段
+- 不接受 `status` 字段；如传入返回 `422`，detail 提示“活动已取消审核状态字段”
 
 ### DELETE /api/v1/activities/:id
 
-- 描述：删除活动
+- 描述：软删除活动（`deleted_at = NOW()`）
 
 ### DELETE /api/v1/activities/batch
 
@@ -335,3 +339,33 @@
 - `/api/v1/duplicates` 已改为推文 A/B 候选，保留一方会将另一方标记为 `MERGED`。
 - 创建与重启抓取任务后，响应中的 `run_token` 会随 Celery 消息传递，用于拒绝陈旧执行。
 - 周报按推文发布时间和单城市生成，响应同时返回 `note_count` 与 `activity_count`。
+
+## 2026-07-21 推文编辑与单条审核
+
+### PUT /api/v1/notes/:id
+
+- 描述：编辑一篇可见推文的标题、正文、城市和发布时间。
+- 请求：
+
+```json
+{
+  "title": "更新后的推文标题",
+  "content": "更新后的正文",
+  "city_code": "shanghai",
+  "published_at": "2026-07-21T10:30:00Z"
+}
+```
+
+- `title` 去除首尾空白后不能为空，最大 512 字符。
+- `city_code` 必须对应已启用城市。
+- `published_at` 可以为 `null`，表示发布时间待确认。
+- `source_url` 不属于可编辑字段；即使请求中额外携带也不会修改数据库原文链接。
+- 成功返回更新后的推文详情；推文不存在、已删除或已合并返回 `404`，字段或城市无效返回 `422`。
+
+### POST /api/v1/notes/:id/review
+
+- 描述：审核一篇推文，不依赖列表批量勾选。
+- 请求：`{"status": "APPROVED"}` 或 `{"status": "REJECTED"}`。
+- 成功响应：`{"id": 1, "review_status": "APPROVED"}`。
+- 其他状态返回 `422`；推文不存在、已删除或已合并返回 `404`。
+- `POST /api/v1/notes/batch/approve` 保持不变，继续支持批量通过。

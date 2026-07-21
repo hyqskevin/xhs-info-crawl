@@ -30,7 +30,7 @@ def merge_activities(left: dict[str, Any], right: dict[str, Any], keep: Literal[
     selected = dict(left if keep == "a" else right)
     note_ids = list(dict.fromkeys([*left.get("related_note_ids", []), *right.get("related_note_ids", [])]))
     selected["related_note_ids"] = note_ids
-    selected["status"] = "APPROVED"
+    selected.pop("status", None)
     return selected
 
 
@@ -38,7 +38,7 @@ def create_duplicate_candidates(db: Session, activity: Activity) -> list[Duplica
     """Create review candidates for same-city activities; exact/high matches are surfaced, not silently deleted."""
     created=[]
     different_note = Activity.note_id != activity.note_id if activity.note_id is not None else true()
-    rows=db.scalars(select(Activity).where(Activity.id != activity.id,different_note,Activity.city_code == activity.city_code,Activity.status.notin_(['DELETED','MERGED']))).all()
+    rows=db.scalars(select(Activity).where(Activity.id != activity.id,different_note,Activity.city_code == activity.city_code,Activity.deleted_at.is_(None))).all()
     left={c.name:getattr(activity,c.name) for c in activity.__table__.columns}
     for other in rows:
         right={c.name:getattr(other,c.name) for c in other.__table__.columns}; score=similarity_score(left,right)

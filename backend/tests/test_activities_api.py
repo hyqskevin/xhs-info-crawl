@@ -15,8 +15,19 @@ def headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {create_access_token({'sub': 'admin', 'role': 'admin'})}"}
 
 
-def make_activity(index: int, city: str = "shanghai", kind: str = "演出", status: str = "APPROVED") -> Activity:
-    return Activity(name=f"活动{index}", city_code=city, start_time=datetime(2025, 7, 20, 18, tzinfo=timezone.utc), end_time=datetime(2025, 7, 20, 22, tzinfo=timezone.utc), location="徐汇滨江", price="免费", type=kind, source_url=f"https://example.com/{index}", summary="活动简介", status=status, confidence=0.85)
+def make_activity(index: int, city: str = "shanghai", kind: str = "演出") -> Activity:
+    return Activity(
+        name=f"活动{index}",
+        city_code=city,
+        start_time=datetime(2025, 7, 20, 18, tzinfo=timezone.utc),
+        end_time=datetime(2025, 7, 20, 22, tzinfo=timezone.utc),
+        location="徐汇滨江",
+        price="免费",
+        type=kind,
+        source_url=f"https://example.com/{index}",
+        summary="活动简介",
+        confidence=0.85,
+    )
 
 
 def test_get_activities_default_pagination(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
@@ -28,18 +39,27 @@ def test_get_activities_default_pagination(client: TestClient, db_session: Sessi
     assert response.json()["pagination"] == {"page": 1, "page_size": 20, "total": 25}
 
 
-def test_get_activities_filters_by_city_and_multiple_fields(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
+def test_get_activities_filters_by_city_and_type(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
     db_session.add_all([make_activity(1), make_activity(2, "beijing"), make_activity(3, kind="展览")])
     db_session.commit()
     assert client.get("/api/v1/activities?city=shanghai", headers=headers).json()["pagination"]["total"] == 2
-    response = client.get("/api/v1/activities?city=shanghai&type=演出&status=APPROVED", headers=headers)
+    response = client.get("/api/v1/activities?city=shanghai&type=演出", headers=headers)
     assert response.json()["pagination"]["total"] == 1
+
+
+def test_get_activities_ignores_status_filter_parameter(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
+    db_session.add_all([make_activity(i) for i in range(3)])
+    db_session.commit()
+    response = client.get("/api/v1/activities?status=APPROVED", headers=headers)
+    # 子活动不再有 status 字段，查询参数被忽略时列表应返回全部 3 条
+    assert response.status_code == 200
+    assert response.json()["pagination"]["total"] == 3
 
 
 def test_get_activities_date_range_and_invalid_date(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
     db_session.add_all([
         make_activity(1),
-        Activity(name="次日活动", city_code="shanghai", start_time=datetime(2025, 7, 21, 10, tzinfo=timezone.utc), location="静安", type="展览", status="RAW"),
+        Activity(name="次日活动", city_code="shanghai", start_time=datetime(2025, 7, 21, 10, tzinfo=timezone.utc), location="静安", type="展览"),
     ])
     db_session.commit()
     assert client.get("/api/v1/activities?start_date=2025-07-20&end_date=2025-07-27", headers=headers).json()["pagination"]["total"] == 2
@@ -68,7 +88,7 @@ def test_activity_detail_returns_note_and_protected_source_images(client: TestCl
     outside_file.write_bytes(b"outside")
     note = Note(task_id=1, platform_note_id="note-images", title="宁波活动图集", content="页面正文", source_url="https://xhs/note-images", city_code="nb", status="PROCESSED", raw_data={})
     db_session.add(note); db_session.flush()
-    activity = Activity(name="图集活动", note_id=note.id, city_code="nb", start_time=datetime(2026, 7, 20, tzinfo=timezone.utc), location="宁波", type="展览", status="RAW")
+    activity = Activity(name="图集活动", note_id=note.id, city_code="nb", start_time=datetime(2026, 7, 20, tzinfo=timezone.utc), location="宁波", type="展览")
     first = NoteImage(note_id=note.id, storage_key="archive/first.jpg", ocr_status="success", ocr_text="图片一")
     second = NoteImage(note_id=note.id, storage_key="archive/second.jpg", ocr_status="disabled", ocr_text="")
     outside = NoteImage(note_id=note.id, storage_key="../outside.jpg", ocr_status="success", ocr_text="越界")
@@ -87,26 +107,30 @@ def test_activity_detail_returns_note_and_protected_source_images(client: TestCl
     assert client.get(f"/api/v1/activities/{activity.id}/images/{outside.id}", headers=headers).status_code == 404
 
 
-def test_update_activity_and_reject_invalid_status_transition(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
+def test_update_activity_no_longer_validates_status_transition(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
     activity = make_activity(1)
     db_session.add(activity)
     db_session.commit()
     response = client.put(f"/api/v1/activities/{activity.id}", json={"name": "夏日音乐节2025", "price": "50元"}, headers=headers)
     assert response.json()["data"]["name"] == "夏日音乐节2025"
-    activity.status = "PUBLISHED"
-    db_session.commit()
-    assert client.put(f"/api/v1/activities/{activity.id}", json={"status": "RAW"}, headers=headers).status_code == 422
+    # 即使客户端仍传入 status 字段，接口应拒绝并给出明确提示
+    rejected = client.put(f"/api/v1/activities/{activity.id}", json={"status": "RAW"}, headers=headers)
+    assert rejected.status_code == 422
+    # pydantic extra='forbid' 走默认 422 响应，文案不固定；只校验 status_code
+    assert rejected.status_code == 422
 
 
-def test_delete_activity_is_soft_delete(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
+def test_delete_activity_marks_deleted_at_and_hides_from_list(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
     activity = make_activity(1)
     db_session.add(activity)
     db_session.commit()
     assert client.delete(f"/api/v1/activities/{activity.id}", headers=headers).status_code == 200
+    db_session.refresh(activity)
+    assert activity.deleted_at is not None
     assert client.get(f"/api/v1/activities/{activity.id}", headers=headers).status_code == 404
 
 
-def test_batch_delete_activities_is_atomic_soft_delete(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
+def test_batch_delete_activities_marks_deleted_at(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
     first, second = make_activity(31), make_activity(32)
     db_session.add_all([first, second]); db_session.commit()
 
@@ -115,28 +139,26 @@ def test_batch_delete_activities_is_atomic_soft_delete(client: TestClient, db_se
     assert response.status_code == 200
     assert response.json()["data"]["deleted_count"] == 2
     db_session.refresh(first); db_session.refresh(second)
-    assert first.status == second.status == "DELETED"
+    assert first.deleted_at is not None and second.deleted_at is not None
     assert client.request("DELETE", "/api/v1/activities/batch", json={"ids": [first.id]}, headers=headers).status_code == 404
     assert client.request("DELETE", "/api/v1/activities/batch", json={"ids": []}, headers=headers).status_code == 422
 
 
-def test_batch_approve_activities_is_idempotent(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
-    first = make_activity(33, status="RAW")
-    second = make_activity(34, status="NEEDS_REVIEW")
-    db_session.add_all([first, second])
+def test_batch_approve_returns_410_gone(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:
+    activity = make_activity(33)
+    db_session.add(activity)
     db_session.commit()
 
-    response = client.post("/api/v1/activities/batch/approve", json={"ids": [first.id, second.id, first.id]}, headers=headers)
+    response = client.post("/api/v1/activities/batch/approve", json={"ids": [activity.id]}, headers=headers)
 
-    assert response.status_code == 200
-    assert response.json()["data"] == {"approved_ids": [first.id, second.id], "approved_count": 2}
-    db_session.refresh(first)
-    db_session.refresh(second)
-    assert first.status == second.status == "APPROVED"
-    repeated = client.post("/api/v1/activities/batch/approve", json={"ids": [first.id, second.id]}, headers=headers)
-    assert repeated.status_code == 200
-    assert repeated.json()["data"]["approved_count"] == 2
-    assert client.post("/api/v1/activities/batch/approve", json={"ids": []}, headers=headers).status_code == 422
+    assert response.status_code == 410
+    detail = response.json().get("message") or response.json().get("detail") or ""
+    assert "推文" in detail and "/notes/" in detail
+    db_session.refresh(activity)
+    # activity 状态字段已不存在，无需变更
+    assert hasattr(activity, "deleted_at")
+    # 接口不写入任何审核字段
+    assert response.json()["data"] is None or response.json().get("data") in (None, {})
 
 
 def test_create_activity_manual_is_not_available(client: TestClient, headers: dict[str, str]) -> None:

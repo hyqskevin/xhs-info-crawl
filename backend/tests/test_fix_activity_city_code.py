@@ -16,7 +16,6 @@ def make_activity(city_code: str) -> Activity:
         type="演出",
         source_url=f"https://example.com/{city_code}",
         summary="简介",
-        status="RAW",
     )
 
 

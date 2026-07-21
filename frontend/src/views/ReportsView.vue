@@ -92,3 +92,6 @@ onMounted(load)
   </ElCard>
   <ElDialog v-model="dialog" title="周报预览" width="760"><div class="report-preview">{{ preview }}</div></ElDialog>
 </template>
+
+<style scoped>
+</style>

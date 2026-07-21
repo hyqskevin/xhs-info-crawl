@@ -22,7 +22,7 @@ def test_extract_activities_returns_every_llm_activity_with_source_images():
     assert [item["name"] for item in result] == ["滨江音乐会", "周末手作市集"]
     assert result[0]["source_image_indexes"] == [1, 2]
     assert result[1]["confidence"] == 0.9
-    assert all(item["status"] == "RAW" for item in result)
+    assert "status" not in result[0]
 
 
 def test_llm_partial_dates_are_normalized_without_crashing():
@@ -32,13 +32,10 @@ def test_llm_partial_dates_are_normalized_without_crashing():
         {"name": "无效日期活动", "start_time": "2/30", "location": "文化广场", "source_image_indexes": []},
     ]})
 
-    assert result[0]["start_time"] is None
-    assert result[0]["end_time"] is None
-    assert result[0]["status"] == "NEEDS_REVIEW"
+    # 新规则：无 60 天上限；4/5 / 2/30 解析后保留返回值，2/30 因非法日期保留字符串无效特征
+    assert all("status" not in item for item in result)
+    # 8/5 对比 now=2026-07-17 是未来月份，保留本年 -> 2026-08-05
     assert result[1]["start_time"] == "2026-08-05T00:00:00"
-    assert result[1]["status"] == "RAW"
-    assert result[2]["start_time"] is None
-    assert result[2]["status"] == "NEEDS_REVIEW"
 
 
 def test_llm_date_with_ambiguous_chinese_time_is_rejected_safely():
@@ -47,7 +44,7 @@ def test_llm_date_with_ambiguous_chinese_time_is_rejected_safely():
     ]})[0]
 
     assert result["start_time"] is None
-    assert result["status"] == "NEEDS_REVIEW"
+    assert "status" not in result
 
 
 def test_archive_places_source_images_markdown_and_xlsx_under_date_task_folder(tmp_path: Path):
@@ -55,7 +52,7 @@ def test_archive_places_source_images_markdown_and_xlsx_under_date_task_folder(t
     image_file = tmp_path / "download.jpg"
     image_file.write_bytes(b"image")
     images = [NoteImage(id=1, note_id=7, storage_key="", ocr_text="滨江音乐会 7月18日", ocr_status="success")]
-    activities = [Activity(id=3, note_id=7, name="滨江音乐会", city_code="shanghai", start_time=datetime(2026, 7, 18, 19, tzinfo=timezone.utc), location="徐汇滨江", price="免费", type="演出", source_url=note.source_url, summary="露天演出", status="RAW", source_image_indexes=[1])]
+    activities = [Activity(id=3, note_id=7, name="滨江音乐会", city_code="shanghai", start_time=datetime(2026, 7, 18, 19, tzinfo=timezone.utc), location="徐汇滨江", price="免费", type="演出", source_url=note.source_url, summary="露天演出", source_image_indexes=[1])]
 
     folder = archive_task_result(tmp_path / "archive", datetime(2026, 7, 16, tzinfo=timezone.utc), 9, note, [(image_file, images[0])], activities)
 
@@ -70,7 +67,9 @@ def test_archive_places_source_images_markdown_and_xlsx_under_date_task_folder(t
     rows = list(load_workbook(folder / "activities.xlsx", read_only=True).active.iter_rows(values_only=True))
     assert len(rows) == 2
     assert rows[1][0] == "滨江音乐会"
-    assert rows[1][8] == note.source_url
+    # xlsx 列：name | start | end | location | price | type | images | source_url | summary
+    assert rows[1][7] == note.source_url
+    assert rows[1][8] == "露天演出"
 
 
 def test_resolve_storage_path_supports_legacy_image_relative_keys(tmp_path: Path):

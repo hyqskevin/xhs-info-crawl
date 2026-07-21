@@ -175,22 +175,22 @@
 |------|------|------|
 | id | SERIAL PK | 主键 |
 | note_id | INT FK | 主来源笔记 |
-| related_note_ids | INT[] | 关联笔记 ID 列表 |
 | source_image_indexes | JSON/INT[] | 提供该活动信息的归档图片序号 |
 | name | VARCHAR(256) | 活动名称 |
 | city_code | VARCHAR(32) FK | 城市，必须引用 `cities.code`，不允许中文字面量或其他非 code 值；入库前由 `app.services.crawl_city_guard.assert_city_code_exists` 校验 |
-| start_time | TIMESTAMP NULL | 活动开始时间；无法可靠确定时为空并标记 `NEEDS_REVIEW` |
+| start_time | TIMESTAMP NULL | 活动开始时间；无法可靠确定时为空 |
 | end_time | TIMESTAMP | 活动结束时间 |
 | location | VARCHAR(256) | 地点 |
 | price | VARCHAR(128) | 费用 |
 | type | VARCHAR(64) | 活动类型 |
 | source_url | VARCHAR(512) | 来源链接 |
 | summary | TEXT | 摘要 |
-| tags | VARCHAR(64)[] | 标签 |
-| status | VARCHAR(32) | 状态 |
 | confidence | FLOAT | 字段提取置信度 |
 | created_at | TIMESTAMP | 创建时间 |
 | updated_at | TIMESTAMP | 更新时间 |
+| deleted_at | TIMESTAMP NULL | 软删除标记；`NULL` 表示存在，非 NULL 表示被软删除。 |
+
+子活动（`Activity`）不存审核状态，审核完全收敛到 `notes.review_status`。`POST /api/v1/activities/batch/approve` 已下线返回 `410 Gone`。
 
 ### duplicate_candidates
 

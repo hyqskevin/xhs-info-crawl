@@ -274,7 +274,6 @@ def test_existing_legacy_note_with_activity_is_treated_as_complete(db_session):
         start_time=datetime.now(timezone.utc),
         location="文化广场",
         type="其他",
-        status="RAW",
     ))
     db_session.commit()
 
@@ -372,7 +371,8 @@ def test_processed_blogger_note_with_new_token_skips_detail_and_download(db_sess
     assert task.extracted_notes == 0
 
 
-def test_one_note_keeps_valid_and_unknown_activities_but_skips_window_outliers(db_session, monkeypatch, tmp_path):
+def test_one_note_drops_activities_before_published_at_but_keeps_far_future_and_unknown(db_session, monkeypatch, tmp_path):
+    """新规则：活动日期 < Note.published_at 视为 OCR 错识；远期不卡；published_at 为空全部接收。"""
     db_session.add(City(name="宁波", code="nb", enabled=True))
     db_session.flush()
     task = CrawlTask(
@@ -386,16 +386,16 @@ def test_one_note_keeps_valid_and_unknown_activities_but_skips_window_outliers(d
 
     class FakeAdapter:
         def note(self, _url):
-            return {"content": "活动正文"}
+            return {"content": "活动正文", "published_at": "2026-07-17T12:00:00+08:00"}
 
         def download(self, _url, _folder):
             return []
 
     extracted = [
-        {"name": "有效活动", "start_time": "2026-07-20T10:00:00", "end_time": None, "location": "文化广场", "status": "RAW", "confidence": 0.9, "source_image_indexes": []},
-        {"name": "历史活动", "start_time": "2024-07-20T10:00:00", "end_time": None, "location": "文化广场", "status": "RAW", "confidence": 0.9, "source_image_indexes": []},
-        {"name": "远期活动", "start_time": "2026-10-20T10:00:00", "end_time": None, "location": "文化广场", "status": "RAW", "confidence": 0.9, "source_image_indexes": []},
-        {"name": "日期待确认", "start_time": None, "end_time": None, "location": "文化广场", "status": "NEEDS_REVIEW", "confidence": 0.5, "source_image_indexes": []},
+        {"name": "有效活动", "start_time": "2026-07-20T10:00:00", "end_time": None, "location": "文化广场", "confidence": 0.9, "source_image_indexes": []},
+        {"name": "历史活动", "start_time": "2024-07-20T10:00:00", "end_time": None, "location": "文化广场", "confidence": 0.9, "source_image_indexes": []},
+        {"name": "远期活动", "start_time": "2026-10-20T10:00:00", "end_time": None, "location": "文化广场", "confidence": 0.9, "source_image_indexes": []},
+        {"name": "日期待确认", "start_time": None, "end_time": None, "location": "文化广场", "confidence": 0.5, "source_image_indexes": []},
     ]
     monkeypatch.setattr(crawl_task, "extract_activities", lambda *_args, **_kwargs: extracted)
     settings = SimpleNamespace(
@@ -419,13 +419,11 @@ def test_one_note_keeps_valid_and_unknown_activities_but_skips_window_outliers(d
     )
 
     activities = list(db_session.scalars(select(Activity).order_by(Activity.id)))
-    assert [activity.name for activity in activities] == ["有效活动", "日期待确认"]
-    assert activities[1].start_time is None
-    assert activities[1].status == "NEEDS_REVIEW"
-    assert task.skipped_activities == 2
+    # 历史活动 < 推文发布时间 2026-07-17，被过滤；其它全部接收
+    assert [activity.name for activity in activities] == ["有效活动", "远期活动", "日期待确认"]
+    assert activities[2].start_time is None
     messages = list(db_session.scalars(select(TaskLog.message).where(TaskLog.task_id == task.id)))
-    assert any("历史活动" in message and "past" in message for message in messages)
-    assert any("远期活动" in message and "future" in message for message in messages)
+    assert any("历史活动" in message and "早于推文发布时间" in message for message in messages)
 
 
 def test_keyword_search_skips_titles_without_the_corresponding_keyword(db_session, monkeypatch, tmp_path):

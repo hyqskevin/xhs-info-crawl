@@ -20,7 +20,11 @@ class Activity(Base):
     source_url: Mapped[str] = mapped_column(String(512), default="")
     source_image_indexes: Mapped[list[int]] = mapped_column(JSON, default=list)
     summary: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(String(32), default="RAW", index=True)
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)

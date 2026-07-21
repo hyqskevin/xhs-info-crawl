@@ -239,8 +239,8 @@ def test_search_recent_retries_until_filter_panel_is_really_open(tmp_path:Path,m
 
 def test_duplicate_candidates_are_created_once(db_session):
     when=datetime(2026,7,18,10,tzinfo=timezone.utc)
-    first=Activity(name='上海夏日音乐节',city_code='shanghai',start_time=when,location='徐汇滨江',price='免费',type='演出',status='RAW')
-    second=Activity(name='上海夏日音乐节2026',city_code='shanghai',start_time=when,location='徐汇滨江',price='免费',type='演出',status='RAW')
+    first=Activity(name='上海夏日音乐节',city_code='shanghai',start_time=when,location='徐汇滨江',price='免费',type='演出')
+    second=Activity(name='上海夏日音乐节2026',city_code='shanghai',start_time=when,location='徐汇滨江',price='免费',type='演出')
     db_session.add_all([first,second]);db_session.flush()
     assert len(create_duplicate_candidates(db_session,second))==1
     db_session.flush()
@@ -249,8 +249,8 @@ def test_duplicate_candidates_are_created_once(db_session):
 
 
 def test_duplicate_candidates_tolerate_missing_start_times(db_session):
-    first = Activity(name='宁波纳得美术馆作品展览', city_code='nb', start_time=None, location='宁波纳得美术馆', price='', type='展览', status='NEEDS_REVIEW')
-    second = Activity(name='宁波纳得美术馆作品展览', city_code='nb', start_time=None, location='宁波纳得美术馆', price='', type='展览', status='NEEDS_REVIEW')
+    first = Activity(name='宁波纳得美术馆作品展览', city_code='nb', start_time=None, location='宁波纳得美术馆', price='', type='展览')
+    second = Activity(name='宁波纳得美术馆作品展览', city_code='nb', start_time=None, location='宁波纳得美术馆', price='', type='展览')
     db_session.add_all([first, second])
     db_session.flush()
 

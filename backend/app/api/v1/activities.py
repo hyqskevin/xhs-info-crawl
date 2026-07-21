@@ -1,7 +1,7 @@
 from datetime import date, datetime, time, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -31,7 +31,7 @@ def serialize(activity: Activity) -> dict[str, object]:
 def find_activity(db: Session, activity_id: int, include_deleted: bool = False) -> Activity:
     query = select(Activity).where(Activity.id == activity_id)
     if not include_deleted:
-        query = query.where(Activity.status.notin_(["DELETED", "MERGED"]))
+        query = query.where(Activity.deleted_at.is_(None))
     activity = db.scalar(query)
     if activity is None:
         raise HTTPException(status_code=404, detail="活动不存在")
@@ -44,19 +44,16 @@ def list_activities(
     db: database,
     city: str | None = None,
     type: str | None = None,
-    activity_status: Annotated[str | None, Query(alias="status")] = None,
     start_date: date | None = None,
     end_date: date | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
-    filters = [Activity.status.notin_(["DELETED", "MERGED"])]
+    filters = [Activity.deleted_at.is_(None)]
     if city:
         filters.append(Activity.city_code == city)
     if type:
         filters.append(Activity.type == type)
-    if activity_status:
-        filters.append(Activity.status == activity_status)
     if start_date:
         filters.append(Activity.start_time >= datetime.combine(start_date, time.min, tzinfo=timezone.utc))
     if end_date:
@@ -66,34 +63,24 @@ def list_activities(
     return {"code": 200, "message": "success", "data": {"items": [serialize(item) for item in items]}, "pagination": {"page": page, "page_size": page_size, "total": total}}
 
 
-@router.delete("/batch")
+@router.delete("/batch", deprecated=True)
 def batch_delete_activities(payload: BatchDeleteRequest, _: auth, db: database):
     ids = list(dict.fromkeys(payload.ids))
-    activities = list(db.scalars(select(Activity).where(Activity.id.in_(ids), Activity.status.notin_(["DELETED", "MERGED"]))).all())
+    activities = list(db.scalars(select(Activity).where(Activity.id.in_(ids), Activity.deleted_at.is_(None))).all())
     if not activities:
         raise HTTPException(status_code=404, detail="没有可删除的活动")
     changed_at = datetime.now(timezone.utc)
     for activity in activities:
-        activity.status = "DELETED"
+        activity.deleted_at = changed_at
         activity.updated_at = changed_at
     db.commit()
     deleted_ids = [activity.id for activity in activities]
     return {"code": 200, "message": "success", "data": {"deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)}}
 
 
-@router.post("/batch/approve")
+@router.post("/batch/approve", deprecated=True)
 def batch_approve_activities(payload: BatchDeleteRequest, _: auth, db: database):
-    ids = list(dict.fromkeys(payload.ids))
-    activities = list(db.scalars(select(Activity).where(Activity.id.in_(ids), Activity.status.notin_(["DELETED", "MERGED"]))).all())
-    if not activities:
-        raise HTTPException(status_code=404, detail="没有可审核通过的活动")
-    changed_at = datetime.now(timezone.utc)
-    for activity in activities:
-        activity.status = "APPROVED"
-        activity.updated_at = changed_at
-    db.commit()
-    approved_ids = [activity.id for activity in activities]
-    return {"code": 200, "message": "success", "data": {"approved_ids": approved_ids, "approved_count": len(approved_ids)}}
+    raise HTTPException(status_code=410, detail="活动审核已迁到推文维度，请使用 /api/v1/notes/{id}/review")
 
 
 @router.get("/{activity_id}")
@@ -138,9 +125,8 @@ def get_activity_image(activity_id: int, image_id: int, _: auth, db: database):
 @router.put("/{activity_id}")
 def update_activity(activity_id: int, payload: ActivityUpdate, _: auth, db: database):
     activity = find_activity(db, activity_id)
+    # model_config=extra='forbid' 已自动拒绝 status 字段
     changes = payload.model_dump(exclude_unset=True)
-    if activity.status == "PUBLISHED" and changes.get("status") == "RAW":
-        raise HTTPException(status_code=422, detail="无效的活动状态转换")
     for key, value in changes.items():
         setattr(activity, key, value)
     activity.updated_at = datetime.now(timezone.utc)
@@ -152,7 +138,8 @@ def update_activity(activity_id: int, payload: ActivityUpdate, _: auth, db: data
 @router.delete("/{activity_id}")
 def delete_activity(activity_id: int, _: auth, db: database):
     activity = find_activity(db, activity_id)
-    activity.status = "DELETED"
-    activity.updated_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    activity.deleted_at = now
+    activity.updated_at = now
     db.commit()
     return {"code": 200, "message": "success", "data": {"id": activity_id}}

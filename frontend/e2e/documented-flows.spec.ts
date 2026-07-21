@@ -90,10 +90,75 @@ test.describe('TC-UI-008/009 活动管理完整流程', () => {
     })
     await page.goto('/activities')
     await page.getByRole('button', { name: '详情' }).click()
-    await page.getByRole('button', { name: '编辑' }).click()
-    await page.getByLabel('名称').fill('上海周末展览（已审核）')
+    await page.getByRole('button', { name: '编辑', exact: true }).click()
+    await page.getByLabel('活动名称').fill('上海周末展览（已审核）')
     await page.getByRole('button', { name: '保存' }).click()
     expect(updated?.name).toBe('上海周末展览（已审核）')
+  })
+
+  test('从列表编辑推文且原文链接保持只读', async ({ page }) => {
+    let updated: Record<string, unknown> | undefined
+    await page.route('**/api/v1/notes**', async (route) => {
+      const pathname = new URL(route.request().url()).pathname
+      if (pathname.endsWith('/notes/1') && route.request().method() === 'PUT') {
+        updated = route.request().postDataJSON()
+        return route.fulfill({ json: response({ ...noteDetail, ...updated }) })
+      }
+      if (pathname.endsWith('/notes/1')) return route.fulfill({ json: response(noteDetail) })
+      return route.fulfill({ json: { ...response({ items: [note] }), pagination: { total: 1 } } })
+    })
+    await page.goto('/activities')
+    await page.getByRole('button', { name: '编辑推文' }).click()
+    await expect(page.getByLabel('原文链接')).toBeDisabled()
+    await page.getByLabel('推文标题').fill('更新后的推文标题')
+    await page.getByRole('button', { name: '保存推文' }).click()
+
+    await expect.poll(() => updated?.title).toBe('更新后的推文标题')
+    expect(updated).not.toHaveProperty('source_url')
+    await expect(page.getByText('推文已更新')).toBeVisible()
+  })
+
+  test('从详情通过单篇推文并刷新审核状态', async ({ page }) => {
+    let reviewed = ''
+    await page.route('**/api/v1/notes**', async (route) => {
+      const pathname = new URL(route.request().url()).pathname
+      if (pathname.endsWith('/notes/1/review')) {
+        reviewed = route.request().postDataJSON().status
+        return route.fulfill({ json: response({ id: 1, review_status: reviewed }) })
+      }
+      if (pathname.endsWith('/notes/1')) return route.fulfill({ json: response({ ...noteDetail, review_status: reviewed || 'PENDING' }) })
+      return route.fulfill({ json: { ...response({ items: [{ ...note, review_status: reviewed || 'PENDING' }] }), pagination: { total: 1 } } })
+    })
+    await page.goto('/activities')
+    await page.getByRole('button', { name: '详情' }).click()
+    await page.locator('.el-drawer').getByRole('button', { name: '通过', exact: true }).click()
+    await page.getByRole('button', { name: '确定' }).click()
+
+    await expect.poll(() => reviewed).toBe('APPROVED')
+    await expect(page.getByText('推文已通过')).toBeVisible()
+    await expect(page.locator('.el-drawer').getByText('已通过', { exact: true })).toBeVisible()
+  })
+
+  test('取消单篇审核不发送请求，确认后可驳回', async ({ page }) => {
+    const reviewed: string[] = []
+    await page.route('**/api/v1/notes**', async (route) => {
+      const pathname = new URL(route.request().url()).pathname
+      if (pathname.endsWith('/notes/1/review')) {
+        reviewed.push(route.request().postDataJSON().status)
+        return route.fulfill({ json: response({ id: 1, review_status: reviewed.at(-1) }) })
+      }
+      if (pathname.endsWith('/notes/1')) return route.fulfill({ json: response(noteDetail) })
+      return route.fulfill({ json: { ...response({ items: [note] }), pagination: { total: 1 } } })
+    })
+    await page.goto('/activities')
+    await page.getByRole('button', { name: '驳回', exact: true }).click()
+    await page.getByRole('button', { name: '取消' }).click()
+    expect(reviewed).toEqual([])
+    await page.getByRole('button', { name: '驳回', exact: true }).click()
+    await page.getByRole('button', { name: '确定' }).click()
+
+    await expect.poll(() => reviewed).toEqual(['REJECTED'])
+    await expect(page.getByText('推文已驳回')).toBeVisible()
   })
 
   test('子活动删除先取消不请求，再确认执行', async ({ page }) => {

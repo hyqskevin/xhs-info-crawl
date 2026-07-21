@@ -17,12 +17,13 @@ def format_activity_markdown(activity: Activity) -> str:
     return f"#### {activity.name}\n- **时间**：{time_text}\n- **地点**：{activity.location}\n- **费用**：{activity.price}\n- **来源**：[小红书笔记]({activity.source_url})\n- **简介**：{activity.summary}\n"
 
 
-def approved(activities: list[Activity]) -> list[Activity]:
-    return [item for item in activities if item.status == "APPROVED" and item.start_time is not None]
+def visible_activities(activities: list[Activity]) -> list[Activity]:
+    """Return activities that are not soft-deleted; weekly reports include every visible activity without status filtering."""
+    return [item for item in activities if item.deleted_at is None]
 
 
 def generate_markdown(week: str, cities: list[str], activities: list[Activity]) -> str:
-    selected = approved(activities)
+    selected = visible_activities(activities)
     lines = [f"# 本周活动精选（{week}）", ""]
     if not selected:
         return "\n".join(lines + ["本周暂无活动", ""])
@@ -35,7 +36,7 @@ def generate_markdown(week: str, cities: list[str], activities: list[Activity]) 
         lines.extend([f"## {CITY_NAMES.get(city, city)}", ""])
         for kind in sorted(grouped[city]):
             lines.extend([f"### {kind}", ""])
-            for item in sorted(grouped[city][kind], key=lambda value: (value.start_time, value.id or 0)):
+            for item in sorted(grouped[city][kind], key=lambda value: (value.start_time or datetime.max, value.id or 0)):
                 lines.extend([format_activity_markdown(item), ""])
     lines.append("*本内容由系统自动抓取，仅供内部参考，请以主办方信息为准。*")
     return "\n".join(lines)
@@ -46,7 +47,7 @@ def generate_xlsx(activities: list[Activity]) -> bytes:
     sheet = workbook.active
     sheet.title = "活动"
     sheet.append(["活动名称", "城市", "开始时间", "结束时间", "地点", "费用", "类型", "来源", "简介"])
-    for item in approved(activities):
+    for item in visible_activities(activities):
         sheet.append([item.name, CITY_NAMES.get(item.city_code, item.city_code), item.start_time.isoformat() if item.start_time else "", item.end_time.isoformat() if item.end_time else "", item.location, item.price, item.type, item.source_url, item.summary])
     output = BytesIO()
     workbook.save(output)

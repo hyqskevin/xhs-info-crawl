@@ -26,6 +26,10 @@ const incompleteBloggers = computed(() => form.blogger_ids.filter((id: number) =
 }))
 const statusLabels: Record<string, string> = { PENDING: '等待中', RUNNING: '抓取中', STOP_REQUESTED: '正在停止', STOPPED: '已停止', COMPLETED: '已完成', COMPLETED_WITH_ERRORS: '完成但有错误', FAILED: '失败', PAUSED: '等待登录' }
 const stageLabels: Record<string, string> = { SEARCHING: '搜索笔记', DOWNLOADING: '下载笔记', OCR: 'OCR 识别', EXTRACTING: '提取活动', ARCHIVING: '归档结果' }
+const errorVisibleStatuses = ['RUNNING', 'STOP_REQUESTED', 'FAILED', 'PAUSED', 'STOPPED']
+const shouldShowLastTaskError = computed(() =>
+  !!lastTask.value?.error_message && errorVisibleStatuses.includes(lastTask.value.status)
+)
 
 watch(() => form.city, () => {
   form.keywords = []
@@ -161,7 +165,7 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
         <div><span>活动已跳过</span><strong>{{ lastTask.skipped_activities || 0 }}</strong></div>
       </div>
       <ElProgress :percentage="lastTask.progress_percent || 0" :indeterminate="lastTask.progress_percent == null && ['PENDING','RUNNING'].includes(lastTask.status)" />
-      <ElAlert v-if="lastTask.error_message" :title="lastTask.error_message" type="error" :closable="false" />
+      <ElAlert v-if="shouldShowLastTaskError" :title="lastTask.error_message" type="error" :closable="false" />
       <ElButton v-if="['FAILED','STOPPED'].includes(lastTask.status)" type="primary" :icon="RefreshRight" :loading="restarting" @click="restart">继续抓取</ElButton>
       <ElButton v-if="lastTask.status === 'FAILED'" type="danger" :loading="stopping" @click="finish">结束抓取</ElButton>
       <ElButton v-if="lastTask.status === 'PAUSED'" :icon="Link" :loading="openingLogin" @click="openLogin">打开小红书登录</ElButton>

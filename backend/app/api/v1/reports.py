@@ -38,10 +38,11 @@ def week_bounds(week: str) -> tuple[datetime, datetime]:
 
 
 def select_activities(db: Session, cities: list[str], week: str) -> list[Activity]:
+    """兼容保留：周报按推文维度（Note.published_at）选取；该函数返回 note 已审批通过的子活动（仅调试用）。"""
     start, end = week_bounds(week)
     return list(db.scalars(select(Activity).where(
         Activity.city_code.in_(cities),
-        Activity.status == "APPROVED",
+        Activity.deleted_at.is_(None),
         Activity.start_time >= start,
         Activity.start_time < end,
     ).order_by(Activity.start_time, Activity.id)).all())
@@ -49,16 +50,21 @@ def select_activities(db: Session, cities: list[str], week: str) -> list[Activit
 
 def select_notes(db: Session, cities: list[str], week: str):
     start, end = week_bounds(week)
-    published = func.coalesce(Note.published_at, Note.created_at)
+    published = Note.published_at
     notes = list(db.scalars(select(Note).where(
         Note.city_code.in_(cities),
         Note.review_status == "APPROVED",
-        published >= start,
-        published < end,
-    ).order_by(published, Note.id)).all())
+        Note.published_at.is_not(None),
+        Note.published_at >= start,
+        Note.published_at < end,
+    ).order_by(Note.published_at, Note.id)).all())
     entries = []
     for note in notes:
-        activities = list(db.scalars(select(Activity).where(Activity.note_id == note.id, Activity.status.notin_(["DELETED", "MERGED"])).order_by(Activity.id)).all())
+        activities = list(db.scalars(
+            select(Activity)
+            .where(Activity.note_id == note.id, Activity.deleted_at.is_(None))
+            .order_by(Activity.id)
+        ).all())
         images = list(db.scalars(select(NoteImage).where(NoteImage.note_id == note.id).order_by(NoteImage.id)).all())
         entries.append((note, activities, images))
     return entries

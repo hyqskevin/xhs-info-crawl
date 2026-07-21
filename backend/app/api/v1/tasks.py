@@ -3,7 +3,7 @@ from uuid import uuid4
 from typing import Annotated, Literal
 from fastapi import APIRouter,Depends,HTTPException,Query,status
 from pydantic import BaseModel
-from sqlalchemy import func,select
+from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import require_admin
@@ -20,6 +20,10 @@ class CrawlIn(BaseModel):
     keywords: list[str] = []
     recent_filter: Literal['不限','一天内','一周内','半年内'] = '一周内'
     blogger_ids: list[int] = []
+
+
+class BatchDeleteIn(BaseModel):
+    ids: list[int] = []
 def dump(t): return {c.name:getattr(t,c.name) for c in t.__table__.columns}
 @router.get('')
 def tasks(_:Admin,db:DB,page:int=1,page_size:Annotated[int,Query(le=100)]=20):
@@ -106,3 +110,31 @@ def stop(task_id:int,_:Admin,db:DB):
     return {'code':202,'message':'success','data':dump(task)}
 @router.get('/{task_id}/logs')
 def logs(task_id:int,_:Admin,db:DB): return {'code':200,'message':'success','data':[dump(x) for x in db.scalars(select(TaskLog).where(TaskLog.task_id==task_id).order_by(TaskLog.id)).all()]}
+
+
+@router.delete('/batch')
+def batch_delete(payload: BatchDeleteIn, _: Admin, db: DB):
+    """批量软/硬删除抓取任务。
+
+    校验：
+    - ids 长度 1..100；
+    - 每个 id 必须存在，否则返回 422 + 具体 id。
+    """
+    if len(payload.ids) < 1:
+        raise HTTPException(422, '请选择要删除的任务（ids 不能为空）')
+    if len(payload.ids) > 100:
+        raise HTTPException(422, '一次最多删除 100 条任务')
+    rows = db.scalars(select(CrawlTask).where(CrawlTask.id.in_(payload.ids))).all()
+    existing_ids = {row.id for row in rows}
+    missing = [task_id for task_id in payload.ids if task_id not in existing_ids]
+    if missing:
+        raise HTTPException(422, f'以下任务不存在：{",".join(str(mid) for mid in missing)}')
+    db.execute(sa_delete(TaskLog).where(TaskLog.task_id.in_(payload.ids)))
+    for row in rows:
+        db.delete(row)
+    db.commit()
+    return {
+        'code': 200,
+        'message': 'success',
+        'data': {'deleted_count': len(rows), 'deleted_ids': sorted(existing_ids)},
+    }

@@ -40,7 +40,7 @@ def test_rules_extract_date_location_price_and_type(text: str) -> None:
 def test_extraction_uses_llm_fallback_and_marks_missing_required_fields() -> None:
     llm = lambda _: {"name": "隐秘活动", "start_time": "2025-07-20T10:00:00", "location": "静安"}
     assert extract_activity_fields("详情见海报", now=datetime(2025, 7, 1), llm=llm)["name"] == "隐秘活动"
-    assert extract_activity_fields("详情见海报", now=datetime(2025, 7, 1), llm=None)["status"] == "NEEDS_REVIEW"
+    assert "status" not in extract_activity_fields("详情见海报", now=datetime(2025, 7, 1), llm=None)
 
 
 def test_ocr_success_empty_failure_batch_and_confidence(tmp_path: Path) -> None:

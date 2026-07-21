@@ -50,7 +50,6 @@ def main():
                 source_url=note.source_url,
                 source_image_indexes=fields.get("source_image_indexes") or [],
                 summary=fields.get("summary") or "",
-                status=fields["status"],
                 confidence=float(fields.get("confidence") or 0),
                 )
                 db.add(activity); db.flush(); create_duplicate_candidates(db, activity); created.append(activity)

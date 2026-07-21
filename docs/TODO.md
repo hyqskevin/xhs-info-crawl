@@ -12,17 +12,28 @@
 
 ## 当前待办
 
-- [x] 修复worker在opencli阻塞时无法响应停止信号的问题
-  - 目标：celery worker在执行opencli调用时（CDP超时115秒），能够及时检测到STOP_REQUESTED状态并退出。
-  - 验收：点击停止后，worker在10秒内检测到停止信号并退出当前任务；不再需要手动kill worker进程。
-  - 实现：`backend/app/services/opencli_adapter.py` 缩短超时时间（60秒）；`backend/app/services/task_registry.py` kill方法立即发送SIGKILL。
-  - 测试：`backend/tests/test_worker_stop_during_block.py` 4个全过。
-- [ ] 活动列表的摘要，是完整的推文，写推文的文字，是ocr识别出来的，要写ocr识别出的文字，有日期的带上日期
-- [x] 点击开始抓取时自动停止上一个任务（不报错 TASK_IN_PROGRESS）
-  - 目标：用户点击"开始抓取"时，如果有正在运行的任务，自动停止上一个任务并启动新任务，而非报错。
-  - 验收：见 spec `docs/superpowers/specs/2026-07-18-crawl-auto-stop-previous-design.md`。
-  - 实现：`backend/app/api/v1/tasks.py` `crawl` 函数；检测到运行中任务时自动调用 `task_registry.kill()` 终止子进程。
-  - 测试：`backend/tests/test_crawl_auto_stop_previous.py` 4 个全过。
+- [ ] 推文 ID 雪花算法服务是什么，整个项目有用到算法的都整理出来写一份文档md
+- [ ] 多账号体系 + RBAC（分组 + 权限）
+  - 目标：当前只有 admin。升级为多账号平等（`Administrator` 组默认有全部权限），新增"账号管理"左侧 nav；账号可以分组、分组关联权限集；`sub` 角色划分保留为未来"子账号"扩展。
+  - 验收：新 `users/groups/permissions/group_permissions/user_groups` 表；新 `AccountsView.vue`（左 nav 新增），含账号 / 分组 / 权限 三 tab；后端 `require_permission(code)` 替换 `require_admin`；前端 49+ 测试，build 通过；实操：用 admin 新建 editor 账号 → 限定权限 → editor 登录验证无权页面 403。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-multi-account-rbac-design.md`（已写）。
+- [ ] 城市复用 + 关键词组一对多
+  - 目标：城市 DB unique 约束；关键词组 `KeywordGroup` 实体（可挂多个城市、可包含多个关键词）；仪表盘关键词下拉改为多选关键词组；`crawl_scope.resolve_crawl_scope` 改写。
+  - 验收：新 migration `0013_keyword_groups.py`；新 API `settings/keyword-groups` 与 `tasks/crawl {keyword_group_ids}`；旧字段 `keywords` 兼容保留；前端 `SettingsView` 增加关键词组 tab；后端 308+ 测试，前端 49+ 测试，build 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-city-and-keyword-groups-design.md`（已写）。
+- [ ] 城市去重（修复重复 city 行）
+  - 目标：一次性脚本 `backend/scripts/dedupe_cities.py` 选最早启用的 City 为 canonical，把其它重复 name 行的关联迁移过去（notes/blogger_city/keyword_group_cities/crawl_tasks），删除多余行；幂等。
+  - 验收：`tests/test_dedupe_cities_script.py` 3 个 case；生产 DB 跑完 `SELECT COUNT(*) FROM cities` 下降，城市下拉不再重复。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-dedupe-cities-design.md`（已写）。
+- [ ] 重启 celery beat 加载新代码
+  - 目标：当前 celery beat PID 11974 是 7/16 启动持有旧任务调度；服务进程管理已写进 AGENTS.md，beat 也要遵循。
+  - 验收：检查 `ps aux | grep celery | grep beat` 启动时间 `<= 今日`；beat 日志中 `Scheduler: Sending due task` 使用最新代码路径。本项不需要代码改动，只需要 Agent 在 TODO 完成时主动停掉并重启 beat 进程。
+- [ ] 一次性数据库迁移 `seed_admin` 启动后兜底管理员
+  - 目标：当数据库完全为空（首次部署/重置）时，没有 admin 用户无法登录。当前 admin 凭据是手工 sql 新增。
+  - 验收：迁移 `0012_seed_admin.py` 在 upgrade 时若 `users` 表为空则插入 admin 用户；密码来自环境变量 `INITIAL_ADMIN_PASSWORD`，未设置则使用 `Admin@123` 且 WARNING 提示"生产环境必须更改"；脚本幂等：若 admin 已存在则跳过。重置 db（删除数据文件后跑 alembic upgrade head）后能用默认密码登录。
+- [ ] 列表接口 OCR 摘要聚合性能与长度保护
+  - 目标：`GET /notes` 一次性 LEFT JOIN `NoteImage` 表所有图片行，单推文 100 张图触发 100 行 SELECT 加字符串拼接，列表渲染大体积下 N+1 不明显但单行体可能 MB 级别。
+  - 验收：`tests/test_note_summary.py` 加测：推文有 50 张图片时 summary 字符串 ≤ 4 KiB；超长时省略截断并在 DB 注释/响应里附 `summary_truncated=True`；前端"摘要"列不出现"pre" + 大 body（前端 `show-overflow-tooltip` 兜底）；后台跑脚本性能测试：`SELECT COUNT(*) FROM notes WHERE LENGTH(summary)>4096` 应为 0。
 
 ## 后续优化
 
@@ -43,6 +54,71 @@
 
 ## 已完成
 
+- [x] 仪表盘 `last_task.error_message` 仅在任务进行中或失败时显示
+  - 结果：`DashboardView.vue` 加 `errorVisibleStatuses = ['RUNNING','STOP_REQUESTED','FAILED','PAUSED','STOPPED']` 与 `shouldShowLastTaskError` computed 属性；`ElAlert` 改 `v-if="shouldShowLastTaskError"`。
+  - 验收：前端 48 passed（DashboardView 加 3 测试 case：COMPLETED_WITH_ERRORS 不显示 / FAILED 显示 / RUNNING 显示），`npm run build` 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-dashboard-error-message-conditional-design.md`。
+
+- [x] 列表接口 OCR 摘要聚合性能与长度保护
+  - 结果：`_summary` 内部先按 OCR 块数截到 `MAX_OCR_BLOCKS=5`，再按 UTF-8 字节截到 `MAX_SUMMARY_BYTES=4096`；保留字符边界；每行返回 `summary_truncated: bool`。详情接口 `_detail_data` 不受影响（详情仍返回全部 OCR）。
+  - 验收：后端 309→314 passed（`tests/test_note_summary.py` 5 个 case 含超 4 KiB 截断 + truncated 标志）。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-note-summary-length-guard-design.md`。
+
+- [x] 回答"去重是按什么去的"以及给抓取日志页加批量删除
+  - 结果：Q&A 文档 `docs/superpowers/qa/dedup-rules.md` 解释当前 dedup 两层（硬键 platform_note_id 自动去重 + 软键 SequenceMatcher 相似度入候选）；后端新增 `DELETE /api/v1/tasks/batch` 接 `{ids:number[]}`，清理对应 `CrawlTask` 与 `TaskLog`；前端 `TasksView.vue` 加 selection 列 + "批量删除 (N)" 按钮 + ElMessageBox 确认 + Toast 反馈；`api.client.ts` 加 `batchDeleteTasks`。
+  - 验收：后端 309 passed（新增 4 个 case：删 2 条 / 未知 id 422 / 空列表 422 / 超 100 422）、前端 45 passed（新增 selection-change 触发 + batchDeleteTasks 调用）、前端 build 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-tasks-batch-delete-design.md`、测试 `backend/tests/test_tasks_batch_delete.py`。
+- [x] 活动管理支持关键字搜索
+  - 结果：后端 `list_notes` 加 `keyword: str | None` 参数，对 `Note.title` 与 `Note.content` 做 `ilike` 模糊匹配（strip 后为空不写条件）；前端 `ActivitiesView.vue` 工具栏加 `<ElInput v-model="filters.keyword">`，`queryParams` 透传；resetFilters 也清空 keyword。
+  - 验收：后端 305→309 passed（`tests/test_notes_api.py` 加 4 个 keyword case）、前端 44→45 passed（`ActivitiesView.spec.ts` 加 2 个 case）、build 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-activities-keyword-search-design.md`。
+- [x] 周报 picker 与 ISO 提示及按周排序的改动回滚
+  - 结果：`frontend/src/views/ReportsView.vue` 维持 `form.weekDate = new Date()` + `format="YYYY 第 ww 周"`，无 `sortedRows` / `weekRangeLabel`；spec 文件 `2026-07-21-reports-list-order-by-week-design.md` 与 `2026-07-21-reports-picker-expose-iso-week-design.md` 作为存档保留。
+  - 验收：ReportsView 与 git HEAD 一致；ReportsView.spec 仅 2 个原始测试；前端 42 passed；build 通过。
+- [x] 推文列表"发布时间"列只显示 YYYY-MM-DD（无时分秒）
+  - 结果：`ActivitiesView.vue` 新增 `formatDate(value)` 函数（`.toISOString().slice(0, 10)`），"发布时间" 列改用 `formatDate`；详情识别活动表格的 `start_time` / `end_time` 仍用 `formatTime`。
+  - 验收：`ActivitiesView.spec.ts` 加 "shows YYYY-MM-DD only" 测试全绿；前后端测试全过、build 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-list-publish-time-date-only-design.md`。
+- [x] 从小红书 note ID（ObjectID 24 hex）解析推文发布时间
+  - 结果：`backend/app/services/note_id_published_at.py` 实现 `note_id_published_at(note_id_or_url)`（正则抽取 24 hex → 前 8 hex → int → +8h → UTC ISO datetime）；`backend/scripts/backfill_note_id_published_at.py` 一次性回填脚本（扫描 `published_at IS NULL` 且 24 hex platform_note_id 的记录）；`crawl_task.process_note` 入库前调 `note_id_published_at(source_url)` 作为最高优先级，回退 DOM 解析。
+  - 验收：`backend/tests/test_note_id_published_at.py` 3 个 case 全过；回填脚本输出 before/after 计数且幂等。
+- [x] 识别活动表格增加「开始时间」与「结束时间」两列
+  - 结果：`ActivitiesView.vue` 详情 dialog 加 `<ElTableColumn label="开始时间">` 与 `label="结束时间">` 两列，使用 `formatTime`；缺值显示 "待确认" 或 '-'。
+  - 验收：`ActivitiesView.spec.ts` 表格列断言包含 4 列（名称 / 地点 / 开始时间 / 结束时间 / 操作）。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-list-publish-time-date-only-design.md` 中已包含此改动。
+- [x] 撤回推文列表的 OCR 摘要列
+  - 结果：`ActivitiesView.vue` 推文列表移除"摘要" ElTableColumn；OCR 内容只在详情以"识别活动列表" + 图片 OCR block 呈现；后端 `_summary` 字段保留供详情使用。
+  - 验收：`ActivitiesView.spec.ts` 详情断言中保留 `summary` 字段；推文列表断言不再包含 OCR 长文。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-note-summary-with-ocr-design.md`（列表调用方变种）。
+- [x] 历史 `Note.published_at` 回填
+  - 结果：`backend/scripts/backfill_note_id_published_at.py` 已实现并已验证回填效果；按 24 hex note ID 前 8 位 hex = epoch 秒的方案执行，剩余少量未充填由运行时 `app.services.published_at.parse_published_at` 兜底。
+  - 验收：脚本已执行；`notes.published_at IS NULL` 计数已从 177 大幅下降。
+- [x] 历史 APPROVED 且 0 子活动推文的处理（已由 `POST /notes/{id}/reprocess` + 前端批量重处理入口覆盖）
+  - 结果：`backend/app/api/v1/notes.py` 已实现 `/notes/{id}/reprocess` 端点；当前测试环境下无 "0 子活动但 APPROVED" 的历史脏数据；后续人工可以单条触发或通过 `/notes/batch/approve` 取消误改。
+- [x] 修复worker在opencli阻塞时无法响应停止信号的问题
+  - 结果：缩短 OpenCLI 调用超时（60 秒），`task_registry.kill()` 立即发送 SIGKILL。`backend/tests/test_worker_stop_during_block.py` 4 个全过。
+- [x] 点击开始抓取时自动停止上一个任务（不报错 TASK_IN_PROGRESS）
+  - 结果：见 spec `docs/superpowers/specs/2026-07-18-crawl-auto-stop-previous-design.md`；`backend/tests/test_crawl_auto_stop_previous.py` 4 个全过。
+- [x] 移除推文内子活动的审核状态
+  - 结果：删除 `Activity.status` 列与索引，新增 `deleted_at` 表达软删除；周报收录完全基于推文维度（`Note.review_status` + `Note.published_at`），不再过滤子活动状态；`POST /api/v1/activities/batch/approve` 返回 `410 Gone`；前端列表"识别活动"表格移除"状态"列。
+  - 验收：后端 `296 passed, 1 skipped`、前端 `40 passed`、前端构建成功、Playwright `42 passed`。
+  - 关联 spec：`docs/superpowers/specs/2026-07-21-remove-activity-approval-status-design.md`；迁移：`backend/migrations/versions/0011_activity_soft_delete.py`；E2E：`tests/test-activity-soft-delete-and-report-include.md`。
+- [x] 解析并使用小红书真实发布时间
+  - 结果：新增 `app/services/published_at.py`，解析 OpenCLI 详情字段与页面文字（绝对日期、`MM-DD`、`N天前/N小时前/分钟前`），统一 Asia/Shanghai 解析后转 UTC；`process_note` 入库时自动回填 `Note.published_at`；列表筛选、周报归周取消 `func.coalesce(published_at, created_at)`；前端"发布时间"列不再回退 created_at；缺少时显示"待确认"且不进周报。
+  - 验收：后端、前端、E2E 全绿（同上）。
+  - 关联 spec：`docs/superpowers/specs/2026-07-21-parse-real-published-at-design.md`；E2E：`tests/test-parse-real-published-at.md`。
+- [x] 修复零活动推文仍标记处理完成并可审核的问题
+  - 结果：新增 `app/services/activity_validator.py`，按 `activity.start_time >= note.published_at` 判定（OCR 错识过滤）；区分 `all_before_publish` / `minimax_empty_retryable` / `no_activity_signals` 三态；`process_note` 用 validator 替代旧 ActivityWindow 60 天窗口；`POST /notes/{id}/review` 审批通过校验至少 1 条未删除子活动；新增 `POST /notes/{id}/reprocess` 端点清空子活动重新走抓取。
+  - 验收：后端、前端、E2E 全绿（同上）。
+  - 关联 spec：`docs/superpowers/specs/2026-07-21-zero-activity-and-window-fix-design.md`；E2E：`tests/test-note-zero-activity-and-window.md`。
+- [x] 活动管理列表的摘要列展示 OCR 文字与日期
+  - 结果：列表接口 `_summary` 拼接 `Note.content` 与所有图片 OCR 文字（`正文：<content>` + `[图片 N OCR] <text>`），按 `NoteImage.id` 排序；前端 `ActivitiesView` 新增"摘要"列，`show-overflow-tooltip` 悬浮完整内容；缺失部分跳过不写占位。
+  - 验收：后端、前端、E2E 全绿（同上）。
+  - 关联 spec：`docs/superpowers/specs/2026-07-21-note-summary-with-ocr-design.md`。
+- [x] 补全推文编辑与单条审核闭环
+  - 结果：新增推文更新与单篇审核 API；活动管理列表和详情均支持编辑标题、正文、城市、发布时间及单篇通过/驳回，原文链接只读，批量通过保持兼容。
+  - 验收：后端 `246 passed, 1 skipped`；前端组件串行全量 `11 files / 38 tests passed`；前端构建成功；E2E 完整首轮 `41 passed`，唯一旧选择器回归修正后关联专项 `4 passed`。
+  - 关联 spec：`docs/superpowers/specs/2026-07-21-note-edit-single-review-design.md`；实现计划：`docs/superpowers/plans/2026-07-21-note-edit-single-review.md`；测试案例：`tests/test-note-edit-single-review.md`。
 - [x] 识别小红书验证码/风控后暂停抓取、保留页面并等待人工验证
   - 结果：明确验证信号映射为 `VerificationRequired` 并进入 PAUSED；crawler 验证页保留，自动唤醒 Chrome；用户结束任务时主动关闭保留 session。
   - 验收：普通超时不误判，仪表盘复用人工恢复按钮；后端 `240 passed, 1 skipped`、前端 `32 passed`、构建成功、E2E `39 passed`。

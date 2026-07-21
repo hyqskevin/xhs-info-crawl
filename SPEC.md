@@ -259,15 +259,11 @@
 
 ### 4.3 活动状态流转
 
-| 状态 | 说明 | 流转条件 |
-|------|------|----------|
-| RAW | 原始提取 | 字段提取完成 |
-| NEEDS_REVIEW | 需人工审核 | 关键字段缺失或去重边缘 |
-| DUPLICATE_CANDIDATE | 去重候选 | 系统发现相似活动 |
-| MERGED | 已合并 | 人工或自动合并 |
-| APPROVED | 已审核 | 人工确认可用 |
-| IGNORED | 已忽略 | 非活动或低质量 |
-| PUBLISHED | 已发布 | 已加入周报 |
+> 自 2026-07-21 起移除。`Activity` 不再保存审核/流转状态；审核完全收敛到推文维度（`Note.review_status`）。子活动只剩两种状态：
+> - 存在（`deleted_at IS NULL`）：OCR 识别出并由人工编辑/校对
+> - 已软删除（`deleted_at IS NOT NULL`）：被纠错删除，列表查询默认过滤
+
+为兼容历史脏数据，`POST /api/v1/activities/batch/approve` 接口已下线（响应 `410 Gone`），引导调用 `/api/v1/notes/{id}/review`。
 
 ---
 
@@ -353,8 +349,8 @@
   - `city`：城市代码
   - `type`：活动类型
   - `start_date` / `end_date`：举办时间范围
-  - `status`：活动状态
   - `page` / `page_size`
+- 默认不含软删除活动；不接受 `status` 参数。
 
 - 响应：
 

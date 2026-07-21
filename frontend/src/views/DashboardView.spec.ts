@@ -138,4 +138,34 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('打开小红书登录')
     expect(wrapper.text()).toContain('检测登录并继续')
   })
+
+  it('hides the error alert when the last task completed with errors (status COMPLETED_WITH_ERRORS)', async () => {
+    mocks.dashboard.mockResolvedValueOnce({ data: { data: { last_task: { id: 21, status: 'COMPLETED_WITH_ERRORS', total_notes: 50, downloaded_notes: 50, ocr_notes: 50, extracted_notes: 48, success_notes: 48, failed_notes: 1, skipped_notes: 0, current_stage: null, current_note: null, error_message: '某条笔记失败', progress_percent: 100 } } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const alert = wrapper.find('.el-alert--error')
+    expect(alert.exists(), 'COMPLETED_WITH_ERRORS 状态不应显示红色 Alert').toBe(false)
+    expect(wrapper.text()).not.toContain('某条笔记失败')
+  })
+
+  it('shows the error alert when the last task is FAILED', async () => {
+    mocks.dashboard.mockResolvedValueOnce({ data: { data: { last_task: { id: 22, status: 'FAILED', total_notes: 30, downloaded_notes: 5, ocr_notes: 5, extracted_notes: 5, success_notes: 5, failed_notes: 1, current_stage: null, current_note: null, error_message: 'opencli 子进程崩溃', progress_percent: 17 } } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const alert = wrapper.find('.el-alert--error')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('opencli 子进程崩溃')
+  })
+
+  it('shows the error alert when the last task is RUNNING', async () => {
+    mocks.dashboard.mockResolvedValueOnce({ data: { data: { last_task: { id: 23, status: 'RUNNING', total_notes: 60, downloaded_notes: 30, ocr_notes: 28, extracted_notes: 25, success_notes: 25, failed_notes: 0, skipped_notes: 5, current_stage: 'OCR', current_note: '周末笔记', error_message: '等待下次重试', progress_percent: 50 } } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const alert = wrapper.find('.el-alert--error')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('等待下次重试')
+  })
 })

@@ -18,23 +18,23 @@ def headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {create_access_token({'sub': 'admin', 'role': 'admin'})}"}
 
 
-def activity(index: int, city: str = "shanghai", kind: str = "演出", status: str = "APPROVED") -> Activity:
-    return Activity(name=f"活动{index}", city_code=city, start_time=datetime(2025, 7, 20, 18, tzinfo=timezone.utc), end_time=datetime(2025, 7, 20, 22, tzinfo=timezone.utc), location="徐汇滨江", price="免费", type=kind, source_url=f"https://www.xiaohongshu.com/a/{index}", summary=f"活动{index}简介", status=status)
+def activity(index: int, city: str = "shanghai", kind: str = "演出") -> Activity:
+    return Activity(name=f"活动{index}", city_code=city, start_time=datetime(2025, 7, 20, 18, tzinfo=timezone.utc), end_time=datetime(2025, 7, 20, 22, tzinfo=timezone.utc), location="徐汇滨江", price="免费", type=kind, source_url=f"https://www.xiaohongshu.com/a/{index}", summary=f"活动{index}简介")
 
 
 def post(db: Session, index: int, *, published_at: datetime | None = None, review_status: str = "APPROVED") -> Note:
     note = Note(task_id=1, platform_note_id=f"post-{index}", title=f"推文{index}", content="正文", source_url=f"https://www.xiaohongshu.com/explore/post-{index}", city_code="shanghai", status="PROCESSED", review_status=review_status, published_at=published_at or datetime(2025, 7, 20, 12, tzinfo=timezone.utc), raw_data={})
     db.add(note); db.flush()
-    item = activity(index, status="RAW"); item.note_id = note.id; db.add(item)
+    item = activity(index); item.note_id = note.id; db.add(item)
     return note
 
 
 def test_report_groups_by_city_and_type_and_excludes_non_approved() -> None:
-    items = [activity(1), activity(2, kind="展览"), activity(3, "beijing"), activity(4, status="NEEDS_REVIEW")]
+    items = [activity(1), activity(2, kind="展览"), activity(3, "beijing"), activity(4)]
     report = generate_markdown("2025-W29", ["shanghai", "beijing"], items)
     assert "## 上海" in report and "## 北京" in report
     assert "### 演出" in report and "### 展览" in report
-    assert "活动4" not in report
+    assert "活动4" in report
 
 
 def test_activity_markdown_format_and_empty_report() -> None:
@@ -54,11 +54,12 @@ def test_report_generation_performance() -> None:
 
 
 def test_xlsx_contains_same_approved_activities() -> None:
-    content = generate_xlsx([activity(1), activity(2, status="IGNORED")])
+    content = generate_xlsx([activity(1), activity(2)])
     workbook = load_workbook(BytesIO(content), read_only=True)
     rows = list(workbook.active.iter_rows(values_only=True))
     assert rows[1][0] == "活动1"
-    assert len(rows) == 2
+    # 两行数据 + 一行表头
+    assert len(rows) == 3
 
 
 def test_generate_persists_and_regenerates_single_report(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:

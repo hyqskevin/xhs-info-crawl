@@ -89,6 +89,17 @@ cd backend && pytest -q             # 后端
 cd frontend && npm run test -- --run  # 前端
 ```
 
+## 服务进程管理
+
+`uvicorn` 在本地通常带 `--reload` 启动，源码改动后会自动重载。但 **celery worker、Celery beat、定时任务、消费消息队列的后台进程不会自动重载**：
+
+- 修改 ORM 模型（增删列、改 nullable、改外键）后：**必须**手动重启 worker，否则 worker 持旧模型访问新 schema 会触发 `no such column`、`OperationalError` 等错误，并将 traceback 写到 `error_message` 字段让前端看到的"任务报错"。
+- 修改依赖 SQL 的服务代码（`app/services/*.py`、`app/tasks/*.py`）后：**必须**重启 worker。
+- 仅修改 API 层代码（`app/api/v1/*.py`）和 pydantic schema：uvicorn reload 已生效，不必动 worker。
+- 修改前端代码：仅 dev server 自动刷新，无后端进程需要重启。
+
+**凡涉及模型/迁移/schema 的 TODO，验收项必须包含"重启 worker"**。Agent 完成迁移后应提示用户重启 worker，而不是默认用户会处理。
+
 ## 提交约定
 
 - 改动经过 spec + TDD + 测试通过后才能提交；持续授权不降低这些质量门槛
