@@ -3,8 +3,9 @@ import { Connection, Delete, Download, Edit, Loading, MagicStick, Plus, UploadFi
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
+import KeywordGroupSettings from '@/components/KeywordGroupSettings.vue'
 
-const tab = ref<'cities' | 'bloggers'>('cities')
+const tab = ref<'cities' | 'bloggers' | 'keyword-groups'>('cities')
 const rows = ref<any[]>([])
 const cities = ref<any[]>([])
 const dialog = ref(false)
@@ -114,6 +115,7 @@ onMounted(load)
       <ElRadioGroup v-model="tab" @change="load">
         <ElRadioButton value="cities">城市抓取配置</ElRadioButton>
         <ElRadioButton value="bloggers">博主白名单</ElRadioButton>
+        <ElRadioButton value="keyword-groups">关键词组</ElRadioButton>
       </ElRadioGroup>
       <ElButton type="primary" :icon="Plus" @click="open()">{{ tab === 'cities' ? '新增城市' : '新增博主' }}</ElButton>
       <ElButton v-if="tab === 'bloggers'" :icon="Download" @click="downloadTemplate">下载模板</ElButton>
@@ -155,6 +157,8 @@ onMounted(load)
         <ElButton text type="danger" :icon="Delete" @click="remove(scope.row)">删除</ElButton>
       </template></ElTableColumn>
     </ElTable>
+
+    <KeywordGroupSettings v-if="tab === 'keyword-groups'" :cities="cities" />
   </ElCard>
 
   <ElDialog v-model="dialog" :title="`${editingId ? '编辑' : '新增'}${tab === 'cities' ? '城市' : '博主'}`" width="620">
