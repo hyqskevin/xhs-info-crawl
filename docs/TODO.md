@@ -29,9 +29,10 @@
 - [ ] 重启 celery beat 加载新代码
   - 目标：当前 celery beat PID 11974 是 7/16 启动持有旧任务调度；服务进程管理已写进 AGENTS.md，beat 也要遵循。
   - 验收：检查 `ps aux | grep celery | grep beat` 启动时间 `<= 今日`；beat 日志中 `Scheduler: Sending due task` 使用最新代码路径。本项不需要代码改动，只需要 Agent 在 TODO 完成时主动停掉并重启 beat 进程。
-- [ ] 一次性数据库迁移 `seed_admin` 启动后兜底管理员
+- [x] 一次性数据库迁移 `seed_admin` 启动后兜底管理员
   - 目标：当数据库完全为空（首次部署/重置）时，没有 admin 用户无法登录。当前 admin 凭据是手工 sql 新增。
   - 验收：迁移 `0012_seed_admin.py` 在 upgrade 时若 `users` 表为空则插入 admin 用户；密码来自环境变量 `INITIAL_ADMIN_PASSWORD`，未设置则使用 `Admin@123` 且 WARNING 提示"生产环境必须更改"；脚本幂等：若 admin 已存在则跳过。重置 db（删除数据文件后跑 alembic upgrade head）后能用默认密码登录。
+  - 结果：迁移已实现并跑过真实 DB；实测 `alembic_version = 0012`，`users(1, admin, admin, 97-byte Argon2)`，Argon2.verify("Admin@123") → True。后端 316→321 passed（5 个 case：users 空 seed / 已存在跳过 / env 覆盖密码 / WARNING 日志 / downgrade 删除）。不更新 v0.2.0；累积到下个 release cycle。
 - [ ] 列表接口 OCR 摘要聚合性能与长度保护
   - 目标：`GET /notes` 一次性 LEFT JOIN `NoteImage` 表所有图片行，单推文 100 张图触发 100 行 SELECT 加字符串拼接，列表渲染大体积下 N+1 不明显但单行体可能 MB 级别。
   - 验收：`tests/test_note_summary.py` 加测：推文有 50 张图片时 summary 字符串 ≤ 4 KiB；超长时省略截断并在 DB 注释/响应里附 `summary_truncated=True`；前端"摘要"列不出现"pre" + 大 body（前端 `show-overflow-tooltip` 兜底）；后台跑脚本性能测试：`SELECT COUNT(*) FROM notes WHERE LENGTH(summary)>4096` 应为 0。
