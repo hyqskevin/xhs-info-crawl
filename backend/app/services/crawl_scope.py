@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.blogger_city import BloggerCity
 from app.models.config import Blogger, City, Keyword
+from app.models.keyword_group import KeywordGroup, KeywordGroupCity, KeywordGroupWord
 
 
 @dataclass
@@ -21,19 +22,60 @@ class CrawlScope:
     bloggers: list[Blogger]
 
 
-def resolve_effective_keywords(db: Session, city: City, task_params: dict) -> list[str]:
-    """规则：
-    - task_params 含 "keywords" 键（无论值是否为空列表） → 用任务参数
-    - 否则 → 取城市 enabled 关键词
-    """
-    if "keywords" in task_params:
-        return list(task_params["keywords"] or [])
+def _resolve_from_legacy_keyword_table(db: Session, city: City) -> list[str]:
     stmt = (
         select(Keyword.word)
         .where(Keyword.city_code == city.code, Keyword.enabled.is_(True))
         .order_by(Keyword.id)
     )
     return list(db.scalars(stmt).all())
+
+
+def _resolve_from_keyword_groups(
+    db: Session, city: City, keyword_group_ids: list[int]
+) -> list[str]:
+    """根据 keyword_group_ids 求并集；只包含挂在当前城市下的组。"""
+    if not keyword_group_ids:
+        return []
+    stmt = (
+        select(KeywordGroupWord.word)
+        .join(
+            KeywordGroupCity,
+            KeywordGroupCity.keyword_group_id == KeywordGroupWord.keyword_group_id,
+        )
+        .where(
+            KeywordGroupWord.keyword_group_id.in_(keyword_group_ids),
+            KeywordGroupCity.city_code == city.code,
+            KeywordGroupWord.enabled.is_(True),
+            KeywordGroupCity.enabled.is_(True),
+            KeywordGroup.enabled.is_(True),
+        )
+        .join(
+            KeywordGroup,
+            KeywordGroup.id == KeywordGroupWord.keyword_group_id,
+        )
+    )
+    return list(dict.fromkeys(db.scalars(stmt).all()))
+
+
+def resolve_effective_keywords(db: Session, city: City, task_params: dict) -> list[str]:
+    """规则：
+    - task_params 含 "keywords" 键（旧字段） → 用任务参数
+    - 否则若含 "keyword_group_ids" → 取这些组在该城市下的关键词并集
+    - 都不存在 → 退回城市 enabled 关键词（兼容老调用）
+    """
+    if "keywords" in task_params:
+        return list(task_params["keywords"] or [])
+    if "keyword_group_ids" in task_params:
+        ids = task_params.get("keyword_group_ids") or []
+        if not isinstance(ids, list):
+            return []
+        words = _resolve_from_keyword_groups(db, city, ids)
+        # 若 keyword_group_ids 为空列表（前端显式传空）→ 不要退回到 keyword 表
+        if ids:
+            return words
+        return []
+    return _resolve_from_legacy_keyword_table(db, city)
 
 
 def resolve_effective_bloggers(db: Session, city: City, task_params: dict) -> list[Blogger]:
