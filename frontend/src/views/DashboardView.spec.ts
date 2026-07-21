@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => ({
     : [{ id: 9, username: '活动博主', profile_url: 'https://www.xiaohongshu.com/user/profile/abc', city_codes: ['shanghai'], enabled: true },
        { id: 10, username: '未补充博主', profile_url: '', city_codes: ['shanghai'], enabled: true }] } })),
   createTask: vi.fn().mockResolvedValue({ data: { data: { id: 3 } } }),
+  keywordGroups: vi.fn().mockImplementation((params: any) => Promise.resolve({ data: { data: { items: params && params.city_code === 'shanghai' ? [
+    { id: 11, name: '上海-展览', words: ['展览'], city_codes: ['shanghai'], enabled: true },
+    { id: 12, name: '上海-亲子', words: ['亲子'], city_codes: ['shanghai'], enabled: true },
+  ] : [] } } })),
   dashboard: vi.fn().mockResolvedValue({ data: { data: { last_task: { id: 4, status: 'FAILED', total_notes: 113, downloaded_notes: 5, ocr_notes: 5, extracted_notes: 5, success_notes: 5, failed_notes: 1, current_stage: null, current_note: null, error_message: 'bad date', progress_percent: 5.3 } } } }),
   restartTask: vi.fn().mockResolvedValue({ data: { data: { id: 4, status: 'PENDING' } } }),
   openXhsLogin: vi.fn().mockResolvedValue({ data: { data: { url: 'https://www.xiaohongshu.com/explore' } } }),
@@ -33,13 +37,13 @@ describe('DashboardView', () => {
     const selects = wrapper.findAllComponents(ElSelect)
     selects[0].vm.$emit('update:modelValue', 'shanghai')
     await flushPromises()
-    selects[1].vm.$emit('update:modelValue', ['周末活动'])
+    selects[1].vm.$emit('update:modelValue', [12])
     selects[2].vm.$emit('update:modelValue', '一天内')
     selects[3].vm.$emit('update:modelValue', [9])
     await wrapper.findAll('button').find((button) => button.text().includes('开始抓取'))!.trigger('click')
     await flushPromises()
 
-    expect(mocks.createTask).toHaveBeenCalledWith({ type: 'mixed', city: 'shanghai', keywords: ['周末活动'], recent_filter: '一天内', blogger_ids: [9] })
+    expect(mocks.createTask).toHaveBeenCalledWith({ type: 'mixed', city: 'shanghai', keyword_group_ids: [12], recent_filter: '一天内', blogger_ids: [9] })
   })
 
   it('blocks task submission when selected blogger has no profile_url', async () => {

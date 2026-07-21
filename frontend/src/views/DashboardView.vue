@@ -15,10 +15,10 @@ const openingLogin = ref(false)
 const stopping = ref(false)
 const lastTask = ref<any>(null)
 let pollTimer: ReturnType<typeof setInterval> | undefined
-const form = reactive({ city: '', keywords: [] as string[], recent_filter: '一周内', blogger_ids: [] as number[] })
+const form = reactive({ city: '', keyword_group_ids: [] as number[], recent_filter: '一周内', blogger_ids: [] as number[] })
 const recentFilters = ['不限', '一天内', '一周内', '半年内']
+const cityKeywordGroups = ref<any[]>([])
 const selectedCity = computed(() => cities.value.find((city) => city.code === form.city))
-const cityKeywords = computed(() => selectedCity.value?.keywords || [])
 const cityBloggers = computed(() => bloggers.value.filter((blogger: any) => (blogger.city_codes || []).includes(form.city) && blogger.enabled))
 const incompleteBloggers = computed(() => form.blogger_ids.filter((id: number) => {
   const b = bloggers.value.find((x: any) => x.id === id)
@@ -31,10 +31,20 @@ const shouldShowLastTaskError = computed(() =>
   !!lastTask.value?.error_message && errorVisibleStatuses.includes(lastTask.value.status)
 )
 
-watch(() => form.city, () => {
-  form.keywords = []
+watch(() => form.city, async () => {
+  form.keyword_group_ids = []
   form.blogger_ids = []
   form.recent_filter = selectedCity.value?.recent_filter || '一周内'
+  if (form.city) {
+    try {
+      const kgResp = await api.keywordGroups({ city_code: form.city })
+      cityKeywordGroups.value = (kgResp.data.data.items || []).filter((g: any) => g.enabled)
+    } catch {
+      cityKeywordGroups.value = []
+    }
+  } else {
+    cityKeywordGroups.value = []
+  }
 })
 
 async function initialize() {
@@ -58,14 +68,14 @@ async function loadLatestTask() {
 
 async function start() {
   if (!form.city) { ElMessage.warning('请选择城市'); return }
-  if (!form.keywords.length && !form.blogger_ids.length) { ElMessage.warning('请至少选择一个关键词或博主'); return }
+  if (!form.keyword_group_ids.length && !form.blogger_ids.length) { ElMessage.warning('请至少选择一个关键词组或博主'); return }
   if (incompleteBloggers.value.length) {
     ElMessage.warning(`所选博主信息不完整（${incompleteBloggers.value.length} 个），请到配置中心点"补充博主信息"后再发起抓取`)
     return
   }
   submitting.value = true
   try {
-    await api.createTask({ type: 'mixed', city: form.city, keywords: form.keywords, recent_filter: form.recent_filter, blogger_ids: form.blogger_ids })
+    await api.createTask({ type: 'mixed', city: form.city, keyword_group_ids: form.keyword_group_ids, recent_filter: form.recent_filter, blogger_ids: form.blogger_ids })
     ElMessage.success('抓取任务已提交，可到任务日志查看进度')
     await loadLatestTask()
   } catch (error: any) {
@@ -129,14 +139,14 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 
 <template>
   <div class="dashboard">
-    <div class="page-intro"><div><p class="eyebrow">PHASE ONE</p><h2>小红书本地活动信息抓取系统</h2><p>从已配置的城市、关键词和博主中选择本次抓取范围。</p></div></div>
+    <div class="page-intro"><div><p class="eyebrow">PHASE ONE</p><h2>小红书本地活动信息抓取系统</h2><p>从已配置的城市、关键词组和博主中选择本次抓取范围。</p></div></div>
 
     <ElCard shadow="never" class="crawl-card">
       <template #header><div class="card-title"><ElIcon><VideoPlay /></ElIcon><strong>发起抓取</strong></div></template>
       <ElForm label-position="top">
         <div class="crawl-grid">
           <ElFormItem label="城市"><ElSelect v-model="form.city" placeholder="选择城市"><ElOption v-for="city in cities" :key="city.code" :label="city.name" :value="city.code" /></ElSelect></ElFormItem>
-          <ElFormItem label="关键词"><ElSelect v-model="form.keywords" multiple collapse-tags collapse-tags-tooltip placeholder="选择一个或多个关键词"><ElOption v-for="word in cityKeywords" :key="word" :label="word" :value="word" /></ElSelect></ElFormItem>
+          <ElFormItem label="关键词组"><ElSelect v-model="form.keyword_group_ids" multiple collapse-tags collapse-tags-tooltip placeholder="选择一个或多个关键词组"><ElOption v-for="group in cityKeywordGroups" :key="group.id" :label="group.name" :value="group.id" /></ElSelect></ElFormItem>
           <ElFormItem label="时间范围"><ElSelect v-model="form.recent_filter"><ElOption v-for="item in recentFilters" :key="item" :label="item" :value="item" /></ElSelect></ElFormItem>
           <ElFormItem label="博主">
           <ElSelect v-model="form.blogger_ids" multiple collapse-tags collapse-tags-tooltip placeholder="选择一个或多个博主">
