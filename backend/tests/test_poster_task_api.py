@@ -137,6 +137,11 @@ def test_delete_poster_task(client: TestClient, db_session: Session) -> None:
 
 
 def test_render_with_mocked_opencli(client: TestClient, db_session: Session, monkeypatch) -> None:
+    """offline：mock subprocess.run 让 opencli 假装写 PNG bytes。
+
+    真实集成测试见 tests/scripts/test_poster_generation.sh（启 http server
+    + opencli browser open http://...，opencli 不允许 file:// 协议）。
+    """
     import subprocess
     from pathlib import Path
 
@@ -156,17 +161,16 @@ def test_render_with_mocked_opencli(client: TestClient, db_session: Session, mon
     )
     tid = create.json()["data"]["id"]
 
-    # 让 playwright unavailable，强制 fallback opencli；
-    # 同时 mock subprocess.run 让 opencli 写一个合法 png。
     from app.services import poster_renderer as renderer_module
 
     monkeypatch.setattr(renderer_module, "_playwright_available", lambda: False)
 
     def fake_run(cmd, capture_output, text, timeout):
-        # cmd = ['opencli', 'screenshot', '--html', tmp, '--output', path, '--full-page']
-        path = cmd[5]
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+        if "screenshot" in cmd and "--output" in cmd:
+            idx = cmd.index("--output")
+            path = cmd[idx + 1]
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
         class R:
             returncode = 0
             stderr = ""
@@ -178,7 +182,6 @@ def test_render_with_mocked_opencli(client: TestClient, db_session: Session, mon
     assert render.status_code == 200
     body = render.json()["data"]
     assert body["url"].endswith("/download")
-    # 下载文件
     resp = client.get(f"/api/v1/poster-tasks/{tid}/download", headers=_auth())
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("image/png")

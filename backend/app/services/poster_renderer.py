@@ -106,20 +106,39 @@ def _playwright_render(html: str, path: str) -> None:
 
 
 def _opencli_render(html: str, path: str) -> None:
+    """通过 opencli browser bridge 渲染 HTML → PNG。
+
+    步骤：
+    1. 写临时 html；
+    2. opencli browser open file://...
+    3. opencli browser screenshot --output path --full-page
+    """
     if shutil.which("opencli") is None:
-        raise RuntimeError("opencli 未安装；安装 playwright 或 opencli 后重试")
+        raise RuntimeError("opencli 未安装；安装 opencli 后重试")
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as tmp:
         tmp.write(html)
         tmp_name = tmp.name
+    url = f"file://{tmp_name}"
     try:
-        result = subprocess.run(
-            ["opencli", "screenshot", "--html", tmp_name, "--output", path, "--full-page"],
+        open_proc = subprocess.run(
+            ["opencli", "browser", "default", "open", url],
             capture_output=True,
             text=True,
             timeout=180,
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"opencli screenshot 失败: {result.stderr}")
+        if open_proc.returncode != 0:
+            raise RuntimeError(f"opencli browser open 失败: {open_proc.stderr or open_proc.stdout}")
+        screenshot_proc = subprocess.run(
+            ["opencli", "browser", "default", "screenshot", "--output", path, "--full-page"],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if screenshot_proc.returncode != 0:
+            raise RuntimeError(
+                f"opencli browser screenshot 失败: {screenshot_proc.stderr or screenshot_proc.stdout}"
+            )
     finally:
         try:
             Path(tmp_name).unlink()
