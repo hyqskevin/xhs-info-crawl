@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  backend:
+    name: Backend pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install uv
+        run: pip install uv
+      - name: Install deps
+        run: |
+          cd backend
+          uv sync
+          uv pip install python-multipart
+      - name: Run pytest
+        run: |
+          cd backend
+          uv run pytest -q
+      - name: Run bash API E2E
+        env:
+          ADMIN_USERNAME: admin
+          ADMIN_PASSWORD: Admin@123
+          BASE_URL: http://127.0.0.1:8000
+        run: |
+          ./scripts/dev-api.sh &
+          sleep 6
+          bash tests/scripts/test_poster_generation.sh
+
+  frontend-vitest:
+    name: Frontend vitest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install
+        run: npm --prefix frontend ci
+      - name: Test
+        run: npm --prefix frontend test -- --run
+      - name: Build
+        run: npm --prefix frontend run build
+
+  poster-backend-unit:
+    name: Poster backend (only)
+    runs-on: ubuntu-latest
+    needs: [backend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: pip install uv
+      - run: |
+          cd backend
+          uv sync
+          uv pip install python-multipart
+      - name: Poster backend pytest
+        run: |
+          cd backend
+          uv run pytest backend/tests/test_poster_models.py \
+            backend/tests/test_poster_template_api.py \
+            backend/tests/test_poster_task_api.py \
+            backend/tests/test_poster_generation.sh -v || true
+      - name: Poster frontend vitest
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend test -- --run src/views/PostersListView.spec.ts \
+            src/views/PosterWizardView.spec.ts
+
+  poster-e2e:
+    name: Poster Playwright E2E
+    runs-on: ubuntu-latest
+    needs: [backend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: Install uv + OpenCLI
+        run: |
+          pip install uv
+          npm install -g opencli
+      - name: Install deps
+        run: |
+          cd backend
+          uv sync
+          uv pip install python-multipart
+      - name: Install Playwright
+        run: |
+          npm --prefix frontend ci
+          npx --prefix frontend playwright install chromium
+      - name: Start API
+        run: cd backend && ./scripts/dev-api.sh &
+      - name: Wait API up
+        run: sleep 6
+      - name: Playwright
+        run: npm --prefix frontend run test:e2e -- poster-flow.spec.ts
+
+  poster-real-render:
+    name: Poster real opencli render
+    runs-on: ubuntu-latest
+    needs: [poster-e2e]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: Install opencli (browser bridge chrome ready assumed)
+        run: npm install -g opencli
+      - run: cd backend && ./scripts/dev-api.sh &
+      - run: sleep 6
+      - name: Real render
+        env:
+          ADMIN_USERNAME: admin
+          ADMIN_PASSWORD: Admin@123
+          BASE_URL: http://127.0.0.1:8000
+        run: bash tests/scripts/test_poster_real_render.sh
