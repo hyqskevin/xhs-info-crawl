@@ -18,10 +18,17 @@
   - 目标：当前只有 admin。升级为多账号平等（`Administrator` 组默认有全部权限），新增"账号管理"左侧 nav；账号可以分组、分组关联权限集；`sub` 角色划分保留为未来"子账号"扩展。
   - 验收：新 `users/groups/permissions/group_permissions/user_groups` 表；新 `AccountsView.vue`（左 nav 新增），含账号 / 分组 / 权限 三 tab；后端 `require_permission(code)` 替换 `require_admin`；前端 49+ 测试，build 通过；实操：用 admin 新建 editor 账号 → 限定权限 → editor 登录验证无权页面 403。
   - 关联：spec `docs/superpowers/specs/2026-07-21-multi-account-rbac-design.md`（已写）。
-- [ ] 城市复用 + 关键词组一对多
+- [x] 城市复用 + 关键词组一对多
   - 目标：城市 DB unique 约束；关键词组 `KeywordGroup` 实体（可挂多个城市、可包含多个关键词）；仪表盘关键词下拉改为多选关键词组；`crawl_scope.resolve_crawl_scope` 改写。
   - 验收：新 migration `0013_keyword_groups.py`；新 API `settings/keyword-groups` 与 `tasks/crawl {keyword_group_ids}`；旧字段 `keywords` 兼容保留；前端 `SettingsView` 增加关键词组 tab；后端 308+ 测试，前端 49+ 测试，build 通过。
   - 关联：spec `docs/superpowers/specs/2026-07-21-city-and-keyword-groups-design.md`（已写）。
+  - 结果：5 个 commit：
+    - `a20a0e5` feat(models): keyword_groups 多对多 + migration 0013
+    - `d296f48` feat(api): keyword-groups CRUD API
+    - `450d85f` feat(crawl_scope): resolve keyword_group_ids
+    - `3c65227` feat(frontend): DashboardView 用 keyword_group_ids
+    - `927110a` feat(frontend): SettingsView 增加关键词组 tab
+  - 实测：生产 DB alembic 0013 通过；cities 在 0013 前由 dedupe_cities 清理；后端 336 passed（+15 case），前端 48 passed，build OK。
 - [ ] 城市去重（修复重复 city 行）
   - 目标：一次性脚本 `backend/scripts/dedupe_cities.py` 选最早启用的 City 为 canonical，把其它重复 name 行的关联迁移过去（notes/blogger_city/keyword_group_cities/crawl_tasks），删除多余行；幂等。
   - 验收：`tests/test_dedupe_cities_script.py` 3 个 case；生产 DB 跑完 `SELECT COUNT(*) FROM cities` 下降，城市下拉不再重复。
