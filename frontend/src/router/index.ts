@@ -8,6 +8,8 @@ import TasksView from '@/views/TasksView.vue'
 import DuplicatesView from '@/views/DuplicatesView.vue'
 import ReportsView from '@/views/ReportsView.vue'
 import SettingsView from '@/views/SettingsView.vue'
+import PostersListView from '@/views/PostersListView.vue'
+import PosterWizardView from '@/views/PosterWizardView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -24,6 +26,8 @@ const router = createRouter({
         { path: 'tasks', component: TasksView, meta: { title: '任务日志' } },
         { path: 'reports', component: ReportsView, meta: { title: '周报管理' } },
         { path: 'settings', component: SettingsView, meta: { title: '配置中心' } },
+        { path: 'posters', component: PostersListView, meta: { title: '海报制作' } },
+        { path: 'posters/new', component: PosterWizardView, meta: { title: '新建海报' } },
       ],
     },
   ],

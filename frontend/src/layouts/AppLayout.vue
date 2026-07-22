@@ -4,6 +4,7 @@ import {
   Connection,
   DataAnalysis,
   Document,
+  Film,
   List,
   Setting,
   SwitchButton,
@@ -45,6 +46,10 @@ function logout(){localStorage.removeItem('token');location.href='/login'}
         <ElMenuItem index="/settings">
           <ElIcon><Setting /></ElIcon>
           <span>配置中心</span>
+        </ElMenuItem>
+        <ElMenuItem index="/posters">
+          <ElIcon><Film /></ElIcon>
+          <span>海报制作</span>
         </ElMenuItem>
       </ElMenu>
     </ElAside>
