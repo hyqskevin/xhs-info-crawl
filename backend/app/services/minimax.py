@@ -67,3 +67,71 @@ class MiniMaxClient:
         if not isinstance(result, dict):
             raise MiniMaxError("MiniMax returned non-object output")
         return result
+
+    def vision_chat(
+        self,
+        image_b64: str,
+        mime_type: str,
+        instruction: str,
+        max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
+        extra_user_text: str = "",
+    ) -> dict[str, Any]:
+        """调用 MiniMax vision 能力（要求 LLM 支持 image_url）。
+
+        image_b64: 已 base64 编码的图片字节；
+        mime_type: 'image/jpeg' / 'image/png';
+        extra_user_text: 可补充文本上下文；
+        返回 dict（JSON 解析成功时），否则抛 MiniMaxError。
+        """
+        if not self.settings.minimax_api_key:
+            raise MiniMaxError("MINIMAX_API_KEY is not configured")
+        url = f"{self.settings.minimax_base_url.rstrip('/')}/{self.settings.minimax_chat_path.lstrip('/')}"
+        content_blocks: list[dict[str, Any]] = [
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{image_b64}"},
+            }
+        ]
+        if extra_user_text:
+            content_blocks.append({"type": "text", "text": extra_user_text})
+        payload: dict[str, Any] = {
+            "model": getattr(self.settings, "minimax_vision_model", "MiniMax-vision-01"),
+            "messages": [
+                {"role": "system", "name": "vision_parser", "content": instruction},
+                {"role": "user", "name": "user", "content": content_blocks},
+            ],
+            "max_completion_tokens": max_tokens,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        with httpx.Client(transport=self.transport, timeout=self.settings.minimax_timeout_seconds) as client:
+            response = client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {self.settings.minimax_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        if response.status_code != 200:
+            raise MiniMaxError(f"MiniMax vision HTTP {response.status_code}")
+        body = response.json()
+        base_resp = body.get("base_resp") or {}
+        if base_resp.get("status_code") not in (None, 0):
+            raise MiniMaxError(str(base_resp.get("status_msg") or base_resp.get("status_code")))
+        try:
+            message = body["choices"][0]["message"]
+            tool_calls = message.get("tool_calls") or []
+            if tool_calls:
+                content = tool_calls[0]["function"]["arguments"]
+            else:
+                content = message["content"]
+            if isinstance(content, dict):
+                return content
+            if isinstance(content, str) and content.startswith("```json"):
+                content = content.removeprefix("```json").removesuffix("```").strip()
+            return json.loads(content)
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            raise MiniMaxError("MiniMax vision returned invalid structured output") from exc

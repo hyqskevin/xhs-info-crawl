@@ -100,18 +100,76 @@
 9. 点"渲染为 PNG"：后端截图后看到缩略图、下载按钮；
 10. 进海报列表：看到刚才的任务，状态为 rendered，可下载。
 
-## 4. 验证脚本（可重放）
+### 场景 3.2 浏览器实际渲染（端到端截图）
+
+> 这一类需要在 **Playwright 浏览器**（headless chromium）跑 `frontend/e2e/poster-flow.spec.ts`：
+
+- 前置：dev 服务（`make dev-api` + `make dev-web`）跑起来，登录态已取得。
+- 步骤（脚本：`frontend/e2e/poster-flow.spec.ts`）：
+  1. 访问 `/posters/new`；
+  2. 选 3 个候选活动 → 选模板 → 填字段 → 上传/选图；
+  3. 点"渲染为 PNG"按钮；
+  4. 等接口响应；
+  5. 截全屏 / 取 `<img class="poster-output">` src 与 HTML viewport；
+  6. 断言：PNG 不为空；PNG 宽 ≈ 1242，高 ≈ 2208；HTML 中**包含全部 items 的 title 文本**；**包含至少一个 emoji**。
+- 期望：脚本退出码 0，输出 `data/posters/{task_id}.png` 与 chromium 截图对比 baseline。
+
+## 4. 样式接口单元测试
+
+### 场景 4.1 HTML 拼装与 CSS 注入
+
+- 单元：`backend/tests/test_poster_render.py::test_html_assembly_injects_items_and_styles`
+- 步骤：构造 `PosterTask(items=[...])` 与 `PosterTemplate(css_text='.x{background:red}')`；
+  调 `assemble_html(task, template)`；
+- 期望：返回字符串包含 `<style>.x{background:red}</style>`；items 元素按 items.length 渲染，每个 item 含 `time_range / location / fee`。
+
+### 场景 4.2 渲染 PNG 字节
+
+- 单元：`test_render_to_png_returns_png_bytes`
+- 步骤：用 pytest 调 `render_poster(task)`（Playwright 已经在 conftest fixture 启动 chromium）；
+- 期望：返回字节流首 8 字节 == PNG magic `89 50 4e 47 0d 0a 1a 0a`；
+- 期望：尺寸实测 ≈ template viewport。
+
+### 场景 4.3 opencli fallback
+
+- 单元：`test_render_falls_back_to_opencli_when_playwright_unavailable`
+- 步骤：monkeypatch `playwright.sync_api.sync_playwright` 抛 ImportError，monkeypatch `render_with_opencli` 返回写文件路径；
+- 期望：`render_poster` 仍能写文件并返回 PNG 路径；output_path 落到 data/posters/{id}.png。
+
+### 场景 4.4 文件清理
+
+- 单元：`test_render_dedupes_old_png_for_same_task`
+- 步骤：连续两次 render 同一 task；
+- 期望：第一次 PNG 删除，第二次 PNG 写入新路径；data/posters 下不会留旧文件。
+
+## 5. 视觉回归（截图对比）
+
+> `frontend/e2e/poster-visual.spec.ts`：
+
+- 步骤：对比今日截海报图与 baseline：`tests/baselines/poster-baseline.png`；
+- 通过：图像 diff ≤ 0.5% 像素差，CI 标记绿色；
+- 失败：拷贝 diff 截图到 `tests/baselines/_diffs/poster-{ts}.png` 供人审。
+
+## 6. 验证脚本（可重放）
 
 `tests/scripts/test_poster_generation.sh` 覆盖场景：
 - 1.1 / 1.2 / 1.3 / 1.4 / 2.1 / 2.3 / 2.4 / 2.5 / 2.6
+- 4.1 / 4.2 / 4.3 / 4.4 单元端 pytest 跑。
+
+前端 Playwright 流程：单独跑：
+```bash
+cd frontend && npm run test:e2e -- poster-flow.spec.ts poster-visual.spec.ts
+```
 
 依赖：
 - 后端 dev 服务运行（默认 http://127.0.0.1:8000）；
-- `ADMIN_TOKEN` 已在 export（脚本会先用 admin 登录取得）；
-- `IMAGE_PATH` 若要测 AI：路径指 sample.jpg。
+- `MINIMAX_API_KEY` 已 export（若要测 AI）；
+- 前端 dev 服务（http://127.0.0.1:5173）；
+- 系统已 `playwright install chromium`。
 
 跑法：
 ```bash
 make dev-api &
 bash tests/scripts/test_poster_generation.sh
+npm run test:e2e -- poster-flow.spec.ts poster-visual.spec.ts
 ```

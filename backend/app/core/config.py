@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimaxi.com/v1"
     minimax_model: str = "MiniMax-M3"
+    minimax_vision_model: str = "MiniMax-vision-01"
     minimax_chat_path: str = "/text/chatcompletion_v2"
     minimax_timeout_seconds: int = 180
     ocr_enabled: bool = False
