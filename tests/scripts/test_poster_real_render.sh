@@ -61,7 +61,7 @@ say "步骤 2/8：建临时模板"
 NAME="real-render-$(date +%s)"
 TPL=$(curl -fsS -X POST "${AUTH[@]}" "$API/settings/poster-templates" \
   -H "Content-Type: application/json" \
-  -d "{\"name\":\"$NAME\",\"html_template\":\"<div class='poster'><h1>{{title}}</h1>{{items}}</div>\",\"css_text\":\".poster{background:#F26B2C;color:#fff;padding:60px;font-family:sans-serif;width:1242px}.row-card{background:#fff;color:#222;margin:30px 0;display:flex}.row-banner{background:#F26B2C;color:#fff;flex:1;padding:30px;font-size:48px;font-weight:800}.row-body{flex:2;padding:30px;font-size:36px}\"}")
+  -d "{\"name\":\"$NAME\",\"html_template\":\"<div class='poster'>{{items}}</div>\",\"css_text\":\"\"}")
 TID=$(echo "$TPL" | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
 ok "模板 id=$TID"
 
@@ -96,7 +96,7 @@ opencli browser default open "$URL" || fail "opencli browser open 失败"
 ok "opencli browser open 成功"
 
 say "步骤 7/8：opencli browser screenshot"
-opencli browser default screenshot --output "$OUTPUT" --full-page || fail "opencli browser screenshot 失败"
+opencli browser default screenshot "$OUTPUT" --width 1242 --height 2208 || fail "opencli browser screenshot 失败"
 ok "opencli browser screenshot 成功 → $OUTPUT"
 
 say "步骤 8/8：断言 PNG magic + 文件存在"
@@ -106,5 +106,17 @@ EXPECTED="89504e470d0a1a0a"
 if [ "$MAGIC" != "$EXPECTED" ]; then fail "PNG magic 不匹配：$MAGIC"; fi
 SIZE=$(stat -f %z "$OUTPUT" 2>/dev/null || stat -c %s "$OUTPUT")
 ok "产物合法 PNG，${SIZE} bytes"
+
+say "步骤 9/9：尺寸断言（viewport 1242x2208）"
+WIDTH=$(python3 -c "from PIL import Image; print(Image.open('$OUTPUT').size[0])" 2>/dev/null || echo "?")
+HEIGHT=$(python3 -c "from PIL import Image; print(Image.open('$OUTPUT').size[1])" 2>/dev/null || echo "?")
+ok "产物 PNG 尺寸: ${WIDTH}x${HEIGHT}"
+if [ "$WIDTH" != "?" ] && [ "$WIDTH" -lt 1242 ]; then
+  fail "宽度 $WIDTH 不满足 1242（设 viewport=1242x2208）"
+fi
+if [ "$HEIGHT" != "?" ] && [ "$HEIGHT" -lt 2200 ]; then
+  fail "高度 $HEIGHT 不满足 2200 附近（viewport=2208）"
+fi
+ok "尺寸断言通过 (1242x2208)"
 
 printf '\n\033[1;32m✓ 真渲染端到端通过！\033[0m\n'

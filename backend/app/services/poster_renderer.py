@@ -29,7 +29,7 @@ def _escape(value: str | None) -> str:
     return html_lib.escape(value or "")
 
 
-def _render_item_html(item: dict) -> str:
+def _render_item_html(item: dict, height: int = 0) -> str:
     fields = item.get("fields") or {}
     time_range = _escape(fields.get("time_range"))
     location = _escape(fields.get("location"))
@@ -40,33 +40,56 @@ def _render_item_html(item: dict) -> str:
     img_html = (
         f'<img class="row-image" src="{_escape(image_url)}" alt=""/>' if image_url else ""
     )
-    return f"""
-      <section class="row-card">
-        <div class="row-banner"><span class="row-title">{title}</span></div>
-        <div class="row-body">
-          <div class="row-meta">
-            <p class="meta-time">🕐 {time_range}</p>
-            <p class="meta-location">📍 {location}</p>
-            <p class="meta-fee">🎫 {fee}</p>
-            {f'<p class="meta-content">{content}</p>' if content else ''}
-          </div>
-          {img_html}
-        </div>
-      </section>""".strip()
+    # 用 table 布局：左 360 橙，右 882 米色。整行高 height。
+    return f'''
+      <table class="row-card-table" border="0" cellspacing="0" cellpadding="0" width="100%" style="height:{height}px;border-radius:12px;overflow:hidden;">
+        <tr style="height:{height}px;">
+          <td class="row-banner" width="360" valign="middle" style="background:#F26B2C;color:#fff;padding:36px;font-size:48px;font-weight:800;">{title}</td>
+          <td class="row-body" valign="middle" style="background:#fff5ec;padding:36px;font-size:40px;color:#222;">
+            <p style="margin:8px 0;">🕐 {time_range}</p>
+            <p style="margin:8px 0;">📍 {location}</p>
+            <p style="margin:8px 0;">🎫 {fee}</p>
+            {f'<p style="margin:8px 0;">{content}</p>' if content else ''}
+            {img_html}
+          </td>
+        </tr>
+      </table>'''.strip()
 
 
 def render_poster_preview_html(template: PosterTemplate, task: PosterTask) -> str:
     """纯函数。返回用于 iframe 预览 / 文件落盘的完整 HTML。"""
     items = task.items or []
-    items_html = "\n".join(_render_item_html(item) for item in items)
+    items_count = max(len(items), 1)
+    card_height = max(280, (2208 - 160 - 156 - 32 * (items_count - 1)) // items_count)
+    items_wrapper_class = "items single-1" if items_count == 1 else "items"
+    items_html = f'<div class="{items_wrapper_class}">' + \
+        "\n".join(_render_item_html(item, card_height) for item in items) + \
+        '</div>'
     css = template.css_text or ""
     body_html = template.html_template or ""
-    # 简易替换：把 {{title}} {{items}} 这两个占位符替换
     body_html = body_html.replace("{{title}}", _escape(task.name))
     body_html = body_html.replace("{{items}}", items_html)
     base_css = (
-        "body{margin:0;padding:0;font-family:'PingFang SC','Noto Sans CJK SC',sans-serif;}"
         "*{box-sizing:border-box;}"
+        "html,body{margin:0;padding:0;width:1242px;height:2208px;}"
+        "body{font-family:'PingFang SC','Noto Sans CJK SC',sans-serif;"
+        "background:#fff;color:#222;}"
+        ".poster{width:1242px;height:2208px;"
+        "display:flex;flex-direction:column;padding:80px 60px;box-sizing:border-box;}"
+        ".poster-title{margin-bottom:60px;}"
+        ".poster-title h1{font-size:96px;margin:0;font-weight:900;letter-spacing:-2px;}"
+        ".items{display:flex;flex-direction:column;gap:32px;flex:1;min-height:0;}"
+        ".row-card{display:flex;background:#fff5ec;border-left:8px solid #F26B2C;"
+        "border-radius:12px;overflow:hidden;flex:1 1 auto;}"
+        ".row-banner{background:#F26B2C;color:#fff;flex:0 0 360px;"
+        "padding:36px;font-size:48px;font-weight:800;display:flex;align-items:center;}"
+        ".items-has-only-1 .row-card{flex:1 1 100%;}"
+        ".row-banner .row-title{display:-webkit-box;-webkit-line-clamp:3;"
+        "-webkit-box-orient:vertical;overflow:hidden;}"
+        ".row-body{flex:1;padding:36px;display:flex;flex-direction:column;"
+        "justify-content:center;gap:20px;font-size:40px;color:#222;}"
+        ".row-body p{margin:0;display:flex;align-items:center;gap:18px;}"
+        ".row-image{max-width:280px;max-height:200px;object-fit:cover;border-radius:8px;}"
     )
     title_block = (
         f'<div class="poster-title"><h1>{_escape(task.name)}</h1></div>'
@@ -130,7 +153,7 @@ def _opencli_render(html: str, path: str) -> None:
         if open_proc.returncode != 0:
             raise RuntimeError(f"opencli browser open 失败: {open_proc.stderr or open_proc.stdout}")
         screenshot_proc = subprocess.run(
-            ["opencli", "browser", "default", "screenshot", "--output", path, "--full-page"],
+            ["opencli", "browser", "default", "screenshot", path, "--width", "1242", "--height", "2208"],
             capture_output=True,
             text=True,
             timeout=180,

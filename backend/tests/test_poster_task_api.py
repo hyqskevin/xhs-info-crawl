@@ -166,11 +166,20 @@ def test_render_with_mocked_opencli(client: TestClient, db_session: Session, mon
     monkeypatch.setattr(renderer_module, "_playwright_available", lambda: False)
 
     def fake_run(cmd, capture_output, text, timeout):
-        if "screenshot" in cmd and "--output" in cmd:
-            idx = cmd.index("--output")
-            path = cmd[idx + 1]
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-            Path(path).write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+        # 第二个子命令：cmd 形如 ['opencli','browser','default','screenshot',
+        # '/data/posters/1.png','--full-page'] — 第一个非 flag 位置参数是 path
+        if "screenshot" in cmd:
+            for i, a in enumerate(cmd):
+                if a.startswith("--"):
+                    continue
+                if a in {"opencli", "browser", "default", "screenshot"}:
+                    continue
+                # 候选 path：以 .png 结尾且不在 -o 等 flag 后
+                if a.endswith(".png"):
+                    p = a
+                    Path(p).parent.mkdir(parents=True, exist_ok=True)
+                    Path(p).write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+                    break
         class R:
             returncode = 0
             stderr = ""
