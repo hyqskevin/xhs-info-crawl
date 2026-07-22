@@ -4,6 +4,7 @@ from app.api.v1.health import router as health_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.activities import router as activities_router
 from app.api.v1.poster_templates import router as poster_templates_router
+from app.api.v1.poster_tasks import router as poster_tasks_router
 from app.api.v1.settings import router as settings_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.tasks import router as tasks_router
@@ -17,6 +18,7 @@ api_router.include_router(health_router)
 api_router.include_router(auth_router)
 api_router.include_router(activities_router)
 api_router.include_router(poster_templates_router)  # before settings_router due to /{kind} collision
+api_router.include_router(poster_tasks_router)
 api_router.include_router(settings_router)
 api_router.include_router(reports_router)
 api_router.include_router(tasks_router)
