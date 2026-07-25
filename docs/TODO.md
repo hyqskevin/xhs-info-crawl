@@ -63,9 +63,9 @@
   - 目标：一次性脚本 `backend/scripts/dedupe_cities.py` 选最早启用的 City 为 canonical，把其它重复 name 行的关联迁移过去（notes/blogger_city/keyword_group_cities/crawl_tasks），删除多余行；幂等。
   - 验收：`tests/test_dedupe_cities_script.py` 3 个 case；生产 DB 跑完 `SELECT COUNT(*) FROM cities` 下降，城市下拉不再重复。
   - 关联：spec `docs/superpowers/specs/2026-07-21-dedupe-cities-design.md`（已写）。
-- [ ] 重启 celery beat 与 worker 加载新代码
-  - 目标：beat PID 11974 是 7/17 启动持有旧任务调度；worker PID 50229 是 7/20 启动，早于 0013/0014 迁移（关键词组、海报模型）。服务进程管理已写进 AGENTS.md，beat/worker 都要遵循。
-  - 验收：检查 `ps aux | grep celery` 两个进程启动时间 `<= 今日`；beat 日志中 `Scheduler: Sending due task` 使用最新代码路径。本项不需要代码改动，只需要 Agent 在完成时主动停掉并重启两个进程。
+- [ ] 重启 celery beat 与 worker（长期有效，随每次 models/tasks/services 改动执行）
+  - 目标：服务进程管理已写进 AGENTS.md；2026-07-25 已随 TODO#2/#3 执行一次（见"已完成"区），后续改动 models/tasks/services 后仍需重启。
+  - 验收：改动后检查 `ps aux | grep celery` 进程启动时间不早于代码改动时间。
 - [x] 一次性数据库迁移 `seed_admin` 启动后兜底管理员
   - 目标：当数据库完全为空（首次部署/重置）时，没有 admin 用户无法登录。当前 admin 凭据是手工 sql 新增。
   - 验收：迁移 `0012_seed_admin.py` 在 upgrade 时若 `users` 表为空则插入 admin 用户；密码来自环境变量 `INITIAL_ADMIN_PASSWORD`，未设置则使用 `Admin@123` 且 WARNING 提示"生产环境必须更改"；脚本幂等：若 admin 已存在则跳过。重置 db（删除数据文件后跑 alembic upgrade head）后能用默认密码登录。
@@ -94,6 +94,10 @@
 
 ## 已完成
 
+- [x] 重启 celery beat 与 worker 加载新代码
+  - 目标：beat PID 11974 是 7/17 启动持有旧任务调度；worker PID 50229 是 7/20 启动，早于 0013/0014 迁移（关键词组、海报模型）。服务进程管理已写进 AGENTS.md，beat/worker 都要遵循。
+  - 结果（2026-07-25）：确认无进行中任务后停掉旧进程（11970/11974、50225/50229），以相同命令后台重启（日志 `data/logs/celery-worker.log`、`celery-beat.log`）；生产库因 uvicorn create_all 已先行建表，`alembic stamp 0015` 对齐版本；实测 beat 日志 `Scheduler: Sending due task scheduled-crawl-dispatch`、worker 接收并 succeeded。
+  - 验收：两进程启动时间为今日；beat 使用最新 dispatcher 代码路径。
 - [x] 2. 定时任务调度页 + 博主分组（吸收原"Beat 每周定时抓取真正生效"）
   - 目标：左侧 nav 新增"定时任务"页。子栏位一：定时任务 CRUD——每周几+时间、城市、关键词组、白名单（博主）组；语义：有关键词抓关键词、有白名单抓白名单、都有都抓。子栏位二：关键词组与博主组的配置（博主组为新实体），可被栏位一选择。Beat 由静态 ping 改为 DB 驱动的每分钟 dispatcher。
   - 结果：migration `0015_scheduled_crawls_and_blogger_groups` 建 `blogger_groups`/`blogger_group_members`/`scheduled_crawls`（upgrade/downgrade/re-upgrade 验证通过）；新模型 `models/schedule.py`、`models/blogger_group.py`；`/settings/blogger-groups` CRUD（重名 409、成员全量替换、删除级联）；`/schedules` CRUD（day_of_week 1-7/hour 0-23/minute 0-59 越界 422、城市与组校验、两组皆空 422「请至少选择一个关键词组或博主组」）；`app.tasks.crawl_task.scheduled_dispatch` 每分钟由 beat `scheduled-crawl-dispatch` 触发：slot（%Y-%m-%dT%H:%M）幂等、有 PENDING/RUNNING/STOP_REQUESTED 任务跳过、博主组展开为组内 enabled 博主 ∩ 城市 enabled 博主、recent_filter 缺省回退城市配置；前端 `SchedulesView.vue`（/schedules，nav Timer 图标）两 tab——定时任务表格/对话框 + 分组管理（复用 KeywordGroupSettings + 新 BloggerGroupSettings）；`alembic env.py` 模型 import 补齐。
