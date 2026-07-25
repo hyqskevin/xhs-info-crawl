@@ -14,34 +14,31 @@
 
 > 以下为 2026-07-25 全项目核查新增（证据归档：`docs/superpowers/qa/2026-07-25-project-audit.md`），按列表顺序依次讨论修复。
 
-- [ ] 2. Celery Beat 每周定时抓取真正生效
-  - 目标：当前 `weekly-crawl` 调度的是 `app.tasks.health.ping`，不会创建抓取任务，SPEC P0「每周一 02:00 自动抓取」未发生。beat 应按启用城市的配置默认范围创建 CrawlTask 并投递 `run_crawl`。
-  - 验收：新增调度任务（如 `app.tasks.crawl_task.weekly_dispatch`）：为每个 enabled 城市创建 PENDING 任务（沿用 run_token/自动顶替语义）并投递；测试覆盖多城市、空配置跳过、已有任务运行中的语义；重启 beat 后日志可见 `Sending due task` 指向新任务。
-- [ ] 3. 抓取频率控制落地（SPEC P1）
+- [ ] 4. 抓取频率控制落地（SPEC P1）
   - 目标：`search_interval_min/max`（10-15s）与 `weekly_search_limit`（500/周）配置存在但零引用。关键词搜索之间按随机间隔 sleep；周搜索量超限记录 WARNING 并跳过。
   - 验收：sleep 可注入（测试用 fake，不拖慢测试）；超限跳过有测试；`docs/crawler-design.md` 同步。
-- [ ] 4. 活动级 `duplicate_candidates` 死数据处置
+- [ ] 5. 活动级 `duplicate_candidates` 死数据处置
   - 目标：`create_duplicate_candidates` 每次抓取写入活动级候选（生产库 702 行），无任何 API/UI 消费。去重已收敛推文维度，需选定"停写+清理存量"或"接入审核页"。
   - 验收：方向先讨论；若停写：crawl 测试更新、一次性清理脚本幂等、`SELECT COUNT(*) FROM duplicate_candidates` 归零；若保留：API/UI 可见且有测试。
-- [ ] 5. 死代码清理（含一个潜在 NameError）
+- [ ] 6. 死代码清理（含一个潜在 NameError）
   - 目标：清理 `services/crawler.py` 旧函数式实现（仅测试引用）、`services/report.py` 旧活动级导出（`generate_markdown:39` 引用未导入的 `datetime`，调用即 NameError）、`pipeline.process_with_isolation`、`services/task_lock.py`、`reports.py select_activities`、10 处未使用导入、`poster_tasks.py` 空 `pass` 块、`tasks.py` 不可达分支、`notes.py` 重复 import；引用它们的测试随之迁移或删除。
   - 验收：静态扫描零未使用导入；后端、前端测试与 build 全绿；git diff 无行为变化。
-- [ ] 6. 审核规则/幂等/关联清理一致性修复包
+- [ ] 7. 审核规则/幂等/关联清理一致性修复包
   - 目标：①`/notes/batch/approve` 与单条 review 一样校验至少 1 条有效子活动；②`/duplicates/{id}/merge` 对非 pending 候选返回 409；③删除 Blogger 清理 `blogger_cities`、删除 City 清理 `blogger_cities`/`keyword_group_cities`；④统一 `Activity.start_time` 与 `published_at` 时区口径（二选一，写进 `docs/database-design.md`）。
   - 验收：每点一节 spec + 定向测试；全量测试绿。
-- [ ] 7. poster 图片路径校验统一 + notes 列表异常吞噬
+- [ ] 8. poster 图片路径校验统一 + notes 列表异常吞噬
   - 目标：`poster_tasks.py note_image_by_id` 的 `str.startswith` 校验可被同前缀兄弟目录绕过，统一改 `Path.is_relative_to`；`notes.py` OCR 聚合 try/except 吞异常改为记 WARNING 日志。
   - 验收：poster 端点有路径穿越定向测试；异常路径可见日志。
-- [ ] 8. 配置与迁移盲区
+- [ ] 9. 配置与迁移盲区
   - 目标：`.env.example` 补 `INITIAL_ADMIN_PASSWORD`、`MINIMAX_VISION_MODEL`；`alembic env.py` 与 `init_database` 的 models import 补 `keyword_group`、`blogger_city`、`poster`。
   - 验收：删库后仅按 .env.example + `alembic upgrade head` 可完整建库；`alembic revision --autogenerate` 对现有模型零 diff。
-- [ ] 9. 测试脆弱性修复
+- [ ] 10. 测试脆弱性修复
   - 目标：`test_render_with_mocked_opencli` 补 mock `shutil.which`（无 opencli 机器不再 503）；`PostersListView.spec` 修 router mock 未捕获错误。
   - 验收：无 opencli 环境下后端全过；前端 57 过且零未捕获错误输出。
-- [ ] 10. 仪表盘与周报需求偏差对齐（需先讨论取舍）
+- [ ] 11. 仪表盘与周报需求偏差对齐（需先讨论取舍）
   - 目标：与 SPEC 3.2/3.7 对齐或明确改版：仪表盘补本周统计卡片（修正 `weekly_notes_count` 口径为本周）、4 周趋势、最近 5 条日志；周报补 `DELETE /reports/{id}` 与 Markdown 渲染预览。
   - 验收：讨论结论先落 spec；前后端测试与 build 全绿。
-- [ ] 11. TODO/文档卫生
+- [ ] 12. TODO/文档卫生
   - 目标：`docs/api-doc.md` 补 keyword-groups、poster、notes 系列端点；`dedupe_cities.py` 位置与 spec 对齐并核实"城市去重"条目的勾选状态。
   - 验收：api-doc 覆盖 `router.py` 全部路由；dedupe_cities 条目状态与实际一致。
 
@@ -96,6 +93,18 @@
 - [ ] 在阶段一现有功能不回退的前提下完成迁移和验收。
 
 ## 已完成
+
+- [x] 2. 定时任务调度页 + 博主分组（吸收原"Beat 每周定时抓取真正生效"）
+  - 目标：左侧 nav 新增"定时任务"页。子栏位一：定时任务 CRUD——每周几+时间、城市、关键词组、白名单（博主）组；语义：有关键词抓关键词、有白名单抓白名单、都有都抓。子栏位二：关键词组与博主组的配置（博主组为新实体），可被栏位一选择。Beat 由静态 ping 改为 DB 驱动的每分钟 dispatcher。
+  - 结果：migration `0015_scheduled_crawls_and_blogger_groups` 建 `blogger_groups`/`blogger_group_members`/`scheduled_crawls`（upgrade/downgrade/re-upgrade 验证通过）；新模型 `models/schedule.py`、`models/blogger_group.py`；`/settings/blogger-groups` CRUD（重名 409、成员全量替换、删除级联）；`/schedules` CRUD（day_of_week 1-7/hour 0-23/minute 0-59 越界 422、城市与组校验、两组皆空 422「请至少选择一个关键词组或博主组」）；`app.tasks.crawl_task.scheduled_dispatch` 每分钟由 beat `scheduled-crawl-dispatch` 触发：slot（%Y-%m-%dT%H:%M）幂等、有 PENDING/RUNNING/STOP_REQUESTED 任务跳过、博主组展开为组内 enabled 博主 ∩ 城市 enabled 博主、recent_filter 缺省回退城市配置；前端 `SchedulesView.vue`（/schedules，nav Timer 图标）两 tab——定时任务表格/对话框 + 分组管理（复用 KeywordGroupSettings + 新 BloggerGroupSettings）；`alembic env.py` 模型 import 补齐。
+  - 验收：新增后端测试 25 个（test_blogger_group_api 5 / test_schedules_api 5 / test_scheduled_dispatch 6 / test_dashboard_analytics 7 / test_celery_config 同步）先红后绿；后端 462 passed（仅剩已知 opencli 环境敏感失败）、前端 64 passed、build 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-25-scheduled-crawls-and-dashboard-charts-design.md`。
+  - 注意：改动涉及 models、`app/tasks/*.py`，**必须重启 celery worker 与 beat 后生效**（见待办"重启 celery beat 与 worker"）。
+- [x] 3. 仪表盘抓取统计（定时任务状态 + 折线图 + 饼图）
+  - 目标：仪表盘展示各定时任务最近一次抓取的成功/失败状态；折线图 x=抓取时间、y=抓取数量（发现/成功/失败）；饼图统计抓取成功率。
+  - 结果：`GET /dashboard/analytics` 返回 recent_tasks（最近 20 次倒取正排，含 source=scheduled/manual、schedule_name）、status_counts（最近 50 次状态分布，未知状态归 OTHER）、schedules（含 last_task，Python 过滤 params.schedule_id 避免 SQLite json 方言绑定）；前端引入 echarts，新增 `CrawlTrendChart.vue`（发现/成功/失败三线，x=MM-DD HH:mm）与 `CrawlSuccessPie.vue`（环形饼图，成功/部分成功/失败/已停止/其他）封装 init/resize/dispose；DashboardView 新增「定时任务状态」卡（周期、启用、最近状态标签，空态引导）与两图表卡；analytics 随 3s 轮询刷新。
+  - 验收：DashboardView.spec 新增 2 个用例（状态卡+图表容器渲染、空态占位），vi.mock('echarts')；前端 64 passed、build 通过。
+  - 关联：同上分 spec。
 
 - [x] 1. 修复关键词组在 `/tasks/crawl` 被静默丢弃（端到端断链）+ 归档按城市/周分目录
   - 目标：前端 DashboardView 提交 `keyword_group_ids`，后端 `CrawlIn` 无该字段被 pydantic 丢弃（已实证）：仅选组 → 422；组+博主 → 组被忽略只抓博主。`resolve_effective_keywords` 的组分支因 `model_dump()` 恒含 `keywords` 键不可达。用户补充语义（2026-07-25）：只选城市+关键词组 → 只抓关键词；只选博主 → 只抓博主；都选都抓；city 与 recent_filter 必填；归档按城市和周分目录。

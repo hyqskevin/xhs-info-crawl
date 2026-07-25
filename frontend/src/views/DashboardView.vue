@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { Connection, Link, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
+import { Connection, Link, RefreshRight, TrendCharts, VideoPlay } from '@element-plus/icons-vue'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getHealth } from '@/api/health'
 import { api } from '@/api/client'
+import CrawlTrendChart from '@/components/CrawlTrendChart.vue'
+import CrawlSuccessPie from '@/components/CrawlSuccessPie.vue'
 
 const status = ref<'loading' | 'ok' | 'error'>('loading')
 const database = ref('SQLite')
@@ -14,6 +16,19 @@ const restarting = ref(false)
 const openingLogin = ref(false)
 const stopping = ref(false)
 const lastTask = ref<any>(null)
+const analytics = ref<any>({ recent_tasks: [], status_counts: {}, schedules: [] })
+const scheduleStatusMeta: Record<string, { type: string; label: string }> = {
+  COMPLETED: { type: 'success', label: '成功' },
+  COMPLETED_WITH_ERRORS: { type: 'warning', label: '部分成功' },
+  FAILED: { type: 'danger', label: '失败' },
+  RUNNING: { type: 'primary', label: '运行中' },
+  PENDING: { type: 'info', label: '等待中' },
+  PAUSED: { type: 'warning', label: '已暂停' },
+  STOPPED: { type: 'info', label: '已停止' },
+}
+const weekdayLabels: Record<number, string> = { 1: '一', 2: '二', 3: '三', 4: '四', 5: '五', 6: '六', 7: '日' }
+const pad2 = (n: number) => String(n).padStart(2, '0')
+const scheduleStatusOf = (task: any) => scheduleStatusMeta[task?.status] || { type: 'info', label: task?.status || '' }
 let pollTimer: ReturnType<typeof setInterval> | undefined
 const form = reactive({ city: '', keyword_group_ids: [] as number[], recent_filter: '一周内', blogger_ids: [] as number[] })
 const recentFilters = ['不限', '一天内', '一周内', '半年内']
@@ -64,6 +79,7 @@ async function initialize() {
 
 async function loadLatestTask() {
   try { lastTask.value = (await api.dashboard()).data.data.last_task } catch { /* health card reports service errors */ }
+  try { analytics.value = (await api.dashboardAnalytics()).data.data } catch { /* 图表数据加载失败不阻塞主流程 */ }
 }
 
 async function start() {
@@ -183,6 +199,37 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
       <ElButton v-if="['PENDING','RUNNING','STOP_REQUESTED'].includes(lastTask.status)" type="danger" :loading="stopping || lastTask.status === 'STOP_REQUESTED'" :disabled="lastTask.status === 'STOP_REQUESTED'" @click="stop">停止抓取</ElButton>
     </ElCard>
 
+    <ElCard shadow="never" class="schedule-status-card">
+      <template #header><div class="card-title"><ElIcon><TrendCharts /></ElIcon><strong>定时任务状态</strong></div></template>
+      <ElTable v-if="analytics.schedules.length" :data="analytics.schedules">
+        <ElTableColumn prop="name" label="名称" min-width="160" />
+        <ElTableColumn label="周期" width="140">
+          <template #default="scope">每周{{ weekdayLabels[scope.row.day_of_week] || scope.row.day_of_week }} {{ pad2(scope.row.hour) }}:{{ pad2(scope.row.minute) }}</template>
+        </ElTableColumn>
+        <ElTableColumn label="状态" width="100">
+          <template #default="scope"><ElTag :type="scope.row.enabled ? 'success' : 'info'">{{ scope.row.enabled ? '启用' : '停用' }}</ElTag></template>
+        </ElTableColumn>
+        <ElTableColumn label="最近抓取" min-width="120">
+          <template #default="scope">
+            <ElTag v-if="scope.row.last_task" :type="scheduleStatusOf(scope.row.last_task).type as any">{{ scheduleStatusOf(scope.row.last_task).label }}</ElTag>
+            <span v-else>未执行</span>
+          </template>
+        </ElTableColumn>
+      </ElTable>
+      <ElEmpty v-else description="暂无定时任务，请到「定时任务」页面创建" :image-size="60" />
+    </ElCard>
+
+    <div class="charts-row">
+      <ElCard shadow="never" class="chart-card">
+        <template #header><div class="card-title"><strong>抓取趋势（最近 20 次）</strong></div></template>
+        <CrawlTrendChart :tasks="analytics.recent_tasks" />
+      </ElCard>
+      <ElCard shadow="never" class="chart-card">
+        <template #header><div class="card-title"><strong>抓取成功率（最近 50 次）</strong></div></template>
+        <CrawlSuccessPie :counts="analytics.status_counts" />
+      </ElCard>
+    </div>
+
     <ElCard shadow="never" class="status-card"><div class="status-card__content"><ElIcon :size="28" color="var(--el-color-primary)"><Connection /></ElIcon><div><strong>后端服务</strong><p>{{ status === 'ok' ? '服务运行正常' : status === 'loading' ? '正在检查服务' : '服务暂不可用' }}</p></div><ElTag :type="status === 'ok' ? 'success' : status === 'loading' ? 'info' : 'danger'">{{ database }}</ElTag></div></ElCard>
   </div>
 </template>
@@ -190,6 +237,9 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 <style scoped>
 .crawl-card { margin-bottom: 20px; }
 .progress-card { margin-bottom: 20px; }
+.schedule-status-card { margin-bottom: 20px; }
+.charts-row { display: grid; grid-template-columns: 3fr 2fr; gap: 20px; margin-bottom: 20px; }
+@media (max-width: 1000px) { .charts-row { grid-template-columns: 1fr; } }
 .progress-card .card-title { justify-content: space-between; }
 .progress-summary { display: grid; grid-template-columns: repeat(4,minmax(120px,1fr)); gap: 14px; margin-bottom: 16px; }
 .progress-summary div { display: flex; flex-direction: column; gap: 4px; }

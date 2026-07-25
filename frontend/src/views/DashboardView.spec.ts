@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import DashboardView from './DashboardView.vue'
 
 vi.mock('@/api/health', () => ({ getHealth: vi.fn().mockResolvedValue({ status: 'ok', database: 'sqlite' }) }))
+vi.mock('echarts', () => ({ init: vi.fn(() => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() })) }))
 const mocks = vi.hoisted(() => ({
   settings: vi.fn().mockImplementation((kind: string) => Promise.resolve({ data: { data: kind === 'cities'
     ? [{ id: 1, name: '上海', code: 'shanghai', keywords: ['周末活动', '展览'], recent_filter: '一周内', enabled: true }]
@@ -19,6 +20,17 @@ const mocks = vi.hoisted(() => ({
   restartTask: vi.fn().mockResolvedValue({ data: { data: { id: 4, status: 'PENDING' } } }),
   openXhsLogin: vi.fn().mockResolvedValue({ data: { data: { url: 'https://www.xiaohongshu.com/explore' } } }),
   stopTask: vi.fn().mockResolvedValue({ data: { data: { id: 4, status: 'STOP_REQUESTED' } } }),
+  dashboardAnalytics: vi.fn().mockResolvedValue({ data: { data: {
+    recent_tasks: [
+      { id: 1, source: 'manual', schedule_name: null, status: 'COMPLETED', started_at: '2026-07-20T09:30:00Z', total_notes: 10, success_notes: 9, failed_notes: 1 },
+      { id: 2, source: 'scheduled', schedule_name: '每周一早上', status: 'FAILED', started_at: '2026-07-21T09:30:00Z', total_notes: 5, success_notes: 0, failed_notes: 5 },
+    ],
+    status_counts: { COMPLETED: 1, FAILED: 1 },
+    schedules: [
+      { id: 31, name: '每周一早上', enabled: true, day_of_week: 1, hour: 9, minute: 30, city_code: 'shanghai', last_task: { id: 2, status: 'FAILED', started_at: '2026-07-21T09:30:00Z' } },
+      { id: 32, name: '每周三下午', enabled: false, day_of_week: 3, hour: 14, minute: 0, city_code: 'shanghai', last_task: null },
+    ],
+  } } }),
 }))
 vi.mock('@/api/client', () => ({ api: mocks }))
 
@@ -171,5 +183,30 @@ describe('DashboardView', () => {
     const alert = wrapper.find('.el-alert--error')
     expect(alert.exists()).toBe(true)
     expect(alert.text()).toContain('等待下次重试')
+  })
+
+  it('renders schedule statuses and crawl analytics charts', async () => {
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(mocks.dashboardAnalytics).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('定时任务状态')
+    expect(wrapper.text()).toContain('每周一早上')
+    expect(wrapper.text()).toContain('每周一 09:30')
+    expect(wrapper.text()).toContain('失败')
+    expect(wrapper.text()).toContain('未执行')
+    expect(wrapper.text()).toContain('停用')
+    expect(wrapper.text()).toContain('抓取趋势')
+    expect(wrapper.text()).toContain('抓取成功率')
+    expect(wrapper.find('[aria-label="抓取趋势图"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-label="抓取成功率图"]').exists()).toBe(true)
+  })
+
+  it('shows an empty placeholder when no schedule exists', async () => {
+    mocks.dashboardAnalytics.mockResolvedValueOnce({ data: { data: { recent_tasks: [], status_counts: {}, schedules: [] } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂无定时任务')
   })
 })
