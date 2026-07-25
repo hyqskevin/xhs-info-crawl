@@ -23,13 +23,9 @@ def create_celery_app(settings: Settings) -> Celery:
         accept_content=["json"],
         result_serializer="json",
         beat_schedule={
-            "weekly-crawl": {
-                "task": "app.tasks.health.ping",
-                "schedule": crontab(
-                    minute=settings.weekly_crawl_minute,
-                    hour=settings.weekly_crawl_hour,
-                    day_of_week=settings.weekly_crawl_day_of_week,
-                ),
+            "scheduled-crawl-dispatch": {
+                "task": "app.tasks.crawl_task.scheduled_dispatch",
+                "schedule": crontab(minute="*"),
             }
         },
     )

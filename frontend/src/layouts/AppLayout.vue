@@ -8,6 +8,7 @@ import {
   List,
   Setting,
   SwitchButton,
+  Timer,
 } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 
@@ -38,6 +39,10 @@ function logout(){localStorage.removeItem('token');location.href='/login'}
         <ElMenuItem index="/tasks">
           <ElIcon><Connection /></ElIcon>
           <span>任务日志</span>
+        </ElMenuItem>
+        <ElMenuItem index="/schedules">
+          <ElIcon><Timer /></ElIcon>
+          <span>定时任务</span>
         </ElMenuItem>
         <ElMenuItem index="/reports">
           <ElIcon><Document /></ElIcon>

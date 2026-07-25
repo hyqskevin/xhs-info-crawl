@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import require_admin
 from app.models.blogger_city import BloggerCity
+from app.models.blogger_group import BloggerGroup, BloggerGroupMember
 from app.models.config import Blogger, City, Keyword
 from app.models.keyword_group import KeywordGroup, KeywordGroupCity, KeywordGroupWord
 from app.services.opencli_adapter import OpenCLIAdapter
@@ -150,6 +151,98 @@ def delete_keyword_group(kg_id: int, _: Admin, db: DB) -> dict:
     db.delete(kg)
     db.commit()
     return {"code": 200, "message": "success", "data": {"deleted_id": kg_id}}
+
+
+class BloggerGroupIn(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = None
+    blogger_ids: list[int] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class BloggerGroupMembersIn(BaseModel):
+    blogger_ids: list[int] = Field(default_factory=list)
+
+
+def _dump_blogger_group(db: Session, group: BloggerGroup) -> dict:
+    blogger_ids = sorted(
+        row.blogger_id for row in db.scalars(
+            select(BloggerGroupMember).where(BloggerGroupMember.group_id == group.id)
+        ).all()
+    )
+    return {
+        "id": group.id,
+        "name": group.name,
+        "description": group.description,
+        "enabled": group.enabled,
+        "blogger_ids": blogger_ids,
+        "created_at": group.created_at,
+    }
+
+
+def _validate_blogger_ids(db: Session, blogger_ids: list[int]) -> None:
+    for blogger_id in dict.fromkeys(blogger_ids):
+        if db.get(Blogger, blogger_id) is None:
+            raise HTTPException(422, f"博主 id={blogger_id} 不存在")
+
+
+@router.get("/blogger-groups")
+def list_blogger_groups(_: Admin = None, db: DB = None) -> dict:
+    groups = db.scalars(select(BloggerGroup).order_by(BloggerGroup.id)).all()
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {"items": [_dump_blogger_group(db, g) for g in groups]},
+    }
+
+
+@router.get("/blogger-groups/{group_id}")
+def get_blogger_group(group_id: int, _: Admin, db: DB) -> dict:
+    group = db.get(BloggerGroup, group_id)
+    if group is None:
+        raise HTTPException(404, "博主组不存在")
+    return {"code": 200, "message": "success", "data": _dump_blogger_group(db, group)}
+
+
+@router.post("/blogger-groups")
+def create_blogger_group(payload: BloggerGroupIn, _: Admin, db: DB) -> dict:
+    existing = db.scalar(select(BloggerGroup).where(BloggerGroup.name == payload.name))
+    if existing is not None:
+        raise HTTPException(409, f"博主组名称 '{payload.name}' 已存在")
+    _validate_blogger_ids(db, payload.blogger_ids)
+    group = BloggerGroup(name=payload.name, description=payload.description, enabled=payload.enabled)
+    db.add(group)
+    db.flush()
+    for blogger_id in dict.fromkeys(payload.blogger_ids):
+        db.add(BloggerGroupMember(group_id=group.id, blogger_id=blogger_id))
+    db.commit()
+    db.refresh(group)
+    return {"code": 200, "message": "success", "data": _dump_blogger_group(db, group)}
+
+
+@router.put("/blogger-groups/{group_id}/members")
+def replace_blogger_group_members(group_id: int, payload: BloggerGroupMembersIn, _: Admin, db: DB) -> dict:
+    group = db.get(BloggerGroup, group_id)
+    if group is None:
+        raise HTTPException(404, "博主组不存在")
+    _validate_blogger_ids(db, payload.blogger_ids)
+    db.execute(delete(BloggerGroupMember).where(BloggerGroupMember.group_id == group_id))
+    for blogger_id in dict.fromkeys(payload.blogger_ids):
+        db.add(BloggerGroupMember(group_id=group_id, blogger_id=blogger_id))
+    db.commit()
+    db.refresh(group)
+    return {"code": 200, "message": "success", "data": _dump_blogger_group(db, group)}
+
+
+@router.delete("/blogger-groups/{group_id}")
+def delete_blogger_group(group_id: int, _: Admin, db: DB) -> dict:
+    group = db.get(BloggerGroup, group_id)
+    if group is None:
+        raise HTTPException(404, "博主组不存在")
+    db.execute(delete(BloggerGroupMember).where(BloggerGroupMember.group_id == group_id))
+    db.delete(group)
+    db.commit()
+    return {"code": 200, "message": "success", "data": {"deleted_id": group_id}}
 
 
 class KeywordIn(BaseModel):

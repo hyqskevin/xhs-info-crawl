@@ -1,13 +1,18 @@
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+import logging
 import shutil
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.models.activity import Activity
+from app.models.blogger_city import BloggerCity
+from app.models.blogger_group import BloggerGroup, BloggerGroupMember
 from app.models.config import Blogger, City, Keyword
 from app.models.note import Note, NoteImage
+from app.models.schedule import ScheduledCrawl
 from app.models.task import CrawlTask, TaskLog
 from app.services.archive import archive_task_folder, archive_task_result
 from app.services.activity_window import ActivityWindow
@@ -34,6 +39,89 @@ class ExecutionStopped(Exception):
 
 class ExecutionSuperseded(Exception):
     pass
+
+
+logger = logging.getLogger(__name__)
+
+_DISPATCH_TZ = ZoneInfo("Asia/Shanghai")
+_BUSY_STATUSES = ("PENDING", "RUNNING", "STOP_REQUESTED")
+
+
+def _expand_blogger_groups(db, city_code: str, group_ids: list[int]) -> list[int]:
+    """博主组展开：组内 enabled 博主 ∩ 该城市 blogger_cities.enabled 博主。"""
+    if not group_ids:
+        return []
+    stmt = (
+        select(Blogger.id)
+        .join(BloggerCity, BloggerCity.blogger_id == Blogger.id)
+        .join(BloggerGroupMember, BloggerGroupMember.blogger_id == Blogger.id)
+        .join(BloggerGroup, BloggerGroup.id == BloggerGroupMember.group_id)
+        .where(
+            BloggerGroupMember.group_id.in_(group_ids),
+            BloggerGroup.enabled.is_(True),
+            BloggerCity.city_code == city_code,
+            BloggerCity.enabled.is_(True),
+            Blogger.enabled.is_(True),
+        )
+        .order_by(Blogger.id)
+    )
+    return list(dict.fromkeys(db.scalars(stmt).all()))
+
+
+@celery_app.task(name="app.tasks.crawl_task.scheduled_dispatch")
+def scheduled_dispatch(now: datetime | None = None) -> None:
+    """每分钟由 beat 触发：匹配到点的 enabled 定时任务并创建抓取任务。
+
+    - slot 幂等：last_fired_slot == 当前分钟则跳过（防 beat 重启/重复 tick 重发）；
+    - 单任务约束：已有 PENDING/RUNNING/STOP_REQUESTED 任务时跳过本次触发
+      （保守语义：定时任务不打断人工任务，与手动 crawl 的"顶替"语义刻意不同）。
+    """
+    now = (now or datetime.now(_DISPATCH_TZ)).astimezone(_DISPATCH_TZ)
+    slot = now.strftime("%Y-%m-%dT%H:%M")
+    db = SessionLocal()
+    try:
+        schedules = db.scalars(
+            select(ScheduledCrawl).where(
+                ScheduledCrawl.enabled.is_(True),
+                ScheduledCrawl.day_of_week == now.isoweekday(),
+                ScheduledCrawl.hour == now.hour,
+                ScheduledCrawl.minute == now.minute,
+            )
+        ).all()
+        if not schedules:
+            return
+        busy = db.scalar(
+            select(func.count()).select_from(CrawlTask).where(CrawlTask.status.in_(_BUSY_STATUSES))
+        )
+        for schedule in schedules:
+            if schedule.last_fired_slot == slot:
+                continue
+            if busy:
+                logger.warning(
+                    "scheduled_dispatch: 任务进行中，跳过 schedule id=%s slot=%s", schedule.id, slot
+                )
+                continue
+            params: dict = {
+                "type": "scheduled",
+                "city": schedule.city_code,
+                "keyword_group_ids": schedule.keyword_group_ids or [],
+                "blogger_ids": _expand_blogger_groups(db, schedule.city_code, schedule.blogger_group_ids or []),
+                "schedule_id": schedule.id,
+                "schedule_name": schedule.name,
+                "fired_slot": slot,
+            }
+            if schedule.recent_filter:
+                params["recent_filter"] = schedule.recent_filter
+            task = CrawlTask(type="scheduled", status="PENDING", params=params)
+            db.add(task)
+            db.commit()
+            db.refresh(task)
+            schedule.last_fired_slot = slot
+            db.commit()
+            run_crawl.delay(task.id, task.run_token)
+            busy = True  # 同一 tick 后续 schedule 不再叠加任务
+    finally:
+        db.close()
 
 
 def assert_execution_active(db, task_id: int, run_token: str) -> None:
