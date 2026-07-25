@@ -71,7 +71,7 @@ def test_dashboard_task_uses_configured_city_keywords_time_and_bloggers(client: 
     assert invalid.status_code == 422
     response = client.post('/api/v1/tasks/crawl', json={'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一天内', 'blogger_ids': [blogger['id']]}, headers=headers)
     assert response.status_code == 202
-    assert response.json()['data']['params'] == {'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一天内', 'blogger_ids': [blogger['id']]}
+    assert response.json()['data']['params'] == {'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'keyword_group_ids': [], 'recent_filter': '一天内', 'blogger_ids': [blogger['id']]}
 
 
 def test_failed_task_restarts_with_same_id_and_preserves_completed_progress(client: TestClient, db_session: Session, headers, monkeypatch):

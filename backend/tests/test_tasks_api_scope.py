@@ -18,7 +18,7 @@ def test_crawl_rejects_when_no_keywords_and_no_bloggers(client: TestClient, db_s
 
     response = client.post(
         "/api/v1/tasks/crawl",
-        json={"city": "city-99f1e469", "keywords": [], "blogger_ids": []},
+        json={"city": "city-99f1e469", "keywords": [], "recent_filter": "一周内", "blogger_ids": []},
         headers=_auth(),
     )
     assert response.status_code == 422
@@ -32,7 +32,7 @@ def test_crawl_rejects_when_only_blogger_ids_empty(client: TestClient, db_sessio
 
     response = client.post(
         "/api/v1/tasks/crawl",
-        json={"city": "city-99f1e469", "keywords": ["A"], "blogger_ids": []},
+        json={"city": "city-99f1e469", "keywords": ["A"], "recent_filter": "一周内", "blogger_ids": []},
         headers=_auth(),
     )
     # blogger_ids=[] 显式禁用博主；keywords=["A"] 非空 → 通过（effective 范围非空）

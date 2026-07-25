@@ -172,7 +172,7 @@ def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, ada
     )
     db.add(note)
     db.flush()
-    folder = archive_task_folder(settings.archive_dir, started_at, task.id)
+    folder = archive_task_folder(settings.archive_dir, started_at, task.id, city)
     download_dir = folder / ".downloads" / note.platform_note_id
     images = run_stage(lambda: adapter.download(note_url, download_dir), attempts, delay)
     assert_execution_active(db, task.id, run_token)
@@ -274,7 +274,7 @@ def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, ada
     assert_execution_active(db, task.id, run_token)
     task_note_ids = select(Note.id).where(Note.task_id == task.id)
     task_activities = list(db.scalars(select(Activity).where(Activity.note_id.in_(task_note_ids)).order_by(Activity.id)).all())
-    archive_task_result(settings.archive_dir, started_at, task.id, note, image_rows, task_activities)
+    archive_task_result(settings.archive_dir, started_at, task.id, note, image_rows, task_activities, city)
     assert_execution_active(db, task.id, run_token)
     create_note_duplicate_candidates(db, note)
     shutil.rmtree(folder / ".downloads", ignore_errors=True)

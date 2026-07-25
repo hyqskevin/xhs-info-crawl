@@ -59,23 +59,23 @@ def _resolve_from_keyword_groups(
 
 
 def resolve_effective_keywords(db: Session, city: City, task_params: dict) -> list[str]:
-    """规则：
-    - task_params 含 "keywords" 键（旧字段） → 用任务参数
-    - 否则若含 "keyword_group_ids" → 取这些组在该城市下的关键词并集
-    - 都不存在 → 退回城市 enabled 关键词（兼容老调用）
+    """规则（2026-07-25 语义修正）：
+    - "keywords" 键存在 → 显式词（去空白去重）；空列表 = 显式禁用关键词
+    - "keyword_group_ids" 键存在 → 叠加组并集（显式词 ∪ 组词，都选都抓）
+    - 两个键都不存在（老任务 params）→ 退回城市 enabled 关键词表
+    注意：pydantic model_dump() 恒含这两个键，所以"键存在"即表达了用户选择意图；
+    旧实现以 "keywords" in task_params 直接返回，导致组分支不可达。
     """
-    if "keywords" in task_params:
-        return list(task_params["keywords"] or [])
-    if "keyword_group_ids" in task_params:
-        ids = task_params.get("keyword_group_ids") or []
-        if not isinstance(ids, list):
-            return []
-        words = _resolve_from_keyword_groups(db, city, ids)
-        # 若 keyword_group_ids 为空列表（前端显式传空）→ 不要退回到 keyword 表
-        if ids:
-            return words
-        return []
-    return _resolve_from_legacy_keyword_table(db, city)
+    has_keywords_key = "keywords" in task_params
+    has_groups_key = "keyword_group_ids" in task_params
+    if not has_keywords_key and not has_groups_key:
+        return _resolve_from_legacy_keyword_table(db, city)
+    explicit = [word.strip() for word in (task_params.get("keywords") or []) if str(word).strip()]
+    group_words: list[str] = []
+    ids = task_params.get("keyword_group_ids") or []
+    if isinstance(ids, list) and ids:
+        group_words = _resolve_from_keyword_groups(db, city, ids)
+    return list(dict.fromkeys([*explicit, *group_words]))
 
 
 def resolve_effective_bloggers(db: Session, city: City, task_params: dict) -> list[Blogger]:

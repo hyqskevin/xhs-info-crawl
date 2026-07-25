@@ -119,12 +119,12 @@ def run_keyword_crawl(task_id: int, city_code: str, keyword: str):
 
 ## 笔记详情下载
 
-### 日期任务归档
+### 城市/周任务归档
 
-阶段一本地文件统一按任务开始日期归档，不再把图片和导出文件分散保存：
+自 2026-07-25 起，阶段一本地文件统一按「城市 + ISO 周（任务开始时间，Asia/Shanghai）」归档，不再按单日目录保存：
 
 ```text
-data/archive/YYYY-MM-DD/task-{task_id}/
+data/archive/{city_code}/{ISO 年}-W{周}/task-{task_id}/
 ├── source.md
 ├── activities.md
 ├── activities.xlsx
@@ -135,6 +135,7 @@ data/archive/YYYY-MM-DD/task-{task_id}/
 - `activities.md` 与 `activities.xlsx` 每一项/每一行对应一个具体活动。
 - 图片保留原文件名；数据库 `note_images.storage_key` 保存相对 `data/` 的路径。
 - 同一任务抓取多篇笔记时，图片文件名必须包含笔记 ID，避免冲突。
+- 旧版 `data/archive/YYYY-MM-DD/task-{task_id}/` 目录不迁移；既有 `storage_key` 指向旧路径，读取不受影响，清理脚本兼容两种目录深度。
 
 ### 一篇笔记拆分多个活动
 

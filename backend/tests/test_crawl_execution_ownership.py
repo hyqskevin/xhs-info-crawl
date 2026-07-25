@@ -30,7 +30,7 @@ def test_crawl_dispatches_task_with_persisted_run_token(
 
     response = client.post(
         "/api/v1/tasks/crawl",
-        json={"city": "nb", "keywords": ["活动"], "blogger_ids": []},
+        json={"city": "nb", "keywords": ["活动"], "recent_filter": "一周内", "blogger_ids": []},
         headers=_auth(),
     )
 

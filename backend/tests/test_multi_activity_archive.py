@@ -47,16 +47,16 @@ def test_llm_date_with_ambiguous_chinese_time_is_rejected_safely():
     assert "status" not in result
 
 
-def test_archive_places_source_images_markdown_and_xlsx_under_date_task_folder(tmp_path: Path):
+def test_archive_places_source_images_markdown_and_xlsx_under_city_week_task_folder(tmp_path: Path):
     note = Note(id=7, task_id=9, platform_note_id="note-7", title="上海周末合集", content="原文正文", source_url="https://www.xiaohongshu.com/explore/note-7", city_code="shanghai", status="OCR_DONE", raw_data={})
     image_file = tmp_path / "download.jpg"
     image_file.write_bytes(b"image")
     images = [NoteImage(id=1, note_id=7, storage_key="", ocr_text="滨江音乐会 7月18日", ocr_status="success")]
     activities = [Activity(id=3, note_id=7, name="滨江音乐会", city_code="shanghai", start_time=datetime(2026, 7, 18, 19, tzinfo=timezone.utc), location="徐汇滨江", price="免费", type="演出", source_url=note.source_url, summary="露天演出", source_image_indexes=[1])]
 
-    folder = archive_task_result(tmp_path / "archive", datetime(2026, 7, 16, tzinfo=timezone.utc), 9, note, [(image_file, images[0])], activities)
+    folder = archive_task_result(tmp_path / "archive", datetime(2026, 7, 16, tzinfo=timezone.utc), 9, note, [(image_file, images[0])], activities, "shanghai")
 
-    assert folder == tmp_path / "archive" / "2026-07-16" / "task-9"
+    assert folder == tmp_path / "archive" / "shanghai" / "2026-W29" / "task-9"
     assert (folder / "images" / "note-7_01.jpg").exists()
     source_markdown=(folder / "source.md").read_text(encoding="utf-8")
     activities_markdown=(folder / "activities.md").read_text(encoding="utf-8")

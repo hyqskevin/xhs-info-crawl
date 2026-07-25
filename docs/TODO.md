@@ -12,6 +12,39 @@
 
 ## 当前待办
 
+> 以下为 2026-07-25 全项目核查新增（证据归档：`docs/superpowers/qa/2026-07-25-project-audit.md`），按列表顺序依次讨论修复。
+
+- [ ] 2. Celery Beat 每周定时抓取真正生效
+  - 目标：当前 `weekly-crawl` 调度的是 `app.tasks.health.ping`，不会创建抓取任务，SPEC P0「每周一 02:00 自动抓取」未发生。beat 应按启用城市的配置默认范围创建 CrawlTask 并投递 `run_crawl`。
+  - 验收：新增调度任务（如 `app.tasks.crawl_task.weekly_dispatch`）：为每个 enabled 城市创建 PENDING 任务（沿用 run_token/自动顶替语义）并投递；测试覆盖多城市、空配置跳过、已有任务运行中的语义；重启 beat 后日志可见 `Sending due task` 指向新任务。
+- [ ] 3. 抓取频率控制落地（SPEC P1）
+  - 目标：`search_interval_min/max`（10-15s）与 `weekly_search_limit`（500/周）配置存在但零引用。关键词搜索之间按随机间隔 sleep；周搜索量超限记录 WARNING 并跳过。
+  - 验收：sleep 可注入（测试用 fake，不拖慢测试）；超限跳过有测试；`docs/crawler-design.md` 同步。
+- [ ] 4. 活动级 `duplicate_candidates` 死数据处置
+  - 目标：`create_duplicate_candidates` 每次抓取写入活动级候选（生产库 702 行），无任何 API/UI 消费。去重已收敛推文维度，需选定"停写+清理存量"或"接入审核页"。
+  - 验收：方向先讨论；若停写：crawl 测试更新、一次性清理脚本幂等、`SELECT COUNT(*) FROM duplicate_candidates` 归零；若保留：API/UI 可见且有测试。
+- [ ] 5. 死代码清理（含一个潜在 NameError）
+  - 目标：清理 `services/crawler.py` 旧函数式实现（仅测试引用）、`services/report.py` 旧活动级导出（`generate_markdown:39` 引用未导入的 `datetime`，调用即 NameError）、`pipeline.process_with_isolation`、`services/task_lock.py`、`reports.py select_activities`、10 处未使用导入、`poster_tasks.py` 空 `pass` 块、`tasks.py` 不可达分支、`notes.py` 重复 import；引用它们的测试随之迁移或删除。
+  - 验收：静态扫描零未使用导入；后端、前端测试与 build 全绿；git diff 无行为变化。
+- [ ] 6. 审核规则/幂等/关联清理一致性修复包
+  - 目标：①`/notes/batch/approve` 与单条 review 一样校验至少 1 条有效子活动；②`/duplicates/{id}/merge` 对非 pending 候选返回 409；③删除 Blogger 清理 `blogger_cities`、删除 City 清理 `blogger_cities`/`keyword_group_cities`；④统一 `Activity.start_time` 与 `published_at` 时区口径（二选一，写进 `docs/database-design.md`）。
+  - 验收：每点一节 spec + 定向测试；全量测试绿。
+- [ ] 7. poster 图片路径校验统一 + notes 列表异常吞噬
+  - 目标：`poster_tasks.py note_image_by_id` 的 `str.startswith` 校验可被同前缀兄弟目录绕过，统一改 `Path.is_relative_to`；`notes.py` OCR 聚合 try/except 吞异常改为记 WARNING 日志。
+  - 验收：poster 端点有路径穿越定向测试；异常路径可见日志。
+- [ ] 8. 配置与迁移盲区
+  - 目标：`.env.example` 补 `INITIAL_ADMIN_PASSWORD`、`MINIMAX_VISION_MODEL`；`alembic env.py` 与 `init_database` 的 models import 补 `keyword_group`、`blogger_city`、`poster`。
+  - 验收：删库后仅按 .env.example + `alembic upgrade head` 可完整建库；`alembic revision --autogenerate` 对现有模型零 diff。
+- [ ] 9. 测试脆弱性修复
+  - 目标：`test_render_with_mocked_opencli` 补 mock `shutil.which`（无 opencli 机器不再 503）；`PostersListView.spec` 修 router mock 未捕获错误。
+  - 验收：无 opencli 环境下后端全过；前端 57 过且零未捕获错误输出。
+- [ ] 10. 仪表盘与周报需求偏差对齐（需先讨论取舍）
+  - 目标：与 SPEC 3.2/3.7 对齐或明确改版：仪表盘补本周统计卡片（修正 `weekly_notes_count` 口径为本周）、4 周趋势、最近 5 条日志；周报补 `DELETE /reports/{id}` 与 Markdown 渲染预览。
+  - 验收：讨论结论先落 spec；前后端测试与 build 全绿。
+- [ ] 11. TODO/文档卫生
+  - 目标：`docs/api-doc.md` 补 keyword-groups、poster、notes 系列端点；`dedupe_cities.py` 位置与 spec 对齐并核实"城市去重"条目的勾选状态。
+  - 验收：api-doc 覆盖 `router.py` 全部路由；dedupe_cities 条目状态与实际一致。
+
 - [x] 推文 ID 雪花算法服务是什么，整个项目有用到算法的都整理出来写一份文档md
   - 结果：`docs/superpowers/qa/algorithms.md` 梳理项目所有算法位置（含 XHS 雪花、UUID v4、JWT HS256、Argon2、SequenceMatcher、Celery 文件 broker 等），每一项给出文件 / 触发点 / 入参出参 / 强度评估 / 阶段二待替换路径。
 - [ ] 多账号体系 + RBAC（分组 + 权限）
@@ -33,18 +66,19 @@
   - 目标：一次性脚本 `backend/scripts/dedupe_cities.py` 选最早启用的 City 为 canonical，把其它重复 name 行的关联迁移过去（notes/blogger_city/keyword_group_cities/crawl_tasks），删除多余行；幂等。
   - 验收：`tests/test_dedupe_cities_script.py` 3 个 case；生产 DB 跑完 `SELECT COUNT(*) FROM cities` 下降，城市下拉不再重复。
   - 关联：spec `docs/superpowers/specs/2026-07-21-dedupe-cities-design.md`（已写）。
-- [ ] 重启 celery beat 加载新代码
-  - 目标：当前 celery beat PID 11974 是 7/16 启动持有旧任务调度；服务进程管理已写进 AGENTS.md，beat 也要遵循。
-  - 验收：检查 `ps aux | grep celery | grep beat` 启动时间 `<= 今日`；beat 日志中 `Scheduler: Sending due task` 使用最新代码路径。本项不需要代码改动，只需要 Agent 在 TODO 完成时主动停掉并重启 beat 进程。
+- [ ] 重启 celery beat 与 worker 加载新代码
+  - 目标：beat PID 11974 是 7/17 启动持有旧任务调度；worker PID 50229 是 7/20 启动，早于 0013/0014 迁移（关键词组、海报模型）。服务进程管理已写进 AGENTS.md，beat/worker 都要遵循。
+  - 验收：检查 `ps aux | grep celery` 两个进程启动时间 `<= 今日`；beat 日志中 `Scheduler: Sending due task` 使用最新代码路径。本项不需要代码改动，只需要 Agent 在完成时主动停掉并重启两个进程。
 - [x] 一次性数据库迁移 `seed_admin` 启动后兜底管理员
   - 目标：当数据库完全为空（首次部署/重置）时，没有 admin 用户无法登录。当前 admin 凭据是手工 sql 新增。
   - 验收：迁移 `0012_seed_admin.py` 在 upgrade 时若 `users` 表为空则插入 admin 用户；密码来自环境变量 `INITIAL_ADMIN_PASSWORD`，未设置则使用 `Admin@123` 且 WARNING 提示"生产环境必须更改"；脚本幂等：若 admin 已存在则跳过。重置 db（删除数据文件后跑 alembic upgrade head）后能用默认密码登录。
   - 结果：迁移已实现并跑过真实 DB；实测 `alembic_version = 0012`，`users(1, admin, admin, 97-byte Argon2)`，Argon2.verify("Admin@123") → True。后端 316→321 passed（5 个 case：users 空 seed / 已存在跳过 / env 覆盖密码 / WARNING 日志 / downgrade 删除）。不更新 v0.2.0；累积到下个 release cycle。
-- [ ] 列表接口 OCR 摘要聚合性能与长度保护
-  - 目标：`GET /notes` 一次性 LEFT JOIN `NoteImage` 表所有图片行，单推文 100 张图触发 100 行 SELECT 加字符串拼接，列表渲染大体积下 N+1 不明显但单行体可能 MB 级别。
-  - 验收：`tests/test_note_summary.py` 加测：推文有 50 张图片时 summary 字符串 ≤ 4 KiB；超长时省略截断并在 DB 注释/响应里附 `summary_truncated=True`；前端"摘要"列不出现"pre" + 大 body（前端 `show-overflow-tooltip` 兜底）；后台跑脚本性能测试：`SELECT COUNT(*) FROM notes WHERE LENGTH(summary)>4096` 应为 0。
-
 ## 后续优化
+
+- [ ] 登录接口失败限流
+  - 目标：`/auth/login` 无失败限流，内部工具风险低，但可加内存级失败计数 + 指数退避。
+  - 验收：连续 5 次失败返回 429；测试覆盖。
+
 
 <!-- 在此追加产品优化、体验改进、稳定性增强等事项。建议格式如下：
 - [ ] 优化项标题
@@ -62,6 +96,13 @@
 - [ ] 在阶段一现有功能不回退的前提下完成迁移和验收。
 
 ## 已完成
+
+- [x] 1. 修复关键词组在 `/tasks/crawl` 被静默丢弃（端到端断链）+ 归档按城市/周分目录
+  - 目标：前端 DashboardView 提交 `keyword_group_ids`，后端 `CrawlIn` 无该字段被 pydantic 丢弃（已实证）：仅选组 → 422；组+博主 → 组被忽略只抓博主。`resolve_effective_keywords` 的组分支因 `model_dump()` 恒含 `keywords` 键不可达。用户补充语义（2026-07-25）：只选城市+关键词组 → 只抓关键词；只选博主 → 只抓博主；都选都抓；city 与 recent_filter 必填；归档按城市和周分目录。
+  - 结果：`CrawlIn` 新增 `keyword_group_ids`，`recent_filter` 改必填；入口校验组必须存在/启用/挂在当前城市（422）；`resolve_effective_keywords` 改为"键存在即意图"：显式词 ∪ 组并集，键缺省才回退城市配置（显式空列表 = 禁用该维度的旧语义保留）；归档目录改为 `archive/{city_code}/{ISO 年}-W{周}/task-{id}/`（`archive.py` 新增 `iso_week_folder_name`，`crawl_task`/`activity_cleanup` 同步，清理脚本兼容新旧两种目录深度）；`docs/crawler-design.md` 同步。
+  - 验收：新增 `tests/test_crawl_keyword_groups_api.py` 8 个用例（先红后绿）；既有 `test_crawl_scope_unit`/`test_tasks_api_scope`/`test_config_task_duplicate_api`/`test_crawl_auto_stop_previous`/`test_crawl_execution_ownership`/`test_activity_cleanup`/`test_multi_activity_archive` 同步后全绿；后端 439 passed（仅剩已知的 opencli 环境敏感失败）、前端 57 passed、build 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-25-crawl-scope-and-archive-layout-design.md`。
+  - 注意：改动涉及 `app/tasks/*.py` 与 `app/services/*.py`，需重启 celery worker 与 beat 后生效（见待办"重启 celery beat 与 worker"）。
 
 - [x] 仪表盘 `last_task.error_message` 仅在任务进行中或失败时显示
   - 结果：`DashboardView.vue` 加 `errorVisibleStatuses = ['RUNNING','STOP_REQUESTED','FAILED','PAUSED','STOPPED']` 与 `shouldShowLastTaskError` computed 属性；`ElAlert` 改 `v-if="shouldShowLastTaskError"`。

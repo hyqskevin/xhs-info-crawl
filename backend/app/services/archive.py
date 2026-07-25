@@ -2,11 +2,14 @@ import shutil
 import re
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook
 
 from app.models.activity import Activity
 from app.models.note import Note, NoteImage
+
+_LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def resolve_storage_path(data_dir:Path,image_dir:Path,key:str)->Path:
@@ -15,8 +18,14 @@ def resolve_storage_path(data_dir:Path,image_dir:Path,key:str)->Path:
     return image_dir/key
 
 
-def archive_task_folder(root: Path, started_at: datetime, task_id: int) -> Path:
-    folder = root / started_at.date().isoformat() / f"task-{task_id}"
+def iso_week_folder_name(started_at: datetime) -> str:
+    reference = started_at if started_at.tzinfo else started_at.replace(tzinfo=ZoneInfo("UTC"))
+    iso_year, iso_week, _ = reference.astimezone(_LOCAL_TZ).isocalendar()
+    return f"{iso_year}-W{iso_week:02d}"
+
+
+def archive_task_folder(root: Path, started_at: datetime, task_id: int, city_code: str) -> Path:
+    folder = root / city_code / iso_week_folder_name(started_at) / f"task-{task_id}"
     (folder / "images").mkdir(parents=True, exist_ok=True)
     return folder
 
@@ -38,8 +47,8 @@ def write_activity_exports(folder: Path, task_id: int, activities: list[Activity
     workbook.save(folder / "activities.xlsx")
 
 
-def archive_task_result(root: Path, started_at: datetime, task_id: int, note: Note, image_rows: list[tuple[Path, NoteImage]], activities: list[Activity]) -> Path:
-    folder = archive_task_folder(root, started_at, task_id)
+def archive_task_result(root: Path, started_at: datetime, task_id: int, note: Note, image_rows: list[tuple[Path, NoteImage]], activities: list[Activity], city_code: str) -> Path:
+    folder = archive_task_folder(root, started_at, task_id, city_code)
     source_sections = [f"# {note.title}", "", f"- 原文链接：{note.source_url}", "", "## 正文", "", note.content, "", "## 图片 OCR", ""]
     image_links:dict[int,str]={}
     for index, (source, image) in enumerate(image_rows, 1):

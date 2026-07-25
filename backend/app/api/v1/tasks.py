@@ -18,7 +18,8 @@ class CrawlIn(BaseModel):
     type: str = 'mixed'
     city: str
     keywords: list[str] = []
-    recent_filter: Literal['不限','一天内','一周内','半年内'] = '一周内'
+    keyword_group_ids: list[int] = []
+    recent_filter: Literal['不限','一天内','一周内','半年内']
     blogger_ids: list[int] = []
 
 
@@ -45,9 +46,18 @@ def crawl(payload:CrawlIn,_:Admin,db:DB):
     if not city: raise HTTPException(422,'请选择已启用的城市')
     configured_keywords=set(db.scalars(select(Keyword.word).where(Keyword.city_code==city.code,Keyword.enabled.is_(True))).all())
     if any(keyword not in configured_keywords for keyword in payload.keywords): raise HTTPException(422,'关键词不属于所选城市')
+    if payload.keyword_group_ids:
+        from app.models.keyword_group import KeywordGroup, KeywordGroupCity
+        group_rows = db.execute(
+            select(KeywordGroup.id, KeywordGroup.enabled, KeywordGroupCity.enabled.label("city_link_enabled"))
+            .join(KeywordGroupCity, KeywordGroupCity.keyword_group_id == KeywordGroup.id)
+            .where(KeywordGroup.id.in_(payload.keyword_group_ids), KeywordGroupCity.city_code == city.code)
+        ).all()
+        valid_ids = {row.id for row in group_rows if row.enabled and row.city_link_enabled}
+        if any(group_id not in valid_ids for group_id in payload.keyword_group_ids): raise HTTPException(422,'关键词组不属于所选城市或已停用')
     configured_bloggers=set(db.scalars(select(BloggerCity.blogger_id).where(BloggerCity.city_code==city.code,BloggerCity.enabled.is_(True))).all())
     if any(blogger_id not in configured_bloggers for blogger_id in payload.blogger_ids): raise HTTPException(422,'博主不属于所选城市')
-    if not payload.keywords and not payload.blogger_ids: raise HTTPException(422,'请至少启用一个关键词或博主')
+    if not payload.keywords and not payload.keyword_group_ids and not payload.blogger_ids: raise HTTPException(422,'请至少启用一个关键词或博主')
     # 校验 effective 范围：显式覆盖时 keywords/blogger_ids 已确定；未传时回退到城市 enabled 配置
     from app.services.crawl_scope import resolve_crawl_scope
     scope = resolve_crawl_scope(db, city, payload.model_dump())

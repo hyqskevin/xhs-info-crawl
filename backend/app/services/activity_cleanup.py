@@ -25,8 +25,13 @@ def rebuild_task_activity_exports(db: Session, settings, task_id: int) -> None:
     if task is None:
         return
     started_at = task.started_at or task.created_at
-    canonical_folder = archive_task_folder(settings.archive_dir, started_at, task_id)
-    folders = {canonical_folder, *settings.archive_dir.glob(f"*/task-{task_id}")}
+    city_code = (task.params or {}).get("city") or ""
+    folders = set()
+    if city_code:
+        folders.add(archive_task_folder(settings.archive_dir, started_at, task_id, city_code))
+    # 兼容旧版单层目录（archive/{date}/task-{id}）与新版城市/周目录
+    folders.update(settings.archive_dir.glob(f"*/task-{task_id}"))
+    folders.update(settings.archive_dir.glob(f"*/*/task-{task_id}"))
     activities = list(db.scalars(
         select(Activity)
         .join(Note, Note.id == Activity.note_id)

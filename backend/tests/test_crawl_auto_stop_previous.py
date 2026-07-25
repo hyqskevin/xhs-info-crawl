@@ -29,7 +29,7 @@ def test_crawl_auto_stops_previous_running_task(client: TestClient, db_session: 
 
     response = client.post(
         "/api/v1/tasks/crawl",
-        json={"city": "city-99f1e469", "keywords": ["活动"], "blogger_ids": []},
+        json={"city": "city-99f1e469", "keywords": ["活动"], "recent_filter": "一周内", "blogger_ids": []},
         headers=_auth(),
     )
 
@@ -61,7 +61,7 @@ def test_crawl_auto_stops_previous_pending_task(client: TestClient, db_session: 
 
     response = client.post(
         "/api/v1/tasks/crawl",
-        json={"city": "city-99f1e469", "keywords": ["活动"], "blogger_ids": []},
+        json={"city": "city-99f1e469", "keywords": ["活动"], "recent_filter": "一周内", "blogger_ids": []},
         headers=_auth(),
     )
 
@@ -92,7 +92,7 @@ def test_crawl_creates_new_task_after_stopping_previous(client: TestClient, db_s
 
     response = client.post(
         "/api/v1/tasks/crawl",
-        json={"city": "city-99f1e469", "keywords": ["活动"], "blogger_ids": []},
+        json={"city": "city-99f1e469", "keywords": ["活动"], "recent_filter": "一周内", "blogger_ids": []},
         headers=_auth(),
     )
 
@@ -115,7 +115,7 @@ def test_crawl_returns_success_when_no_previous_task(client: TestClient, db_sess
 
     response = client.post(
         "/api/v1/tasks/crawl",
-        json={"city": "city-99f1e469", "keywords": ["活动"], "blogger_ids": []},
+        json={"city": "city-99f1e469", "keywords": ["活动"], "recent_filter": "一周内", "blogger_ids": []},
         headers=_auth(),
     )
 
