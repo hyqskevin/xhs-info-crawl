@@ -30,6 +30,14 @@ def forbid_undeclared_celery_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(run_crawl, "delay", fail)
 
 
+@pytest.fixture(autouse=True)
+def fast_rate_limit_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """频率控制的真实 sleep 不进测试；断言 sleep 行为的用例需显式重 patch。"""
+    from app.tasks import crawl_task
+
+    monkeypatch.setattr(crawl_task, "rate_limit_sleep", lambda *args, **kwargs: None)
+
+
 @pytest.fixture
 def celery_dispatches(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
     """Opt a test into crawl dispatch and expose the exact queued arguments."""

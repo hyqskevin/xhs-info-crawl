@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+from collections.abc import Callable
 import logging
 import shutil
+import time
 
 from sqlalchemy import delete, func, select, update
 
@@ -27,10 +29,28 @@ from app.services.note_identity import extract_platform_note_id
 from app.services.ocr import OCRService
 from app.services.note_id_published_at import note_id_published_at
 from app.services.published_at import extract_published_at
+from app.services.search_rate_limit import (
+    SearchRateLimiter,
+    increment_weekly_search,
+    iso_week_key,
+    weekly_search_count,
+)
 from app.services.opencli_adapter import OpenCLIAdapter
 from app.services.paddleocr_adapter import PaddleOCREngine
 from app.services.pipeline import deduplicate_results, run_stage, title_matches_keywords
 from app.tasks.celery_app import celery_app
+
+
+def rate_limit_sleep(seconds: float, guard: Callable[[], None] | None = None) -> None:
+    """可中断的频率控制 sleep：0.5s 分片，每片执行 guard（执行栅栏），stop 请求 0.5s 内响应。"""
+    deadline = time.monotonic() + max(0.0, seconds)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.5, remaining))
+        if guard:
+            guard()
 
 
 class ExecutionStopped(Exception):
@@ -410,6 +430,20 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         log(db, task.id, "INFO", "login check")
         results: list[tuple[str, dict]] = []
         discovery_failures = 0
+        rate_limiter = SearchRateLimiter(settings.search_interval_min, settings.search_interval_max)
+        week_key = iso_week_key()
+
+        def throttled_search(query: str, recent: str) -> list[dict] | None:
+            """关键词搜索的频率与周配额闸门；返回 None 表示本周超限，调用方停止后续搜索。"""
+            if weekly_search_count(db, week_key) >= settings.weekly_search_limit:
+                log(db, task.id, "WARNING", f"本周搜索量已达上限（{settings.weekly_search_limit}），跳过 {query!r} 及后续关键词搜索")
+                return None
+            delay = rate_limiter.next_delay()
+            if delay:
+                rate_limit_sleep(delay, guard=lambda: assert_execution_active(db, task.id, run_token))
+            found = adapter.search_recent(query, recent)
+            increment_weekly_search(db, week_key)
+            return found
         requested_cities = [task.params["city"]] if task.params.get("city") else task.params.get("cities", [])
         city_query = select(City).where(City.enabled.is_(True))
         if requested_cities:
@@ -422,7 +456,10 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
                 log(db, task.id, "INFO", f"抓取范围生效：keywords={len(scope.keywords)} bloggers={len(scope.bloggers)} (override={override})")
                 recent_filter = task.params.get("recent_filter") or city.recent_filter
                 for keyword in scope.keywords:
-                    for item in adapter.search_recent(f"{city.name} {keyword}", recent_filter):
+                    found = throttled_search(f"{city.name} {keyword}", recent_filter)
+                    if found is None:
+                        break
+                    for item in found:
                         tagged = dict(item)
                         tagged["_matched_keywords"] = [keyword]
                         results.append((city.code, tagged))
@@ -447,12 +484,19 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
                     results.extend((city.code, item) for item in items)
         else:
             for city_code in requested_cities:
+                quota_exceeded = False
                 for keyword in task.params.get("keywords", []):
-                    for item in adapter.search_recent(f"{city_code} {keyword}", "一周内"):
+                    found = throttled_search(f"{city_code} {keyword}", "一周内")
+                    if found is None:
+                        quota_exceeded = True
+                        break
+                    for item in found:
                         tagged = dict(item)
                         tagged["_matched_keywords"] = [keyword]
                         results.append((city_code, tagged))
                     assert_execution_active(db, task.id, run_token)
+                if quota_exceeded:
+                    break
 
         results = deduplicate_results(results)
         task.total_notes = len(results)

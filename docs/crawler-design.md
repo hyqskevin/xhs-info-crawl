@@ -57,6 +57,15 @@ opencli xiaohongshu search --keyword "上海 周末活动" --limit 10 -f json
 4. 用户登录后点击“测试连接”或“重试”，系统重新执行 `whoami`。
 5. 仅当登录检查通过后才恢复爬虫流程。
 
+### 搜索频率与周配额
+
+关键词搜索受两层控制（`app/services/search_rate_limit.py`，关联 spec `docs/superpowers/specs/2026-07-25-crawl-rate-limit-design.md`）：
+
+1. **任务内随机间隔**：同一任务的关键词搜索之间 sleep `SEARCH_INTERVAL_MIN`~`SEARCH_INTERVAL_MAX`（默认 10-15 秒）的随机值；任务内第一次搜索不等待。sleep 按 0.5 秒分片并检查执行栅栏，"停止抓取"0.5 秒内响应。
+2. **周搜索配额**：`search_usage` 表按 ISO 周（Asia/Shanghai，`week_key` 如 `2026-W30`）全局累计 `search_recent` 调用次数（跨任务）；达到 `WEEKLY_SEARCH_LIMIT`（默认 500/周）后记录 WARNING 并跳过剩余关键词搜索，任务仍正常完成，不算失败。
+
+配额仅约束关键词搜索，博主抓取不受限。
+
 ### 搜索筛选与滚动加载
 
 关键词搜索不只依赖 OpenCLI adapter 的默认结果。登录检查通过后，浏览器流程必须：

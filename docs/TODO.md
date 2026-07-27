@@ -14,9 +14,6 @@
 
 > 以下为 2026-07-25 全项目核查新增（证据归档：`docs/superpowers/qa/2026-07-25-project-audit.md`），按列表顺序依次讨论修复。
 
-- [ ] 4. 抓取频率控制落地（SPEC P1）
-  - 目标：`search_interval_min/max`（10-15s）与 `weekly_search_limit`（500/周）配置存在但零引用。关键词搜索之间按随机间隔 sleep；周搜索量超限记录 WARNING 并跳过。
-  - 验收：sleep 可注入（测试用 fake，不拖慢测试）；超限跳过有测试；`docs/crawler-design.md` 同步。
 - [ ] 5. 活动级 `duplicate_candidates` 死数据处置
   - 目标：`create_duplicate_candidates` 每次抓取写入活动级候选（生产库 702 行），无任何 API/UI 消费。去重已收敛推文维度，需选定"停写+清理存量"或"接入审核页"。
   - 验收：方向先讨论；若停写：crawl 测试更新、一次性清理脚本幂等、`SELECT COUNT(*) FROM duplicate_candidates` 归零；若保留：API/UI 可见且有测试。
@@ -94,6 +91,12 @@
 
 ## 已完成
 
+- [x] 4. 抓取频率控制落地（SPEC P1）
+  - 目标：`search_interval_min/max`（10-15s）与 `weekly_search_limit`（500/周）配置存在但零引用。关键词搜索之间按随机间隔 sleep；周搜索量超限记录 WARNING 并跳过。
+  - 结果：新服务 `app/services/search_rate_limit.py`（`SearchRateLimiter` 任务内首次不等、之后 uniform(min,max)；`iso_week_key` Asia/Shanghai ISO 周；`weekly_search_count`/`increment_weekly_search`）；新表 `search_usage`（migration `0016`，week_key unique 全局跨任务累计，每次 search_recent 成功后 +1）；`crawl_task.rate_limit_sleep` 0.5s 分片可中断（每片过执行栅栏，stop 0.5s 内响应）；`run_crawl` 两个关键词循环统一走 `throttled_search` 闸门：超限 WARNING + 跳过剩余搜索、任务仍 COMPLETED，博主抓取不受限；conftest 新增 autouse fixture 默认把 rate_limit_sleep 置 no-op（既有测试不被真实 sleep 拖慢）；`.env.example` 注释与 `docs/crawler-design.md` 同步语义。
+  - 验收：`tests/test_search_rate_limit.py` 5 个 + `tests/test_crawl_rate_limit.py` 3 个（先红后绿）；migration 0016 临时库 upgrade/downgrade 通过；后端 470 passed（仅剩已知 opencli 环境敏感失败）；生产库 stamp 0016（uvicorn create_all 已先行建表）。
+  - 关联：spec `docs/superpowers/specs/2026-07-25-crawl-rate-limit-design.md`。
+  - 注意：改动 `app/tasks/*.py`、`app/services/*.py` 与 models，worker/beat 已于 2026-07-27 重启（同时修复 opencli PATH 问题）。
 - [x] 重启 celery beat 与 worker 加载新代码
   - 目标：beat PID 11974 是 7/17 启动持有旧任务调度；worker PID 50229 是 7/20 启动，早于 0013/0014 迁移（关键词组、海报模型）。服务进程管理已写进 AGENTS.md，beat/worker 都要遵循。
   - 结果（2026-07-25）：确认无进行中任务后停掉旧进程（11970/11974、50225/50229），以相同命令后台重启（日志 `data/logs/celery-worker.log`、`celery-beat.log`）；生产库因 uvicorn create_all 已先行建表，`alembic stamp 0015` 对齐版本；实测 beat 日志 `Scheduler: Sending due task scheduled-crawl-dispatch`、worker 接收并 succeeded。
