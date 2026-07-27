@@ -57,12 +57,3 @@ def deduplicate_results(rows: Iterable[tuple[str, dict[str, Any]]]) -> list[tupl
         unique.append((city, copied))
     return unique
 
-
-def process_with_isolation(items: Iterable[T], processor: Callable[[T], Any], on_failure: Callable[[T, Exception], Any]) -> None:
-    for item in items:
-        try:
-            processor(item)
-        except AuthenticationRequired:
-            raise
-        except Exception as exc:
-            on_failure(item, exc)

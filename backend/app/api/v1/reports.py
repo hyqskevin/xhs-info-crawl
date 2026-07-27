@@ -1,13 +1,12 @@
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from io import BytesIO
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -35,17 +34,6 @@ def week_bounds(week: str) -> tuple[datetime, datetime]:
     except ValueError as exc:
         raise ValueError("invalid ISO week") from exc
     return start, start + timedelta(days=7)
-
-
-def select_activities(db: Session, cities: list[str], week: str) -> list[Activity]:
-    """兼容保留：周报按推文维度（Note.published_at）选取；该函数返回 note 已审批通过的子活动（仅调试用）。"""
-    start, end = week_bounds(week)
-    return list(db.scalars(select(Activity).where(
-        Activity.city_code.in_(cities),
-        Activity.deleted_at.is_(None),
-        Activity.start_time >= start,
-        Activity.start_time < end,
-    ).order_by(Activity.start_time, Activity.id)).all())
 
 
 def select_notes(db: Session, cities: list[str], week: str):

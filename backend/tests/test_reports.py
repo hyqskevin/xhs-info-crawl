@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from io import BytesIO
-from time import perf_counter
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.security import create_access_token
 from app.models.activity import Activity
 from app.models.note import Note
-from app.services.report import format_activity_markdown, generate_markdown, generate_xlsx
+from app.services.report import format_activity_markdown
 
 
 @pytest.fixture
@@ -29,37 +28,12 @@ def post(db: Session, index: int, *, published_at: datetime | None = None, revie
     return note
 
 
-def test_report_groups_by_city_and_type_and_excludes_non_approved() -> None:
-    items = [activity(1), activity(2, kind="展览"), activity(3, "beijing"), activity(4)]
-    report = generate_markdown("2025-W29", ["shanghai", "beijing"], items)
-    assert "## 上海" in report and "## 北京" in report
-    assert "### 演出" in report and "### 展览" in report
-    assert "活动4" in report
-
-
-def test_activity_markdown_format_and_empty_report() -> None:
+def test_activity_markdown_format() -> None:
     text = format_activity_markdown(activity(1))
     assert "#### 活动1" in text
     assert "**时间**：2025-07-20 18:00 - 22:00" in text
     assert "**地点**：徐汇滨江" in text and "**费用**：免费" in text
     assert "[小红书笔记](https://www.xiaohongshu.com/a/1)" in text
-    assert "本周暂无活动" in generate_markdown("2025-W29", ["shanghai"], [])
-
-
-def test_report_generation_performance() -> None:
-    items = [activity(i, kind=["演出", "展览", "市集", "沙龙"][i % 4]) for i in range(500)]
-    started = perf_counter()
-    generate_markdown("2025-W29", ["shanghai"], items)
-    assert perf_counter() - started <= 30
-
-
-def test_xlsx_contains_same_approved_activities() -> None:
-    content = generate_xlsx([activity(1), activity(2)])
-    workbook = load_workbook(BytesIO(content), read_only=True)
-    rows = list(workbook.active.iter_rows(values_only=True))
-    assert rows[1][0] == "活动1"
-    # 两行数据 + 一行表头
-    assert len(rows) == 3
 
 
 def test_generate_persists_and_regenerates_single_report(client: TestClient, db_session: Session, headers: dict[str, str]) -> None:

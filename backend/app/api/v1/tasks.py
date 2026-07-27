@@ -38,7 +38,7 @@ def crawl(payload:CrawlIn,_:Admin,db:DB):
         pid_killed = kill_task_pid(running.id, run_token=running.run_token, timeout=5.0)
         if running.status == 'PENDING':
             running.status='STOPPED';running.current_stage=None;running.current_note=None;running.finished_at=datetime.now(timezone.utc)
-        elif running.status in {'RUNNING','FAILED','PAUSED'}:
+        elif running.status == 'RUNNING':
             running.status='STOP_REQUESTED';running.current_stage=None;running.current_note=None
         db.add(TaskLog(task_id=running.id,level='INFO',message=f'被新任务顶替停止（子进程已 kill={pid_killed}）',created_at=datetime.now(timezone.utc)))
         db.commit()

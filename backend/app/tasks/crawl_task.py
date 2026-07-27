@@ -12,12 +12,11 @@ from app.core.database import SessionLocal
 from app.models.activity import Activity
 from app.models.blogger_city import BloggerCity
 from app.models.blogger_group import BloggerGroup, BloggerGroupMember
-from app.models.config import Blogger, City, Keyword
+from app.models.config import Blogger, City
 from app.models.note import Note, NoteImage
 from app.models.schedule import ScheduledCrawl
 from app.models.task import CrawlTask, TaskLog
 from app.services.archive import archive_task_folder, archive_task_result
-from app.services.activity_window import ActivityWindow
 from app.services.crawler import AuthenticationRequired, VerificationRequired
 from app.services.browser_launcher import open_xhs_login
 from app.services.crawl_city_guard import assert_city_code_exists

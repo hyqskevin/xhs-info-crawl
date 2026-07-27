@@ -216,7 +216,6 @@ def reprocess_note(note_id: int, _: Auth, db: DB):
     if note.status not in {"NO_ACTIVITIES", "EMPTY_RESULT_RETRYABLE"}:
         raise HTTPException(status_code=409, detail=f"推文状态 {note.status} 不需要重新处理")
     # 清除 OCR/详情/活动记录，重新走抓取阶段
-    from app.models.note import NoteImage
     db.execute(delete(NoteImage).where(NoteImage.note_id == note_id))
     db.execute(delete(Activity).where(Activity.note_id == note_id))
     note.status = "PENDING"

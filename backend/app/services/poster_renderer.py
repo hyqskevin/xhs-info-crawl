@@ -13,7 +13,6 @@
 """
 import base64
 import html as html_lib
-import json
 import re
 import shutil
 import subprocess

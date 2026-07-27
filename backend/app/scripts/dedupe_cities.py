@@ -20,7 +20,6 @@ import argparse
 import json
 import logging
 import sys
-from collections import defaultdict
 from typing import Iterable
 
 from sqlalchemy import func, select, update

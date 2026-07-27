@@ -1,5 +1,5 @@
 from app.services.crawler import AuthenticationRequired, VerificationRequired
-from app.services.pipeline import deduplicate_results, process_with_isolation, run_stage, title_matches_keywords
+from app.services.pipeline import deduplicate_results, run_stage, title_matches_keywords
 from app.models.activity import Activity
 from app.models.blogger_city import BloggerCity
 from app.models.config import Blogger, City, Keyword
@@ -237,31 +237,6 @@ def test_duplicate_search_results_merge_their_matched_keywords():
 
     assert result[0][1]["_matched_keywords"] == ["活动", "展览"]
 
-
-def test_one_item_failure_does_not_stop_the_remaining_items():
-    completed = []
-    failed = []
-    def processor(item):
-        if item == "broken":
-            raise ValueError("bad note")
-        completed.append(item)
-
-    process_with_isolation(["broken", "good"], processor, lambda item, exc: failed.append((item, str(exc))))
-
-    assert completed == ["good"]
-    assert failed == [("broken", "bad note")]
-
-
-def test_authentication_failure_still_stops_the_batch():
-    def processor(_):
-        raise AuthenticationRequired("login")
-
-    try:
-        process_with_isolation(["note"], processor, lambda *_: None)
-    except AuthenticationRequired as exc:
-        assert str(exc) == "login"
-    else:
-        raise AssertionError("AuthenticationRequired must escape item isolation")
 
 
 def test_existing_legacy_note_with_activity_is_treated_as_complete(db_session):

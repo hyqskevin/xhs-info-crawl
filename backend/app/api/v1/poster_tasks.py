@@ -22,7 +22,6 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import require_admin
-from app.models.config import City
 from app.models.note import Note, NoteImage
 from app.models.poster import PosterTask, PosterTemplate
 from app.services.poster_renderer import (
@@ -168,9 +167,6 @@ def update_poster_task(task_id: int, payload: PosterTaskPatch, _: Admin, db: DB)
     t = db.get(PosterTask, task_id)
     if t is None:
         raise HTTPException(404, "任务不存在")
-    if t.status == "rendered" and payload.status is None:
-        # 防止覆盖渲染结果
-        pass
     if payload.name is not None:
         t.name = payload.name
     if payload.status is not None:
