@@ -130,6 +130,9 @@ def test_stop_requested_after_note_detail_prevents_download_and_note_write(
         def __init__(self, _settings):
             pass
 
+        def check_login(self):
+            return {"logged_in": True}
+
         def bind_task(self, *_args, **_kwargs):
             pass
 
@@ -183,6 +186,9 @@ def test_worker_binds_execution_guard_and_warning_sink(db_session, monkeypatch) 
     class FakeAdapter:
         def __init__(self, _settings):
             pass
+
+        def check_login(self):
+            return {"logged_in": True}
 
         def bind_task(
             self,

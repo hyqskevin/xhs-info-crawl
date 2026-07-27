@@ -165,7 +165,21 @@ class OpenCLIAdapter:
             return json.loads(output)
         except json.JSONDecodeError:
             return output
-    def check_login(self): return self.run(['xiaohongshu','whoami','-f','json','--window','background'])
+    def check_login(self):
+        """登录预检：whoami 是轻量只读探测，正常 1~2s 返回。
+
+        未扫码登录时 opencli 的 whoami 会在浏览器层阻塞等待扫码（不会以 exit 77
+        快速退出），最终被 Python 层超时 kill。这种超时唯一现实诱因就是登录窗口
+        等扫码，归类为 AuthenticationRequired，让任务走 PAUSED 流程提示用户扫码，
+        而不是被当作普通抓取失败逐个博主/笔记白等 60s。
+        """
+        try:
+            return self.run(['xiaohongshu','whoami','-f','json','--window','background'])
+        except OpenCLITimeout as exc:
+            raise AuthenticationRequired(
+                '小红书登录检查超时：可能未登录或登录窗口正在等待扫码，'
+                '请完成扫码登录后点击「继续抓取」'
+            ) from exc
     @staticmethod
     def normalize_note(value:Any)->dict[str,Any]:
         if isinstance(value,dict): return value

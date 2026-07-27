@@ -43,6 +43,9 @@ def _install_fakes(db_session: Session, monkeypatch, queries: list[str]) -> None
         def __init__(self, _settings):
             pass
 
+        def check_login(self):
+            return {"logged_in": True}
+
         def search_recent(self, query, _recent_filter):
             queries.append(query)
             return []

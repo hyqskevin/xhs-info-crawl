@@ -38,6 +38,9 @@
 - [ ] 12. TODO/文档卫生
   - 目标：`docs/api-doc.md` 补 keyword-groups、poster、notes 系列端点；`dedupe_cities.py` 位置与 spec 对齐并核实"城市去重"条目的勾选状态。
   - 验收：api-doc 覆盖 `router.py` 全部路由；dedupe_cities 条目状态与实际一致。
+- [ ] 13. 未登录识别 + 任务启动登录预检
+  - 目标：未扫码登录时 whoami 挂起 60s 被误记为博主抓取失败（任务 #19 实证）。改为：`check_login` 把 whoami 超时归类为 `AuthenticationRequired`；任务启动做真实登录预检，未登录直接 PAUSED 并提示扫码；PAUSED 时自动打开登录页。
+  - 验收：spec `docs/superpowers/specs/2026-07-27-login-preflight-auth-pause-design.md`；新增 `backend/tests/test_login_preflight.py` 4 用例；12 个 FakeAdapter 补 `check_login` 后全量测试绿；**重启 worker 生效（等任务 #19 跑完）**。
 
 - [x] 推文 ID 雪花算法服务是什么，整个项目有用到算法的都整理出来写一份文档md
   - 结果：`docs/superpowers/qa/algorithms.md` 梳理项目所有算法位置（含 XHS 雪花、UUID v4、JWT HS256、Argon2、SequenceMatcher、Celery 文件 broker 等），每一项给出文件 / 触发点 / 入参出参 / 强度评估 / 阶段二待替换路径。

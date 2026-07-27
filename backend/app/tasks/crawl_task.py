@@ -445,7 +445,9 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         if task.started_at is None:
             task.started_at = datetime.now(timezone.utc)
         db.commit()
-        log(db, task.id, "INFO", "login check")
+        log(db, task.id, "INFO", "登录预检：检查小红书登录状态")
+        adapter.check_login()
+        log(db, task.id, "INFO", "登录预检通过")
         results: list[tuple[str, dict]] = []
         discovery_failures = 0
         rate_limiter = SearchRateLimiter(settings.search_interval_min, settings.search_interval_max)
@@ -575,12 +577,14 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         task.error_message = str(exc)
         db.commit()
         log(db, task.id, "ERROR", str(exc))
-        if isinstance(exc, VerificationRequired):
-            try:
-                open_xhs_login(settings)
-                log(db, task.id, "INFO", "已自动打开 Chrome 小红书验证页面")
-            except Exception as launch_exc:
-                log(db, task.id, "WARNING", f"自动打开 Chrome 失败：{launch_exc}")
+        # 未登录（whoami 超时归类）与安全验证都需要用户在浏览器里完成扫码/验证，
+        # 统一自动打开登录页；打开失败不影响 PAUSED 状态。
+        page_kind = "验证页面" if isinstance(exc, VerificationRequired) else "登录页面，请完成扫码后点击「继续抓取」"
+        try:
+            open_xhs_login(settings)
+            log(db, task.id, "INFO", f"已自动打开 Chrome 小红书{page_kind}")
+        except Exception as launch_exc:
+            log(db, task.id, "WARNING", f"自动打开 Chrome 失败：{launch_exc}")
     except Exception as exc:
         db.rollback()
         task = db.get(CrawlTask, task_id)

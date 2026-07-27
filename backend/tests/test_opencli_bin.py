@@ -107,6 +107,9 @@ def test_run_crawl_preflight_invokes_find_opencli(db_session: Session, monkeypat
         def __init__(self, _settings):
             pass
 
+        def check_login(self):
+            return {"logged_in": True}
+
         def search_recent(self, _query, _recent_filter):
             return []
 

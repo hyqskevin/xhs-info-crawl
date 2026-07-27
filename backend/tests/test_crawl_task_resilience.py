@@ -55,6 +55,9 @@ def test_one_blogger_discovery_failure_does_not_discard_other_results(db_session
         def __init__(self, _settings):
             pass
 
+        def check_login(self):
+            return {"logged_in": True}
+
         def bind_task(self, *_args, **_kwargs):
             pass
 
@@ -111,6 +114,9 @@ def test_blogger_authentication_failure_still_pauses_the_batch(db_session, monke
         def __init__(self, _settings):
             pass
 
+        def check_login(self):
+            return {"logged_in": True}
+
         def bind_task(self, *_args, **_kwargs):
             pass
 
@@ -145,6 +151,9 @@ def test_verification_failure_pauses_and_opens_chrome(db_session, monkeypatch):
         def __init__(self, _settings):
             pass
 
+        def check_login(self):
+            return {"logged_in": True}
+
         def bind_task(self, *_args, **_kwargs):
             pass
 
@@ -176,6 +185,7 @@ def test_verification_browser_launch_failure_does_not_override_paused(db_session
 
     class FakeAdapter:
         def __init__(self, _settings): pass
+        def check_login(self): return {"logged_in": True}
         def bind_task(self, *_args, **_kwargs): pass
         def blogger_notes(self, _username, _profile_url):
             raise VerificationRequired("检测到小红书安全验证，请人工处理")
@@ -438,6 +448,9 @@ def test_keyword_search_skips_titles_without_the_corresponding_keyword(db_sessio
         def __init__(self, _settings):
             pass
 
+        def check_login(self):
+            return {"logged_in": True}
+
         def search_recent(self, _query, _recent_filter):
             return [
                 {"title": "宁波周末活动合集", "url": "https://xhs/matched"},
@@ -485,6 +498,9 @@ def test_worker_finishes_current_note_then_stops_before_the_next(db_session, mon
         def __init__(self, _settings):
             pass
 
+        def check_login(self):
+            return {"logged_in": True}
+
         def search_recent(self, _query, _recent_filter):
             return [
                 {"title": "宁波活动一", "url": "https://xhs/1"},
@@ -521,6 +537,9 @@ def test_worker_does_not_restart_a_pending_task_that_was_already_stopped(db_sess
     class FakeAdapter:
         def __init__(self, _settings):
             pass
+
+        def check_login(self):
+            return {"logged_in": True}
 
         def search_recent(self, *_args):
             searched.append(True)
