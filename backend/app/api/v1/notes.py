@@ -165,8 +165,9 @@ def list_notes(
             ).all()
             for note_id, ocr_text in image_rows:
                 ocr_map.setdefault(note_id, []).append(ocr_text)
-        except Exception:
-            # OCR 聚合失败不影响主列表读取
+        except Exception as exc:
+            # OCR 聚合失败不影响主列表读取，但必须留下可查日志
+            logger.warning("笔记列表 OCR 聚合失败 note_ids=%s: %s", note_ids, exc)
             ocr_map = {}
     return {"code": 200, "message": "success", "data": {"items": [_summary(note, count, ocr_map.get(note.id, [])) for note, count in rows]}, "pagination": {"page": page, "page_size": page_size, "total": total}}
 

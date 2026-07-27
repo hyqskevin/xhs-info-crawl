@@ -123,7 +123,7 @@ def note_image_by_id(image_id: int, _: Admin, db: DB) -> StreamingResponse:
     settings = get_settings()
     base = Path(settings.data_dir).resolve()
     target = (base / image.storage_key).resolve()
-    if not str(target).startswith(str(base)) or not target.exists():
+    if not target.is_relative_to(base) or not target.is_file():
         raise HTTPException(404, "图片文件不存在")
     return StreamingResponse(target.open("rb"), media_type="image/jpeg")
 
