@@ -97,6 +97,16 @@ def generate_report(payload: GenerateRequest, _: Annotated[dict[str, str], Depen
     return {"code": 200, "message": "success", "data": {"id": report.id, "week": report.week, "cities": payload.cities, "note_count": report.note_count, "activity_count": report.activity_count, "status": report.status}}
 
 
+@router.delete("/{report_id}")
+def delete_report(report_id: int, _: Annotated[dict[str, str], Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
+    report = db.get(WeeklyReport, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="周报不存在")
+    db.delete(report)
+    db.commit()
+    return {"code": 200, "message": "success", "data": {"id": report_id}}
+
+
 @router.get("/{report_id}/download")
 def download_report(report_id: int, _: Annotated[dict[str, str], Depends(get_current_user)], db: Annotated[Session, Depends(get_db)], format: Annotated[Literal["md", "xlsx"], Query()] = "md"):
     report = db.get(WeeklyReport, report_id)

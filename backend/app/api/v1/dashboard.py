@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from fastapi import APIRouter,Depends
 from sqlalchemy import func,select
@@ -8,8 +9,17 @@ from app.models.activity import Activity
 from app.models.duplicate import NoteDuplicateCandidate
 from app.models.note import Note
 from app.models.schedule import ScheduledCrawl
-from app.models.task import CrawlTask
+from app.models.task import CrawlTask, TaskLog
 router=APIRouter(prefix='/dashboard',tags=['dashboard'])
+
+_SHANGHAI = timezone(timedelta(hours=8))
+
+
+def _iso_week_start_utc_naive() -> datetime:
+    """本周一 00:00（北京）对应的 UTC naive 时间点，用于匹配 UTC naive 存储的 created_at。"""
+    now_sh = datetime.now(_SHANGHAI)
+    monday_sh = (now_sh - timedelta(days=now_sh.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    return monday_sh.astimezone(timezone.utc).replace(tzinfo=None)
 
 _KNOWN_STATUSES={'COMPLETED','COMPLETED_WITH_ERRORS','FAILED','STOPPED'}
 
@@ -44,4 +54,9 @@ def summary(_:Annotated[dict,Depends(get_current_user)],db:Annotated[Session,Dep
     if last:
         progress=round((last.extracted_notes+last.failed_notes+last.skipped_notes)*100/last.total_notes,1) if last.total_notes else None
         last_task={'id':last.id,'status':last.status,'total_notes':last.total_notes,'downloaded_notes':last.downloaded_notes,'ocr_notes':last.ocr_notes,'extracted_notes':last.extracted_notes,'success_notes':last.success_notes,'failed_notes':last.failed_notes,'skipped_notes':last.skipped_notes,'skipped_activities':last.skipped_activities,'current_stage':last.current_stage,'current_note':last.current_note,'error_message':last.error_message,'progress_percent':progress}
-    return {'code':200,'message':'success','data':{'weekly_notes_count':db.scalar(select(func.count()).select_from(Note).where(Note.review_status.notin_(['DELETED','MERGED']))) or 0,'weekly_activities_count':db.scalar(select(func.count()).select_from(Activity).where(Activity.deleted_at.is_(None))) or 0,'pending_duplicates':db.scalar(select(func.count()).select_from(NoteDuplicateCandidate).where(NoteDuplicateCandidate.status=='pending')) or 0,'pending_review':db.scalar(select(func.count()).select_from(Note).where(Note.review_status=='PENDING')) or 0,'last_task':last_task}}
+    week_start = _iso_week_start_utc_naive()
+    recent_logs = [
+        {'id': log.id, 'task_id': log.task_id, 'level': log.level, 'message': log.message, 'created_at': log.created_at}
+        for log in db.scalars(select(TaskLog).order_by(TaskLog.id.desc()).limit(5)).all()
+    ]
+    return {'code':200,'message':'success','data':{'weekly_notes_count':db.scalar(select(func.count()).select_from(Note).where(Note.review_status.notin_(['DELETED','MERGED']), Note.created_at >= week_start)) or 0,'weekly_activities_count':db.scalar(select(func.count()).select_from(Activity).where(Activity.deleted_at.is_(None), Activity.created_at >= week_start)) or 0,'pending_duplicates':db.scalar(select(func.count()).select_from(NoteDuplicateCandidate).where(NoteDuplicateCandidate.status=='pending')) or 0,'pending_review':db.scalar(select(func.count()).select_from(Note).where(Note.review_status=='PENDING')) or 0,'last_task':last_task,'recent_logs':recent_logs}}

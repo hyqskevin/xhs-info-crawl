@@ -16,6 +16,7 @@ const restarting = ref(false)
 const openingLogin = ref(false)
 const stopping = ref(false)
 const lastTask = ref<any>(null)
+const summary = ref<any>({ weekly_notes_count: 0, weekly_activities_count: 0, pending_duplicates: 0, recent_logs: [] })
 const analytics = ref<any>({ recent_tasks: [], status_counts: {}, schedules: [] })
 const scheduleStatusMeta: Record<string, { type: string; label: string }> = {
   COMPLETED: { type: 'success', label: '成功' },
@@ -78,7 +79,11 @@ async function initialize() {
 }
 
 async function loadLatestTask() {
-  try { lastTask.value = (await api.dashboard()).data.data.last_task } catch { /* health card reports service errors */ }
+  try {
+    const data = (await api.dashboard()).data.data
+    summary.value = { weekly_notes_count: 0, weekly_activities_count: 0, pending_duplicates: 0, recent_logs: [], ...data }
+    lastTask.value = data.last_task
+  } catch { /* health card reports service errors */ }
   try { analytics.value = (await api.dashboardAnalytics()).data.data } catch { /* 图表数据加载失败不阻塞主流程 */ }
 }
 
@@ -157,6 +162,12 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
   <div class="dashboard">
     <div class="page-intro"><div><p class="eyebrow">PHASE ONE</p><h2>小红书本地活动信息抓取系统</h2><p>从已配置的城市、关键词组和博主中选择本次抓取范围。</p></div></div>
 
+    <div class="stats-row">
+      <ElCard shadow="never" class="stat-card"><div class="stat-card__content"><span>本周抓取笔记</span><strong>{{ summary.weekly_notes_count }}</strong></div></ElCard>
+      <ElCard shadow="never" class="stat-card"><div class="stat-card__content"><span>本周生成活动</span><strong>{{ summary.weekly_activities_count }}</strong></div></ElCard>
+      <ElCard shadow="never" class="stat-card"><div class="stat-card__content"><span>待审核去重</span><strong>{{ summary.pending_duplicates }}</strong></div></ElCard>
+    </div>
+
     <ElCard shadow="never" class="crawl-card">
       <template #header><div class="card-title"><ElIcon><VideoPlay /></ElIcon><strong>发起抓取</strong></div></template>
       <ElForm label-position="top">
@@ -230,11 +241,34 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
       </ElCard>
     </div>
 
+    <ElCard shadow="never" class="logs-card">
+      <template #header><div class="card-title"><strong>最近任务日志</strong></div></template>
+      <div v-if="summary.recent_logs.length" class="logs-list">
+        <div v-for="log in summary.recent_logs" :key="log.id" class="log-line" @click="$router.push('/tasks')">
+          <ElTag size="small" :type="log.level === 'ERROR' ? 'danger' : log.level === 'WARNING' ? 'warning' : 'info'">{{ log.level }}</ElTag>
+          <span class="log-message">#{{ log.task_id }} {{ log.message }}</span>
+          <span class="log-time">{{ (log.created_at || '').replace('T', ' ').slice(0, 19) }}</span>
+        </div>
+      </div>
+      <ElEmpty v-else description="暂无任务日志" :image-size="60" />
+    </ElCard>
+
     <ElCard shadow="never" class="status-card"><div class="status-card__content"><ElIcon :size="28" color="var(--el-color-primary)"><Connection /></ElIcon><div><strong>后端服务</strong><p>{{ status === 'ok' ? '服务运行正常' : status === 'loading' ? '正在检查服务' : '服务暂不可用' }}</p></div><ElTag :type="status === 'ok' ? 'success' : status === 'loading' ? 'info' : 'danger'">{{ database }}</ElTag></div></ElCard>
   </div>
 </template>
 
 <style scoped>
+.stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 20px; }
+@media (max-width: 800px) { .stats-row { grid-template-columns: 1fr; } }
+.stat-card__content { display: flex; flex-direction: column; gap: 6px; }
+.stat-card__content span { color: var(--el-text-color-secondary); }
+.stat-card__content strong { font-size: 28px; }
+.logs-card { margin-bottom: 20px; }
+.logs-list { display: flex; flex-direction: column; gap: 8px; }
+.log-line { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.log-line:hover { background: var(--el-fill-color-light); }
+.log-message { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-time { color: var(--el-text-color-secondary); font-size: 12px; }
 .crawl-card { margin-bottom: 20px; }
 .progress-card { margin-bottom: 20px; }
 .schedule-status-card { margin-bottom: 20px; }

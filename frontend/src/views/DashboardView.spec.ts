@@ -209,4 +209,38 @@ describe('DashboardView', () => {
 
     expect(wrapper.text()).toContain('暂无定时任务')
   })
+
+  it('shows weekly summary cards and recent task logs with navigation', async () => {
+    const routerPush = vi.fn()
+    mocks.dashboard.mockResolvedValueOnce({ data: { data: {
+      last_task: null,
+      weekly_notes_count: 12,
+      weekly_activities_count: 5,
+      pending_duplicates: 3,
+      recent_logs: [
+        { id: 2, task_id: 19, level: 'ERROR', message: "博主 '从零发现宁波' 抓取失败", created_at: '2026-07-27T01:49:48' },
+        { id: 1, task_id: 19, level: 'INFO', message: '抓取范围生效', created_at: '2026-07-27T01:49:47' },
+      ],
+    } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus], mocks: { $router: { push: routerPush } } } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('本周抓取笔记')
+    expect(wrapper.text()).toContain('12')
+    expect(wrapper.text()).toContain('本周生成活动')
+    expect(wrapper.text()).toContain('待审核去重')
+    expect(wrapper.text()).toContain('最近任务日志')
+    expect(wrapper.text()).toContain("博主 '从零发现宁波' 抓取失败")
+
+    await wrapper.find('.log-line').trigger('click')
+    expect(routerPush).toHaveBeenCalledWith('/tasks')
+  })
+
+  it('shows an empty log placeholder when there are no task logs', async () => {
+    mocks.dashboard.mockResolvedValueOnce({ data: { data: { last_task: null, weekly_notes_count: 0, weekly_activities_count: 0, pending_duplicates: 0, recent_logs: [] } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂无任务日志')
+  })
 })
