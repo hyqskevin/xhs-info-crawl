@@ -17,14 +17,15 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "search_usage",
-        sa.Column("id", sa.Integer, primary_key=True),
-        sa.Column("week_key", sa.String(8), nullable=False, unique=True),
-        sa.Column("count", sa.Integer, nullable=False, server_default="0"),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-    )
-    op.create_index("ix_search_usage_week_key", "search_usage", ["week_key"], unique=True)
+    if "search_usage" not in set(sa.inspect(op.get_bind()).get_table_names()):
+        op.create_table(
+            "search_usage",
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("week_key", sa.String(8), nullable=False, unique=True),
+            sa.Column("count", sa.Integer, nullable=False, server_default="0"),
+            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        )
+        op.create_index("ix_search_usage_week_key", "search_usage", ["week_key"], unique=True)
 
 
 def downgrade() -> None:

@@ -10,7 +10,8 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column("cities", sa.Column("recent_filter", sa.String(length=16), nullable=False, server_default="一周内"))
+    if "recent_filter" not in {c["name"] for c in sa.inspect(op.get_bind()).get_columns("cities")}:
+        op.add_column("cities", sa.Column("recent_filter", sa.String(length=16), nullable=False, server_default="一周内"))
 
 
 def downgrade():

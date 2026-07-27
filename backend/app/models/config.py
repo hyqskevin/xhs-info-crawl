@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, DateTime, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
@@ -7,6 +7,7 @@ def now(): return datetime.now(timezone.utc)
 
 class City(Base):
     __tablename__ = "cities"
+    __table_args__ = (Index("ix_cities_name_unique", "name", unique=True),)
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64))
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True)

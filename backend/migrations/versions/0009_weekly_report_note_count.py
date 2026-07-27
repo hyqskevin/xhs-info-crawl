@@ -11,7 +11,8 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column("weekly_reports", sa.Column("note_count", sa.Integer(), nullable=False, server_default="0"))
+    if "note_count" not in {c["name"] for c in sa.inspect(op.get_bind()).get_columns("weekly_reports")}:
+        op.add_column("weekly_reports", sa.Column("note_count", sa.Integer(), nullable=False, server_default="0"))
 
 
 def downgrade():

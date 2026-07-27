@@ -22,11 +22,13 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     existing_indexes = {index["name"] for index in inspector.get_indexes("activities")}
+    existing_columns = {column["name"] for column in inspector.get_columns("activities")}
 
-    op.add_column(
-        "activities",
-        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
-    )
+    if "deleted_at" not in existing_columns:
+        op.add_column(
+            "activities",
+            sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        )
     if "ix_activities_deleted_at" not in existing_indexes:
         op.create_index("ix_activities_deleted_at", "activities", ["deleted_at"], unique=False)
 
@@ -35,7 +37,9 @@ def upgrade() -> None:
 
     if "ix_activities_status" in existing_indexes:
         op.drop_index("ix_activities_status", table_name="activities")
-    op.drop_column("activities", "status")
+    # 全新建库按当前模型建表、本无 status 列，仅旧库需要删除。
+    if "status" in existing_columns:
+        op.drop_column("activities", "status")
 
 
 def downgrade() -> None:

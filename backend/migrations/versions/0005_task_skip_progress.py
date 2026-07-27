@@ -10,7 +10,8 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column("crawl_tasks", sa.Column("skipped_notes", sa.Integer(), nullable=False, server_default="0"))
+    if "skipped_notes" not in {c["name"] for c in sa.inspect(op.get_bind()).get_columns("crawl_tasks")}:
+        op.add_column("crawl_tasks", sa.Column("skipped_notes", sa.Integer(), nullable=False, server_default="0"))
 
 
 def downgrade():

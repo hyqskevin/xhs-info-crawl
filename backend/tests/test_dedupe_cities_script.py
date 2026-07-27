@@ -1,7 +1,14 @@
 """城市去重脚本：`scripts/dedupe_cities.py` 单元测试。
 
 启动脚本不依赖实际进程：直接 import 函数并调。
+
+注意：自 2026-07-27 起 `cities.name` 在模型层声明了唯一索引
+（与 0013 迁移及生产库一致），新 schema 下重名城市已不可能产生。
+本测试文件通过 autouse fixture 先 DROP 该索引，模拟 0013 之前的旧
+schema，以继续覆盖脚本的重名合并逻辑（旧库一次性清理场景）。
 """
+import pytest
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -11,6 +18,13 @@ from app.models.config import Blogger, City, Keyword
 from app.models.note import Note
 from app.models.task import CrawlTask
 from app.scripts.dedupe_cities import dedupe_cities
+
+
+@pytest.fixture(autouse=True)
+def legacy_schema_without_name_unique(db_session: Session):
+    """模拟 0013 之前的旧 schema：cities.name 无唯一索引。"""
+    db_session.execute(text("DROP INDEX IF EXISTS ix_cities_name_unique"))
+    db_session.commit()
 
 
 def _make_city(db: Session, name: str, code: str, enabled: bool = True) -> City:
