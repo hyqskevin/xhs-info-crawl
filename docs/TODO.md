@@ -38,12 +38,6 @@
 - [ ] 12. TODO/文档卫生
   - 目标：`docs/api-doc.md` 补 keyword-groups、poster、notes 系列端点；`dedupe_cities.py` 位置与 spec 对齐并核实"城市去重"条目的勾选状态。
   - 验收：api-doc 覆盖 `router.py` 全部路由；dedupe_cities 条目状态与实际一致。
-- [ ] 13. 未登录识别 + 任务启动登录预检
-  - 目标：未扫码登录时 whoami 挂起 60s 被误记为博主抓取失败（任务 #19 实证）。改为：`check_login` 把 whoami 超时归类为 `AuthenticationRequired`；任务启动做真实登录预检，未登录直接 PAUSED 并提示扫码；PAUSED 时自动打开登录页。
-  - 验收：spec `docs/superpowers/specs/2026-07-27-login-preflight-auth-pause-design.md`；新增 `backend/tests/test_login_preflight.py` 4 用例；12 个 FakeAdapter 补 `check_login` 后全量测试绿；**重启 worker 生效（等任务 #19 跑完）**。
-- [ ] 14. 博主链接发布时间解析错误（取了用户 ID 而非笔记 ID）
-  - 目标：`note_id_published_at` 对 `/user/profile/<uid>/<noteid>` 链接取第一个 24hex（用户 ID），解出的是博主注册时间（任务 #19 实证：15 篇全是 2021-09-18）。改为取路径中最后一个 24hex（笔记 ID）；存量数据写幂等脚本矫正。
-  - 验收：spec `docs/superpowers/specs/2026-07-27-note-id-published-at-profile-url-design.md`；profile URL 测试用例先红后绿；矫正脚本执行后 profile 链接笔记发布时间 <2026 的计数归零；**与 TODO#13 一起重启 worker**。
 
 - [x] 推文 ID 雪花算法服务是什么，整个项目有用到算法的都整理出来写一份文档md
   - 结果：`docs/superpowers/qa/algorithms.md` 梳理项目所有算法位置（含 XHS 雪花、UUID v4、JWT HS256、Argon2、SequenceMatcher、Celery 文件 broker 等），每一项给出文件 / 触发点 / 入参出参 / 强度评估 / 阶段二待替换路径。
@@ -97,6 +91,16 @@
 
 ## 已完成
 
+- [x] 未登录识别 + 任务启动登录预检（原待办 #13）
+  - 目标：未扫码登录时 whoami 挂起 60s 被误记为博主抓取失败（任务 #19 实证）。改为：`check_login` 把 whoami 超时归类为 `AuthenticationRequired`；任务启动做真实登录预检，未登录直接 PAUSED 并提示扫码；PAUSED 时自动打开登录页。
+  - 结果：`OpenCLIAdapter.check_login` 捕获 `OpenCLITimeout` 改抛 `AuthenticationRequired`（含「扫码」指引）；`crawl_task` 启动真实预检（替换假日志），未登录零发现损耗直接 PAUSED；PAUSED 分支对全部 `AuthenticationRequired` 统一 `open_xhs_login` 自动打开登录页；12 个 FakeAdapter 补 `check_login`。
+  - 验收：`tests/test_login_preflight.py` 4 用例先红后绿；后端 479 passed（仅剩已知 poster 环境失败）；commit `91923f3`；spec `docs/superpowers/specs/2026-07-27-login-preflight-auth-pause-design.md`。
+  - 部署：worker 重启由守望定时任务在任务 #19 终态后自动执行（见 #14 部署项）。
+- [x] 博主链接发布时间解析错误修复（原待办 #14，取了用户 ID 而非笔记 ID）
+  - 目标：`note_id_published_at` 对 `/user/profile/<uid>/<noteid>` 链接取第一个 24hex（用户 ID），解出的是博主注册时间（任务 #19 实证：15 篇全是 2021-09-18）。改为取路径中最后一个 24hex（笔记 ID）；存量数据写幂等脚本矫正。
+  - 结果：函数剥离 query 后只在 path 中匹配并取最后一个 24hex；新增 profile URL / query 干扰两个定向用例（先红后绿，共 7 用例）；幂等矫正脚本 `scripts/fix_published_at_profile_url.py`（dry-run 66 行待矫正，其余 147 行历史值本就正确）。
+  - 验收：后端 481 passed（仅剩已知 poster 环境失败）；commit `4b03d56`；spec `docs/superpowers/specs/2026-07-27-note-id-published-at-profile-url-design.md`。
+  - 部署：守望定时任务 `automation_90d49c7b`（每 15m 条件轮询：任务 #19 终态且仍有错误发布时间）触发后自动执行「备份 DB → 重启 worker/beat → 矫正 → 验证归零」，已启用。
 - [x] OPENCLI_BIN 配置化 + 任务启动预检（根治 opencli PATH 依赖）
   - 目标：适配器硬编码 'opencli' 依赖 worker PATH；2026-07-27 定时任务因 worker 重启环境缺 nvm bin 导致 17 个博主全部 Errno 2。加 `opencli_bin` 配置、Popen FileNotFoundError 转可读 OpenCLIError、run_crawl 启动预检 fail-fast。
   - 结果：`Settings.opencli_bin`（env `OPENCLI_BIN`，默认 "opencli"）；适配器用 `self._bin` 调 Popen，FileNotFoundError 转成含 bin 路径与修复指引的 `OpenCLIError`；`run_crawl` claim 后预检 `find_opencli`（shutil.which 薄封装），找不到直接 FAILED + 指引报文 + ERROR 日志，不进搜索循环、不消耗配额；conftest 新增 autouse fake 预检 fixture；本机 `.env` 已配置 nvm 绝对路径，此后任何 shell 重启 worker 均可解析。
