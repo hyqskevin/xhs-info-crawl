@@ -14,9 +14,6 @@
 
 > 以下为 2026-07-25 全项目核查新增（证据归档：`docs/superpowers/qa/2026-07-25-project-audit.md`），按列表顺序依次讨论修复。
 
-- [ ] 9. 配置与迁移盲区
-  - 目标：`.env.example` 补 `INITIAL_ADMIN_PASSWORD`、`MINIMAX_VISION_MODEL`；`alembic env.py` 与 `init_database` 的 models import 补 `keyword_group`、`blogger_city`、`poster`。
-  - 验收：删库后仅按 .env.example + `alembic upgrade head` 可完整建库；`alembic revision --autogenerate` 对现有模型零 diff。
 - [ ] 10. 测试脆弱性修复
   - 目标：`test_render_with_mocked_opencli` 补 mock `shutil.which`（无 opencli 机器不再 503）；`PostersListView.spec` 修 router mock 未捕获错误。
   - 验收：无 opencli 环境下后端全过；前端 57 过且零未捕获错误输出。
@@ -79,6 +76,10 @@
 
 ## 已完成
 
+- [x] 配置与迁移盲区（原待办 #9）
+  - 目标：`.env.example` 补 `INITIAL_ADMIN_PASSWORD`、`MINIMAX_VISION_MODEL`；`alembic env.py` 与 `init_database` 的 models import 补 `keyword_group`、`blogger_city`、`poster`。
+  - 结果：①`.env.example` 补两项，`ADMIN_USERNAME`/`ADMIN_PASSWORD` 过期条目（全仓库无消费）替换为 `INITIAL_ADMIN_PASSWORD` 说明；②`init_database` import 对齐 env.py 全量 13 模块（env.py 本就完整，TODO 该项过时）；③**测试实证新发现**：0001 用 `Base.metadata.create_all` 按运行时当前模型建表，空库 upgrade head 在 0002 撞列崩溃——0002–0016 全部加幂等守卫（0008 回填 UPDATE / 0011 删 status 列 / 0013 数据迁移按旧 schema 条件执行）；④**autogenerate 实证新发现**：`cities.name` 唯一索引（0013 建、生产库在）模型未声明，`City.__table_args__` 补 `Index("ix_cities_name_unique", unique=True)` 后零 diff；dedupe_cities 测试加 DROP INDEX fixture 模拟旧 schema。
+  - 验收：`tests/test_config_migration_blindspots.py` 3 用例先红后绿（子进程裸 init_database 全表 / env 覆盖 / upgrade head 全表）；`alembic revision --autogenerate` 实测 `upgrade(): pass` 零 diff；全量 497 passed（仅剩已知 poster 环境用例）；commit `16cfe7e`；spec `docs/superpowers/specs/2026-07-27-config-and-migration-blindspots-design.md`。
 - [x] poster 图片路径校验统一 + notes 列表异常吞噬（原待办 #8）
   - 目标：`poster_tasks.py note_image_by_id` 的 `str.startswith` 校验可被同前缀兄弟目录绕过，统一改 `Path.is_relative_to`；`notes.py` OCR 聚合 try/except 吞异常改为记 WARNING 日志。
   - 结果：`note_image_by_id` 改 `target.is_relative_to(base)`（与 `get_note_image` 口径一致），`/data-evil` 类同前缀逃逸返回 404；OCR 聚合失败记 `logger.warning`（含 note_ids 与异常），响应仍降级 200 不拖垮列表。
