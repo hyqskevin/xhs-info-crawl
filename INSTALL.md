@@ -23,7 +23,7 @@ This document describes how to bring up the project on a fresh Linux/macOS machi
 git clone https://github.com/hyqskevin/xhs-info-crawl.git
 cd xhs-info-crawl
 # pick a release tag, e.g.
-git checkout v0.2.0
+git checkout v0.3.0
 ```
 
 ## 3. Backend (FastAPI + Celery + SQLite)

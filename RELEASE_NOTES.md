@@ -1,3 +1,69 @@
+# v0.3.0 - Scheduled Crawls, Dashboard Analytics & Hardening
+
+**Release date:** 2026-07-27
+**Predecessor:** v0.2.0 (stage-one backlog closure)
+
+## Highlights
+
+This release adds DB-driven scheduled crawling and dashboard analytics, then lands a full-project audit hardening pass (security, timezone consistency, migration chain, dead-code removal).
+
+- Schedule weekly crawls (weekday + time, city, keyword groups, blogger groups) from the new 定时任务 page; Celery beat dispatches them from the DB every minute.
+- Dashboard shows per-schedule last-run status, a crawl trend line chart (discovered/success/failed per run), a success-rate pie chart, weekly summary cards and the 5 most recent task logs.
+- Keyword groups are first-class entities (many-to-many with cities); crawl scope semantics are explicit: keywords only, bloggers only, or both.
+- Crawl archives are organized per city / ISO week folder.
+
+## New Features
+
+- `feat(schedules)`: `scheduled_crawls` + `blogger_groups` tables, `/schedules` and `/settings/blogger-groups` CRUD, beat-driven `scheduled-crawl-dispatch` (slot-idempotent, skips when a task is active).
+- `feat(dashboard)`: `GET /dashboard/analytics` (recent tasks, status counts, schedule statuses) + ECharts trend/pie cards.
+- `feat(dashboard)`: Weekly summary cards (notes/activities this week, pending duplicates) + recent task logs card.
+- `feat(reports)`: `DELETE /api/v1/reports/{id}` and rendered Markdown preview (marked + DOMPurify).
+- `feat(crawl)`: Search rate limiting — random 10-15s interval between searches and a 500/week search quota (`search_usage` table).
+- `feat(crawl)`: Login preflight at task start; unauthenticated tasks pause immediately with scan-code guidance instead of failing per-blogger.
+- `feat(opencli)`: `OPENCLI_BIN` config + startup preflight (fail-fast with actionable message when the binary is missing).
+- `feat(models)`: `keyword_groups` many-to-many with cities; `POST /tasks/crawl` accepts `keyword_group_ids`.
+- `feat(posters)`: Poster templates/tasks and note-image rendering pipeline.
+
+## Fixes & Hardening
+
+- `fix(security)`: Poster note-image path validation unified to `Path.is_relative_to` (prefix-sibling escape returns 404).
+- `fix(crawl)`: `note_id_published_at` took the user id instead of the note id from `/user/profile/<uid>/<noteid>` URLs — publish times were bloggers' registration dates; includes an idempotent backfill script.
+- `fix(review)`: Batch approve validates ≥1 valid sub-activity per note (with `skipped` detail); duplicate merge on non-pending candidates returns 409; deleting a blogger/city cascades association rows.
+- `fix(time)`: Timezone convention unified to Beijing wall-clock naive datetimes (documented in `docs/database-design.md`); dashboard weekly counts now really mean "this week" (Mon 00:00 Asia/Shanghai).
+- `fix(migrations)`: Fresh-database `alembic upgrade head` repaired end-to-end (idempotent guards in 0002–0016); `cities.name` unique index declared in the model.
+- `refactor`: Dead code removed (legacy functional crawler, old activity-level report export incl. a latent `NameError`, `task_lock`, unused pipeline paths); activity-level `duplicate_candidates` writes stopped and 1160 stale rows cleaned.
+- `chore(config)`: `.env.example` adds `INITIAL_ADMIN_PASSWORD`, `MINIMAX_VISION_MODEL`, `OPENCLI_BIN`; `docs/api-doc.md` covers all 59 endpoints.
+
+## Tests
+
+| Suite | Count |
+|---|---|
+| Backend (pytest) | 501 passed, 1 skipped |
+| Frontend (vitest) | 68 passed |
+| Frontend build | green |
+
+## Upgrade Notes
+
+Run `alembic upgrade head` to apply `0012`–`0016` (seed admin, keyword groups, poster models, scheduled crawls + blogger groups, search usage). On an empty database `0012` seeds an `admin` user — set `INITIAL_ADMIN_PASSWORD` before first upgrade in shared environments. After upgrading, restart celery worker and beat (models/tasks changed).
+
+## Install
+
+```bash
+git clone https://github.com/hyqskevin/xhs-info-crawl.git
+cd xhs-info-crawl
+git checkout v0.3.0
+make init
+# in 4 terminals:
+make dev-api
+make dev-worker
+make dev-beat
+make dev-web
+```
+
+See [`INSTALL.md`](INSTALL.md) for full details.
+
+---
+
 # v0.2.0 - Stage One Amendments
 
 **Release date:** 2026-07-21
