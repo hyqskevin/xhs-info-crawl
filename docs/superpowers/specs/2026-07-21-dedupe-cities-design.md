@@ -24,7 +24,7 @@
 
 ## 3. 实现
 
-`backend/scripts/dedupe_cities.py`：
+`backend/app/scripts/dedupe_cities.py`（2026-07-27 更正：实际位于 `app/scripts/` 包内、以 `app.scripts.dedupe_cities` 导入；本 spec 原文误写 `backend/scripts/`，代码未动）：
 
 ```python
 def main():

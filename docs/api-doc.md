@@ -19,6 +19,10 @@
 }
 ```
 
+### GET /api/v1/health
+
+- 描述：健康检查，返回服务存活状态
+
 ## 认证接口
 
 ### POST /api/v1/auth/login
@@ -70,6 +74,10 @@
   }
 }
 ```
+
+### GET /api/v1/dashboard/analytics
+
+- 描述：仪表盘图表数据——抓取趋势（每次任务成功/失败数量）与成功率统计
 
 ## 活动接口
 
@@ -246,6 +254,10 @@
 - 标签页清理失败写入任务 WARNING 日志，但不把已经停止的任务改为 `FAILED`
 - 已成功处理、归档的数据全部保留；重复请求 `STOP_REQUESTED` 或 `STOPPED` 幂等返回
 
+### DELETE /api/v1/tasks/batch
+
+- 描述：批量删除抓取任务（含其日志）
+
 ## 配置接口
 
 ### POST /api/v1/settings/opencli/open-login
@@ -270,6 +282,7 @@
 - 描述：删除城市
 
 关键词接口为内部兼容接口；管理端统一通过城市接口维护城市与关键词组合。
+`GET/POST /api/v1/settings/{kind}` 与 `PUT/DELETE /api/v1/settings/{kind}/:id`（`kind` = `keywords` | `bloggers`）是上述关键词/博主端点的泛型形式，行为一致。
 
 ### GET /api/v1/settings/bloggers
 
@@ -285,19 +298,159 @@
 
 ### DELETE /api/v1/settings/bloggers/:id
 
-- 描述：删除博主
+- 描述：删除博主（级联清理 `blogger_cities` 与 `blogger_group_members` 关联）
 
-### GET /api/v1/settings/opencli
+### POST /api/v1/settings/bloggers/import
 
-- 描述：OpenCLI 配置
+- 描述：按 Excel 模板批量导入博主；文件超过 2 MiB 返回 413，格式错误返回 422
 
-### PUT /api/v1/settings/opencli
+### GET /api/v1/settings/bloggers/import-template
 
-- 描述：更新 OpenCLI 配置
+- 描述：下载博主导入 Excel 模板
+
+### POST /api/v1/settings/bloggers/:id/enrich
+
+- 描述：按博主用户名调用 opencli search 回填 `platform_user_id` 与 `profile_url`；已完整时原样返回，未找到匹配返回 422
+
+### GET /api/v1/settings/keyword-groups
+
+- 描述：关键词组列表（含每组挂的城市与词）
+
+### POST /api/v1/settings/keyword-groups
+
+- 描述：新增关键词组（`name`、`city_codes`、`words`、`enabled`）
+
+### GET /api/v1/settings/keyword-groups/:kg_id
+
+- 描述：关键词组详情
+
+### DELETE /api/v1/settings/keyword-groups/:kg_id
+
+- 描述：删除关键词组（关联城市/词级联删除）
+
+### PUT /api/v1/settings/keyword-groups/:kg_id/cities
+
+- 描述：全量替换关键词组挂载的城市
+
+### PUT /api/v1/settings/keyword-groups/:kg_id/words
+
+- 描述：全量替换关键词组内的关键词
+
+### GET /api/v1/settings/blogger-groups
+
+- 描述：博主白名单组列表（含成员）
+
+### POST /api/v1/settings/blogger-groups
+
+- 描述：新增博主组
+
+### GET /api/v1/settings/blogger-groups/:group_id
+
+- 描述：博主组详情
+
+### DELETE /api/v1/settings/blogger-groups/:group_id
+
+- 描述：删除博主组（成员关联级联删除）
+
+### PUT /api/v1/settings/blogger-groups/:group_id/members
+
+- 描述：全量替换博主组成员（`blogger_ids` 数组）
+
+### GET /api/v1/settings/opencli/config
+
+- 描述：OpenCLI 运行配置（CDP 地址、搜索目标数量、滚动轮数）
 
 ### POST /api/v1/settings/opencli/test
 
 - 描述：测试 OpenCLI 连接
+
+## 海报接口
+
+### GET /api/v1/settings/poster-templates
+
+- 描述：海报模板列表
+
+### POST /api/v1/settings/poster-templates
+
+- 描述：新增海报模板（HTML + CSS）
+
+### GET /api/v1/settings/poster-templates/:tpl_id
+
+- 描述：海报模板详情
+
+### PUT /api/v1/settings/poster-templates/:tpl_id
+
+- 描述：编辑海报模板
+
+### DELETE /api/v1/settings/poster-templates/:tpl_id
+
+- 描述：删除海报模板（被海报任务引用时受限）
+
+### POST /api/v1/settings/poster-templates/parse-from-image
+
+- 描述：上传参考图，调用视觉模型解析出模板 HTML/CSS 草稿
+
+### GET /api/v1/poster-tasks
+
+- 描述：海报任务列表
+
+### POST /api/v1/poster-tasks
+
+- 描述：新建海报任务（选择模板 + 推文/活动条目）
+
+### GET /api/v1/poster-tasks/candidates
+
+- 描述：海报条目候选（已通过审核的推文/活动）
+
+### GET /api/v1/poster-tasks/:task_id
+
+- 描述：海报任务详情
+
+### PUT /api/v1/poster-tasks/:task_id
+
+- 描述：编辑海报任务（名称、条目、覆盖 HTML）
+
+### DELETE /api/v1/poster-tasks/:task_id
+
+- 描述：删除海报任务
+
+### GET /api/v1/poster-tasks/:task_id/preview
+
+- 描述：拼装后的海报 HTML 预览
+
+### POST /api/v1/poster-tasks/:task_id/render
+
+- 描述：渲染海报为 PNG（Playwright / opencli 兜底），产物写 `data/posters/{id}.png`
+
+### GET /api/v1/poster-tasks/:task_id/download
+
+- 描述：下载渲染产物 PNG
+
+### GET /api/v1/posters/note-images/:note_id
+
+- 描述：某推文的可选图片列表（海报配图用）
+
+### GET /api/v1/posters/note-image-by-id/:image_id
+
+- 描述：按图片 ID 读取推文图片（路径经 `is_relative_to` 校验，越界 404）
+
+## 定时抓取接口
+
+### GET /api/v1/schedules
+
+- 描述：定时抓取任务列表
+
+### POST /api/v1/schedules
+
+- 描述：新增定时任务（周几 + 时分 + 城市 + 关键词组/博主组，两者至少其一）
+
+### PUT /api/v1/schedules/:schedule_id
+
+- 描述：编辑定时任务（含启停）
+
+### DELETE /api/v1/schedules/:schedule_id
+
+- 描述：删除定时任务
 
 ## 周报接口
 
@@ -369,3 +522,18 @@
 - 成功响应：`{"id": 1, "review_status": "APPROVED"}`。
 - 其他状态返回 `422`；推文不存在、已删除或已合并返回 `404`。
 - `POST /api/v1/notes/batch/approve` 保持不变，继续支持批量通过。
+
+## 2026-07-27 审核一致性与补充端点
+
+### POST /api/v1/notes/batch/approve
+
+- 描述：批量审核通过。与单条 review 同一规则：无有效子活动的推文**跳过**并保持原状态，不整批失败。
+- 响应：`approved_ids` / `approved_count` / `skipped`（`[{id, reason}]`，无跳过时为空数组）。
+
+### POST /api/v1/notes/:id/reprocess
+
+- 描述：将 `NO_ACTIVITIES` / `EMPTY_RESULT_RETRYABLE` 状态的推文重置为 `PENDING`（清除 OCR/活动记录），配合任务 restart 重新抓取；其他状态返回 `409`。
+
+### POST /api/v1/duplicates/:id/merge
+
+- 补充：仅 `pending` 候选可合并；已处理（merged/ignored/superseded）候选重复调用返回 `409`。
