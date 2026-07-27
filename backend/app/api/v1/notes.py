@@ -1,5 +1,7 @@
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time
 from typing import Annotated, Literal
+
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -19,6 +21,7 @@ from app.schemas.activity import ActivityRead
 router = APIRouter(prefix="/notes", tags=["notes"])
 Auth = Annotated[dict[str, str], Depends(get_current_user)]
 DB = Annotated[Session, Depends(get_db)]
+logger = logging.getLogger(__name__)
 
 
 class BatchRequest(BaseModel):
@@ -127,9 +130,9 @@ def list_notes(
         filters.append(Note.review_status == review_status)
     published = Note.published_at
     if start_date:
-        filters.append(Note.published_at >= datetime.combine(start_date, time.min, tzinfo=timezone.utc))
+        filters.append(Note.published_at >= datetime.combine(start_date, time.min))
     if end_date:
-        filters.append(Note.published_at <= datetime.combine(end_date, time.max, tzinfo=timezone.utc))
+        filters.append(Note.published_at <= datetime.combine(end_date, time.max))
     if keyword:
         stripped = keyword.strip()
         if stripped:
@@ -249,8 +252,28 @@ def _batch_status(db: Session, ids: list[int], target: str) -> list[int]:
 
 @router.post("/batch/approve")
 def approve_notes(payload: BatchRequest, _: Auth, db: DB):
-    ids = _batch_status(db, payload.ids, "APPROVED")
-    return {"code": 200, "message": "success", "data": {"approved_ids": ids, "approved_count": len(ids)}}
+    """批量审核通过与单条审核同一规则：无有效子活动的推文跳过，并在 skipped 明细中返回。"""
+    notes = list(db.scalars(select(Note).where(Note.id.in_(set(payload.ids)), Note.review_status.notin_(["DELETED", "MERGED"]))).all())
+    if not notes:
+        raise HTTPException(404, "没有可操作的推文")
+    activity_counts = dict(
+        db.execute(
+            select(Activity.note_id, func.count(Activity.id))
+            .where(Activity.note_id.in_([note.id for note in notes]), Activity.deleted_at.is_(None))
+            .group_by(Activity.note_id)
+        ).all()
+    )
+    approved: list[int] = []
+    skipped: list[dict] = []
+    for note in notes:
+        if activity_counts.get(note.id, 0) > 0:
+            note.review_status = "APPROVED"
+            approved.append(note.id)
+        else:
+            logger.warning("批量审核跳过无有效子活动的推文 note_id=%s", note.id)
+            skipped.append({"id": note.id, "reason": "推文无有效子活动，请先重新处理"})
+    db.commit()
+    return {"code": 200, "message": "success", "data": {"approved_ids": approved, "approved_count": len(approved), "skipped": skipped}}
 
 
 @router.delete("/batch")

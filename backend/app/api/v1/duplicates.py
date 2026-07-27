@@ -38,6 +38,8 @@ def merge(candidate_id: int, payload: MergeIn, _: User, db: DB):
     candidate = db.get(NoteDuplicateCandidate, candidate_id)
     if candidate is None:
         raise HTTPException(404, "去重候选不存在")
+    if candidate.status != "pending":
+        raise HTTPException(409, "该候选已处理，不能重复合并")
     kept_id = candidate.note_a_id if payload.keep == "a" else candidate.note_b_id
     removed_id = candidate.note_b_id if payload.keep == "a" else candidate.note_a_id
     kept, removed = db.get(Note, kept_id), db.get(Note, removed_id)

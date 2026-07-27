@@ -328,6 +328,8 @@ def delete_city(item_id: int, _: Admin, db: DB):
     city = db.get(City, item_id)
     if city is not None:
         db.execute(delete(Keyword).where(Keyword.city_code == city.code))
+        db.execute(delete(BloggerCity).where(BloggerCity.city_code == city.code))
+        db.execute(delete(KeywordGroupCity).where(KeywordGroupCity.city_code == city.code))
         db.delete(city)
         db.commit()
     return {"code": 200, "message": "success", "data": {"id": item_id}}
@@ -492,6 +494,9 @@ def enrich_blogger(item_id: int, _: Admin, db: DB):
 def delete_setting(kind: Literal["keywords", "bloggers"], item_id: int, _: Admin, db: DB):
     item = db.get(MODELS[kind], item_id)
     if item is not None:
+        if kind == "bloggers":
+            db.execute(delete(BloggerCity).where(BloggerCity.blogger_id == item.id))
+            db.execute(delete(BloggerGroupMember).where(BloggerGroupMember.blogger_id == item.id))
         db.delete(item)
         db.commit()
     return {"code": 200, "message": "success", "data": {"id": item_id}}

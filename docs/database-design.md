@@ -247,3 +247,9 @@
 - `notes.merged_into_note_id` 保存推文去重后的合并目标。
 - `note_duplicate_candidates` 保存推文 A/B 的相似度、匹配字段和审核结果；旧 `duplicate_candidates` 不再产生新数据。
 - `weekly_reports.note_count` 与 `activity_count` 分别记录入选推文数和子活动数。
+
+# 2026-07-27 时间口径约定
+
+- `notes.published_at`、`activities.start_time`：**北京墙钟 naive**（Asia/Shanghai 的墙钟数字，不带 tzinfo）。写入侧两条路径已统一：雪花算法（`note_id_published_at`）与 DOM 文本解析（`parse_published_at`）均返回 Asia/Shanghai 时区的 datetime，SQLite DateTime 落库时丢弃 tzinfo 即为北京墙钟 naive。
+- `created_at` / `updated_at` / `deleted_at` 等审计字段：UTC naive（`datetime.now(timezone.utc)` 落库后丢 tz）。
+- 查询侧构造边界（日期过滤、`week_bounds` 周报边界）一律使用 **naive** datetime，不加 `tzinfo=timezone.utc`；SQLite 绑定参数同样丢弃 tzinfo，与存储按墙钟数字字符串比较。

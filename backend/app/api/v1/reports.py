@@ -26,11 +26,12 @@ class GenerateRequest(BaseModel):
 
 
 def week_bounds(week: str) -> tuple[datetime, datetime]:
+    """返回 ISO 周的 naive 边界（北京墙钟口径，与 Note.published_at 存储一致）。"""
     match = re.fullmatch(r"(\d{4})-W(\d{2})", week)
     if match is None:
         raise ValueError("invalid ISO week")
     try:
-        start = datetime.fromisocalendar(int(match.group(1)), int(match.group(2)), 1).replace(tzinfo=timezone.utc)
+        start = datetime.fromisocalendar(int(match.group(1)), int(match.group(2)), 1)
     except ValueError as exc:
         raise ValueError("invalid ISO week") from exc
     return start, start + timedelta(days=7)
