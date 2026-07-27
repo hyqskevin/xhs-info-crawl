@@ -17,9 +17,6 @@
 - [ ] 11. 仪表盘与周报需求偏差对齐（需先讨论取舍）
   - 目标：与 SPEC 3.2/3.7 对齐或明确改版：仪表盘补本周统计卡片（修正 `weekly_notes_count` 口径为本周）、4 周趋势、最近 5 条日志；周报补 `DELETE /reports/{id}` 与 Markdown 渲染预览。
   - 验收：讨论结论先落 spec；前后端测试与 build 全绿。
-- [ ] 12. TODO/文档卫生
-  - 目标：`docs/api-doc.md` 补 keyword-groups、poster、notes 系列端点；`dedupe_cities.py` 位置与 spec 对齐并核实"城市去重"条目的勾选状态。
-  - 验收：api-doc 覆盖 `router.py` 全部路由；dedupe_cities 条目状态与实际一致。
 
 - [x] 推文 ID 雪花算法服务是什么，整个项目有用到算法的都整理出来写一份文档md
   - 结果：`docs/superpowers/qa/algorithms.md` 梳理项目所有算法位置（含 XHS 雪花、UUID v4、JWT HS256、Argon2、SequenceMatcher、Celery 文件 broker 等），每一项给出文件 / 触发点 / 入参出参 / 强度评估 / 阶段二待替换路径。
@@ -38,10 +35,6 @@
     - `3c65227` feat(frontend): DashboardView 用 keyword_group_ids
     - `927110a` feat(frontend): SettingsView 增加关键词组 tab
   - 实测：生产 DB alembic 0013 通过；cities 在 0013 前由 dedupe_cities 清理；后端 336 passed（+15 case），前端 48 passed，build OK。
-- [ ] 城市去重（修复重复 city 行）
-  - 目标：一次性脚本 `backend/scripts/dedupe_cities.py` 选最早启用的 City 为 canonical，把其它重复 name 行的关联迁移过去（notes/blogger_city/keyword_group_cities/crawl_tasks），删除多余行；幂等。
-  - 验收：`tests/test_dedupe_cities_script.py` 3 个 case；生产 DB 跑完 `SELECT COUNT(*) FROM cities` 下降，城市下拉不再重复。
-  - 关联：spec `docs/superpowers/specs/2026-07-21-dedupe-cities-design.md`（已写）。
 - [ ] 重启 celery beat 与 worker（长期有效，随每次 models/tasks/services 改动执行）
   - 目标：服务进程管理已写进 AGENTS.md；2026-07-25 已随 TODO#2/#3 执行一次（见"已完成"区），后续改动 models/tasks/services 后仍需重启。
   - 验收：改动后检查 `ps aux | grep celery` 进程启动时间不早于代码改动时间。
@@ -73,6 +66,10 @@
 
 ## 已完成
 
+- [x] TODO/文档卫生（原待办 #12，含「城市去重」条目核实）
+  - 目标：`docs/api-doc.md` 补 keyword-groups、poster、notes 系列端点；`dedupe_cities.py` 位置与 spec 对齐并核实"城市去重"条目的勾选状态。
+  - 结果：以 `app.openapi()` 枚举 59 端点做差集，api-doc 补齐 dashboard/analytics、health、tasks/batch DELETE、keyword-groups×6、blogger-groups×5、博主导入/enrich×3、opencli/config、poster-templates×6、poster-tasks×8、posters 图片×2、schedules×4、notes reprocess、settings/{kind} 泛型说明；修正不存在的 `GET/PUT /settings/opencli` 为 `/opencli/config`；`batch/approve`（skipped 明细）与 `merge`（409）语义同步 TODO#7 实现。dedupe spec 位置行更正为 `backend/app/scripts/dedupe_cities.py`（改文档不改码）。「城市去重」条目核实达标并打勾：0013 上线前已跑脚本、生产库重名数 0、`ix_cities_name_unique` 唯一索引（模型层自 #9 同步声明）使重名不可能再产生；`test_dedupe_cities_script.py` 7 用例绿。
+  - 验收：覆盖自查脚本确认 59 端点全部可检索（4 个初始缺失中 2 个为 `:id`/`{id}` 归一化误报、已补泛型说明）；后端 498 passed（文档改动无回归）；commit `55b0487`；spec `docs/superpowers/specs/2026-07-27-docs-hygiene-design.md`。
 - [x] 测试脆弱性修复（原待办 #10）
   - 目标：`test_render_with_mocked_opencli` 补 mock `shutil.which`（无 opencli 机器不再 503）；`PostersListView.spec` 修 router mock 未捕获错误。
   - 结果：后端用例 `opencli` 返回假路径、`python3` 等透传真实 which（Popen http.server 仍需真解释器），长期唯一失败用例转绿；前端 `factory()` 注入 `$router.push` spy，「navigates to wizard」断言 `push('/posters/new')`，Vitest `Errors 1` 归零。
