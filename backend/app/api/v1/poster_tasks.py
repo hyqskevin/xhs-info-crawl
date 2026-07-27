@@ -25,7 +25,12 @@ from app.core.security import require_admin
 from app.models.config import City
 from app.models.note import Note, NoteImage
 from app.models.poster import PosterTask, PosterTemplate
-from app.services.poster_renderer import render_poster_preview_html, render_task_to_png
+from app.services.poster_renderer import (
+    _render_html_to_png,
+    render_poster_preview_html,
+    render_task_to_png,
+    resolve_item_image_urls,
+)
 
 router = APIRouter(tags=["poster-tasks"])
 Admin = Annotated[dict[str, str], Depends(require_admin)]
@@ -223,12 +228,18 @@ async def render_task(task_id: int, _: Admin, db: DB) -> dict:
         raise HTTPException(422, "模板已删除")
     settings = get_settings()
 
+    # 在主线解析图片 URL（base64 模式，兼容 Playwright 和 opencli HTTP 渲染）
+    resolved_items = resolve_item_image_urls(
+        t.items or [], db, str(settings.data_dir), mode="base64"
+    )
+
     # 渲染是重 CPU 阻塞操作，丢到 thread pool
     def _render() -> str:
         out_dir = Path(settings.data_dir) / "posters"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{t.id}.png"
-        return render_task_to_png(template, t, str(out_path))
+        html = render_poster_preview_html(template, t, items_override=resolved_items)
+        return _render_html_to_png(html, str(out_path))
 
     try:
         path = await asyncio.to_thread(_render)
