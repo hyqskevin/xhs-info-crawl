@@ -1,11 +1,7 @@
-from datetime import datetime,timezone
 from pathlib import Path
 import subprocess
 import pytest
 from app.core.config import Settings
-from app.models.activity import Activity
-from app.models.duplicate import DuplicateCandidate
-from app.services.dedup import create_duplicate_candidates
 from app.services.opencli_adapter import OpenCLIAdapter
 
 def test_note_field_value_rows_are_normalized_to_object():
@@ -236,26 +232,3 @@ def test_search_recent_retries_until_filter_panel_is_really_open(tmp_path:Path,m
 
     filter_clicks=[args for args in calls if args==['browser',adapter.session,'click','.search-layout__top .filter']]
     assert len(filter_clicks) == 2
-
-def test_duplicate_candidates_are_created_once(db_session):
-    when=datetime(2026,7,18,10,tzinfo=timezone.utc)
-    first=Activity(name='上海夏日音乐节',city_code='shanghai',start_time=when,location='徐汇滨江',price='免费',type='演出')
-    second=Activity(name='上海夏日音乐节2026',city_code='shanghai',start_time=when,location='徐汇滨江',price='免费',type='演出')
-    db_session.add_all([first,second]);db_session.flush()
-    assert len(create_duplicate_candidates(db_session,second))==1
-    db_session.flush()
-    assert len(create_duplicate_candidates(db_session,second))==0
-    assert db_session.query(DuplicateCandidate).count()==1
-
-
-def test_duplicate_candidates_tolerate_missing_start_times(db_session):
-    first = Activity(name='宁波纳得美术馆作品展览', city_code='nb', start_time=None, location='宁波纳得美术馆', price='', type='展览')
-    second = Activity(name='宁波纳得美术馆作品展览', city_code='nb', start_time=None, location='宁波纳得美术馆', price='', type='展览')
-    db_session.add_all([first, second])
-    db_session.flush()
-
-    candidates = create_duplicate_candidates(db_session, second)
-
-    assert len(candidates) == 1
-    assert candidates[0].similarity == 0.75
-    assert candidates[0].matched_fields == ['city']

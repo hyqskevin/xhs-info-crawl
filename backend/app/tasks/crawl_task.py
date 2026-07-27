@@ -21,7 +21,7 @@ from app.services.crawler import AuthenticationRequired, VerificationRequired
 from app.services.browser_launcher import open_xhs_login
 from app.services.crawl_city_guard import assert_city_code_exists
 from app.services.crawl_scope import resolve_crawl_scope
-from app.services.dedup import create_duplicate_candidates, create_note_duplicate_candidates
+from app.services.dedup import create_note_duplicate_candidates
 from app.services.extraction import extract_activities
 from app.services.minimax import MiniMaxClient
 from app.services.note_identity import extract_platform_note_id
@@ -380,7 +380,6 @@ def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, ada
         )
         db.add(activity)
         db.flush()
-        create_duplicate_candidates(db, activity)
 
     set_progress(db, task, run_token, "ARCHIVING", note.title)
     assert_execution_active(db, task.id, run_token)

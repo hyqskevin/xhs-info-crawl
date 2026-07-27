@@ -1,9 +1,8 @@
 from difflib import SequenceMatcher
 from typing import Any, Literal
-from sqlalchemy import select, true
+from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.models.activity import Activity
-from app.models.duplicate import DuplicateCandidate, NoteDuplicateCandidate
+from app.models.duplicate import NoteDuplicateCandidate
 from app.models.note import Note
 
 
@@ -32,26 +31,6 @@ def merge_activities(left: dict[str, Any], right: dict[str, Any], keep: Literal[
     selected["related_note_ids"] = note_ids
     selected.pop("status", None)
     return selected
-
-
-def create_duplicate_candidates(db: Session, activity: Activity) -> list[DuplicateCandidate]:
-    """Create review candidates for same-city activities; exact/high matches are surfaced, not silently deleted."""
-    created=[]
-    different_note = Activity.note_id != activity.note_id if activity.note_id is not None else true()
-    rows=db.scalars(select(Activity).where(Activity.id != activity.id,different_note,Activity.city_code == activity.city_code,Activity.deleted_at.is_(None))).all()
-    left={c.name:getattr(activity,c.name) for c in activity.__table__.columns}
-    for other in rows:
-        right={c.name:getattr(other,c.name) for c in other.__table__.columns}; score=similarity_score(left,right)
-        if classify_similarity(score)=='distinct': continue
-        a,b=sorted((activity.id,other.id))
-        exists=db.scalar(select(DuplicateCandidate).where(DuplicateCandidate.activity_a_id==a,DuplicateCandidate.activity_b_id==b))
-        if exists: continue
-        matched=[]
-        if activity.city_code==other.city_code: matched.append('city')
-        if activity.start_time and other.start_time and activity.start_time.date()==other.start_time.date(): matched.append('date')
-        candidate=DuplicateCandidate(activity_a_id=a,activity_b_id=b,similarity=score,matched_fields=matched,status='pending')
-        db.add(candidate); created.append(candidate)
-    return created
 
 
 def create_note_duplicate_candidates(db: Session, note: Note) -> list[NoteDuplicateCandidate]:
