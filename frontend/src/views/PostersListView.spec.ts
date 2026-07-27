@@ -25,8 +25,15 @@ vi.mock('element-plus', async () => {
   }
 })
 
+const routerPush = vi.hoisted(() => vi.fn())
+
 function factory() {
-  return mount(PostersListView, { global: { plugins: [ElementPlus] } })
+  return mount(PostersListView, {
+    global: {
+      plugins: [ElementPlus],
+      mocks: { $router: { push: routerPush } },
+    },
+  })
 }
 
 describe('PostersListView', () => {
@@ -56,14 +63,7 @@ describe('PostersListView', () => {
     await flushPromises()
     const newBtn = wrapper.findAll('button').find((b) => b.text().includes('新建海报'))!
     await newBtn.trigger('click')
-    // 内部 $router 由父链挂载（mount 中是空）；我们用 push 调用验证
-    const router = (wrapper.vm as any).$router ?? (wrapper.vm as any).$options?.router
-    if (router?.push) {
-      // 模拟过路由则验 router.push
-      // 我们改用更稳的方式：直接 emit
-    }
-    // 简化：只验证 button 存在并触发后没有报错
-    expect(wrapper.text()).toContain('新建海报')
+    expect(routerPush).toHaveBeenCalledWith('/posters/new')
   })
 
   it('regenerates a task by hitting render endpoint', async () => {

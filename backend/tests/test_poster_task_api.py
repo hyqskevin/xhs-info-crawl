@@ -165,6 +165,19 @@ def test_render_with_mocked_opencli(client: TestClient, db_session: Session, mon
 
     monkeypatch.setattr(renderer_module, "_playwright_available", lambda: False)
 
+    # 无 opencli 的机器也能跑：opencli 返回假路径，python3 等其余命令透传真实解析
+    # （Popen http.server 未 mock，仍需真实解释器）。
+    import shutil as shutil_module
+
+    real_which = shutil_module.which
+
+    def fake_which(name, *args, **kwargs):
+        if name == "opencli":
+            return "/fake/opencli"
+        return real_which(name, *args, **kwargs)
+
+    monkeypatch.setattr(renderer_module.shutil, "which", fake_which)
+
     def fake_run(cmd, capture_output, text, timeout):
         # 第二个子命令：cmd 形如 ['opencli','browser','default','screenshot',
         # '/data/posters/1.png','--full-page'] — 第一个非 flag 位置参数是 path
