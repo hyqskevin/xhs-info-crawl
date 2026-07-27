@@ -14,9 +14,6 @@
 
 > 以下为 2026-07-25 全项目核查新增（证据归档：`docs/superpowers/qa/2026-07-25-project-audit.md`），按列表顺序依次讨论修复。
 
-- [ ] 7. 审核规则/幂等/关联清理一致性修复包
-  - 目标：①`/notes/batch/approve` 与单条 review 一样校验至少 1 条有效子活动；②`/duplicates/{id}/merge` 对非 pending 候选返回 409；③删除 Blogger 清理 `blogger_cities`、删除 City 清理 `blogger_cities`/`keyword_group_cities`；④统一 `Activity.start_time` 与 `published_at` 时区口径（二选一，写进 `docs/database-design.md`）。
-  - 验收：每点一节 spec + 定向测试；全量测试绿。
 - [ ] 8. poster 图片路径校验统一 + notes 列表异常吞噬
   - 目标：`poster_tasks.py note_image_by_id` 的 `str.startswith` 校验可被同前缀兄弟目录绕过，统一改 `Path.is_relative_to`；`notes.py` OCR 聚合 try/except 吞异常改为记 WARNING 日志。
   - 验收：poster 端点有路径穿越定向测试；异常路径可见日志。
@@ -85,6 +82,10 @@
 
 ## 已完成
 
+- [x] 审核规则/幂等/关联清理一致性修复包（原待办 #7）
+  - 目标：①`/notes/batch/approve` 与单条 review 一样校验至少 1 条有效子活动；②`/duplicates/{id}/merge` 对非 pending 候选返回 409；③删除 Blogger 清理 `blogger_cities`、删除 City 清理 `blogger_cities`/`keyword_group_cities`；④统一 `Activity.start_time` 与 `published_at` 时区口径（二选一，写进 `docs/database-design.md`）。
+  - 结果：①批量审核按单条同规则校验，无有效子活动的 id 跳过并在响应新增 `skipped` 明细（WARNING 日志），不整批 422；②merge 入口非 pending 即 409「该候选已处理，不能重复合并」；③`delete_city` 级联清 `Keyword`+`BloggerCity`+`KeywordGroupCity`，`delete_setting(bloggers)` 级联清 `BloggerCity`+`BloggerGroupMember`，同事务回滚；④口径定为**北京墙钟 naive**——经任务 #19 真实数据与 SQLite 绑定行为实证：SQLite DateTime 存取均丢 tzinfo 只留墙钟数字，真 bug 只有 DOM 解析路径 `.astimezone(utc)` 落库比雪花路径晚 8h；`parse_published_at` 各分支与 `note_id_published_at` 改返回 Asia/Shanghai（落库值不变，零迁移），`week_bounds` 与 notes/activities 日期过滤边界去 tzinfo 改 naive，口径写入 `docs/database-design.md`「2026-07-27 时间口径约定」。
+  - 验收：`tests/test_review_consistency.py` 11 用例（9 先红后绿 + 2 过滤回归）；`test_published_at_parser.py`/`test_note_id_published_at.py` 预期按新口径更新；全量 491 passed（仅剩已知 poster 环境用例，TODO#10 登记）；commit `7d56681`；spec `docs/superpowers/specs/2026-07-27-review-consistency-fixes-design.md`。
 - [x] 活动级 `duplicate_candidates` 死数据处置（原待办 #5，方案 A：停写+清理）
   - 目标：`create_duplicate_candidates` 每次抓取写入活动级候选（生产库 1160 行），无任何 API/UI 消费。去重已收敛推文维度，用户 2026-07-27 拍板方案 A：停写 + 一次性清空存量。
   - 结果：crawl_task 删除写入调用；dedup.py 删 `create_duplicate_candidates` 及专用导入；推文级 `create_note_duplicate_candidates` 不变；幂等脚本 `scripts/cleanup_duplicate_candidates.py`；模型与空表保留（避免破坏性迁移，过期活动清理联动仍有效）。
