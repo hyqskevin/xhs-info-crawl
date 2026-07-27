@@ -14,10 +14,6 @@
 
 > 以下为 2026-07-25 全项目核查新增（证据归档：`docs/superpowers/qa/2026-07-25-project-audit.md`），按列表顺序依次讨论修复。
 
-- [ ] 11. 仪表盘与周报需求偏差对齐（需先讨论取舍）
-  - 目标：与 SPEC 3.2/3.7 对齐或明确改版：仪表盘补本周统计卡片（修正 `weekly_notes_count` 口径为本周）、4 周趋势、最近 5 条日志；周报补 `DELETE /reports/{id}` 与 Markdown 渲染预览。
-  - 验收：讨论结论先落 spec；前后端测试与 build 全绿。
-
 - [x] 推文 ID 雪花算法服务是什么，整个项目有用到算法的都整理出来写一份文档md
   - 结果：`docs/superpowers/qa/algorithms.md` 梳理项目所有算法位置（含 XHS 雪花、UUID v4、JWT HS256、Argon2、SequenceMatcher、Celery 文件 broker 等），每一项给出文件 / 触发点 / 入参出参 / 强度评估 / 阶段二待替换路径。
 - [ ] 多账号体系 + RBAC（分组 + 权限）
@@ -66,6 +62,10 @@
 
 ## 已完成
 
+- [x] 仪表盘与周报需求偏差对齐（原待办 #11，用户拍板方案 A 轻量版）
+  - 目标：仪表盘补本周统计卡片（修正 `weekly_notes_count`/`weekly_activities_count` 口径为本周）+ 最近 5 条任务日志；周报补 `DELETE /reports/{id}` 与 Markdown 渲染预览。4 周趋势明确不做（与现有抓取折线图重合）。
+  - 结果：`dashboard.py` summary 加 `_iso_week_start_utc_naive()`（北京周一 00:00 换算 UTC naive），两个 weekly 计数从全量改为 `created_at >= week_start`（原名不副实）；新增 `recent_logs`（TaskLog id desc 取 5）。`reports.py` 新增 `DELETE /{report_id}`（不存在 404，周报无磁盘文件只删 DB 行）。前端：DashboardView 三张统计卡片（本周抓取笔记/本周生成活动/待审核去重）+「最近任务日志」卡片（级别标签+点击跳任务日志页，空态占位）；ReportsView 操作列加删除按钮（ElMessageBox 二次确认）、预览从纯文本改为 marked+DOMPurify 渲染 HTML（`{ async: false }` 同步解析 + sanitize）；新依赖 marked/dompurify/@types/dompurify。
+  - 验收：后端 `test_dashboard_alignment.py` 3 用例先红后绿（周口径分流/recent_logs 最新 5 条/DELETE 200→404 幂等）；前端 +4 用例（ReportsView 删除+预览渲染、DashboardView 统计卡片+日志导航+空日志占位）；后端 501 passed、前端 68 passed、build 通过；commit `55d3679`；spec `docs/superpowers/specs/2026-07-27-dashboard-and-report-alignment-design.md`。
 - [x] TODO/文档卫生（原待办 #12，含「城市去重」条目核实）
   - 目标：`docs/api-doc.md` 补 keyword-groups、poster、notes 系列端点；`dedupe_cities.py` 位置与 spec 对齐并核实"城市去重"条目的勾选状态。
   - 结果：以 `app.openapi()` 枚举 59 端点做差集，api-doc 补齐 dashboard/analytics、health、tasks/batch DELETE、keyword-groups×6、blogger-groups×5、博主导入/enrich×3、opencli/config、poster-templates×6、poster-tasks×8、posters 图片×2、schedules×4、notes reprocess、settings/{kind} 泛型说明；修正不存在的 `GET/PUT /settings/opencli` 为 `/opencli/config`；`batch/approve`（skipped 明细）与 `merge`（409）语义同步 TODO#7 实现。dedupe spec 位置行更正为 `backend/app/scripts/dedupe_cities.py`（改文档不改码）。「城市去重」条目核实达标并打勾：0013 上线前已跑脚本、生产库重名数 0、`ix_cities_name_unique` 唯一索引（模型层自 #9 同步声明）使重名不可能再产生；`test_dedupe_cities_script.py` 7 用例绿。
