@@ -47,3 +47,25 @@ def test_extracts_24hex_from_bare_id() -> None:
     ts = note_id_published_at("697f6c74000000002103de17")
     assert ts is not None
     assert ts.strftime("%Y-%m-%d") == "2026-02-01"
+
+
+def test_profile_url_uses_note_id_not_user_id() -> None:
+    """博主链接 /user/profile/<用户ID>/<笔记ID> 必须取笔记 ID（最后一个 24hex）。
+
+    生产事故（任务 #19）：取第一个 24hex 解出的是博主注册时间 2021-09-18，
+    导致 2026-07 发布的笔记显示为 2026 年以前。
+    """
+    url = "https://www.xiaohongshu.com/user/profile/6145b3a20000000002025fca/6a5f0b8e000000001c012957?xsec_token=ABmFa_Nq"
+    ts = note_id_published_at(url)
+    assert ts is not None
+    # 笔记 ID 0x6a5f0b8e → 2026-07-21；用户 ID 0x6145b3a2 → 2021-09-18（错误答案）
+    assert ts == datetime.fromtimestamp(0x6A5F0B8E + 8 * 3600, tz=timezone.utc)
+    assert ts.year == 2026 and ts.month == 7
+
+
+def test_24hex_in_query_string_does_not_interfere() -> None:
+    """query 中的 24hex（如 xsec_token 偶然全 hex）不能抢在笔记 ID 前面。"""
+    url = "https://www.xiaohongshu.com/explore/697f6c74000000002103de17?xsec_token=6a5f0b8e000000001c012957"
+    ts = note_id_published_at(url)
+    assert ts is not None
+    assert ts == datetime.fromtimestamp(0x697F6C74 + 8 * 3600, tz=timezone.utc)

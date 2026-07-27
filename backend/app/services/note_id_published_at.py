@@ -1,26 +1,40 @@
 """从小红书 note ID（ObjectID 雪花算法）解析推文发布时间。
 
 小红书 note ID 是 24 hex 的 mongo-like ObjectID：前 8 个 hex 字符是 epoch 秒
-（按 UTC+8 计）。转换为带 tzinfo=UTC 的 datetime。"""
+（按 UTC+8 计）。转换为带 tzinfo=UTC 的 datetime。
+
+注意 URL 形态：博主主页链接 /user/profile/<用户ID 24hex>/<笔记ID 24hex>
+含两个 24 hex，必须取路径中**最后一个**（笔记 ID）；取第一个会解出博主
+账号注册时间（生产事故：任务 #19 同博主 15 篇笔记发布时间全是注册日）。"""
 import re
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 
 _NOTE_ID_RE = re.compile(r"[0-9a-f]{24}", re.IGNORECASE)
 
 
 def note_id_published_at(note_id_or_url: str | None) -> datetime | None:
-    """从 note ID 或完整 URL 中提取 24 hex；前 8 hex = epoch 秒。
+    """从 note ID 或完整 URL 中提取笔记 ID；前 8 hex = epoch 秒。
+
+    提取规则：剥离 query string，只在 URL path 中匹配，取**最后一个** 24 hex。
+    - /user/profile/<uid>/<noteid> → noteid
+    - /explore/<noteid>、/search_result/<noteid> → 唯一一个
+    - 裸 24 hex 字符串 → 其本身
 
     返回 tzinfo=UTC 的 datetime，精度到秒。
     非法输入（None/空/无 24hex/全 0/超出合理 epoch 范围）返回 None。
     """
     if not note_id_or_url:
         return None
-    match = _NOTE_ID_RE.search(note_id_or_url)
-    if not match:
+    text = note_id_or_url.strip()
+    # 是 URL 时只取 path 部分，防止 query（xsec_token 等）中的 24hex 干扰
+    if "://" in text:
+        text = urlsplit(text).path
+    matches = _NOTE_ID_RE.findall(text)
+    if not matches:
         return None
-    hex_prefix = match.group(0)[:8]
+    hex_prefix = matches[-1][:8]
     try:
         ts = int(hex_prefix, 16)
     except ValueError:

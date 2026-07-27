@@ -41,6 +41,9 @@
 - [ ] 13. 未登录识别 + 任务启动登录预检
   - 目标：未扫码登录时 whoami 挂起 60s 被误记为博主抓取失败（任务 #19 实证）。改为：`check_login` 把 whoami 超时归类为 `AuthenticationRequired`；任务启动做真实登录预检，未登录直接 PAUSED 并提示扫码；PAUSED 时自动打开登录页。
   - 验收：spec `docs/superpowers/specs/2026-07-27-login-preflight-auth-pause-design.md`；新增 `backend/tests/test_login_preflight.py` 4 用例；12 个 FakeAdapter 补 `check_login` 后全量测试绿；**重启 worker 生效（等任务 #19 跑完）**。
+- [ ] 14. 博主链接发布时间解析错误（取了用户 ID 而非笔记 ID）
+  - 目标：`note_id_published_at` 对 `/user/profile/<uid>/<noteid>` 链接取第一个 24hex（用户 ID），解出的是博主注册时间（任务 #19 实证：15 篇全是 2021-09-18）。改为取路径中最后一个 24hex（笔记 ID）；存量数据写幂等脚本矫正。
+  - 验收：spec `docs/superpowers/specs/2026-07-27-note-id-published-at-profile-url-design.md`；profile URL 测试用例先红后绿；矫正脚本执行后 profile 链接笔记发布时间 <2026 的计数归零；**与 TODO#13 一起重启 worker**。
 
 - [x] 推文 ID 雪花算法服务是什么，整个项目有用到算法的都整理出来写一份文档md
   - 结果：`docs/superpowers/qa/algorithms.md` 梳理项目所有算法位置（含 XHS 雪花、UUID v4、JWT HS256、Argon2、SequenceMatcher、Celery 文件 broker 等），每一项给出文件 / 触发点 / 入参出参 / 强度评估 / 阶段二待替换路径。
