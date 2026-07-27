@@ -14,9 +14,6 @@
 
 > 以下为 2026-07-25 全项目核查新增（证据归档：`docs/superpowers/qa/2026-07-25-project-audit.md`），按列表顺序依次讨论修复。
 
-- [ ] 5. 活动级 `duplicate_candidates` 死数据处置
-  - 目标：`create_duplicate_candidates` 每次抓取写入活动级候选（生产库 702 行），无任何 API/UI 消费。去重已收敛推文维度，需选定"停写+清理存量"或"接入审核页"。
-  - 验收：方向先讨论；若停写：crawl 测试更新、一次性清理脚本幂等、`SELECT COUNT(*) FROM duplicate_candidates` 归零；若保留：API/UI 可见且有测试。
 - [ ] 7. 审核规则/幂等/关联清理一致性修复包
   - 目标：①`/notes/batch/approve` 与单条 review 一样校验至少 1 条有效子活动；②`/duplicates/{id}/merge` 对非 pending 候选返回 409；③删除 Blogger 清理 `blogger_cities`、删除 City 清理 `blogger_cities`/`keyword_group_cities`；④统一 `Activity.start_time` 与 `published_at` 时区口径（二选一，写进 `docs/database-design.md`）。
   - 验收：每点一节 spec + 定向测试；全量测试绿。
@@ -88,6 +85,10 @@
 
 ## 已完成
 
+- [x] 活动级 `duplicate_candidates` 死数据处置（原待办 #5，方案 A：停写+清理）
+  - 目标：`create_duplicate_candidates` 每次抓取写入活动级候选（生产库 1160 行），无任何 API/UI 消费。去重已收敛推文维度，用户 2026-07-27 拍板方案 A：停写 + 一次性清空存量。
+  - 结果：crawl_task 删除写入调用；dedup.py 删 `create_duplicate_candidates` 及专用导入；推文级 `create_note_duplicate_candidates` 不变；幂等脚本 `scripts/cleanup_duplicate_candidates.py`；模型与空表保留（避免破坏性迁移，过期活动清理联动仍有效）。
+  - 验收：`tests/test_duplicate_candidates_stop.py` 3 用例先红后绿；全量 480 passed；生产库备份 `data/backups/app-20260727-184934.db` 后清零（1160→0），note 级 4 行保留；worker/beat 已重启（18:49）；commit `eeb7482`；spec `docs/superpowers/specs/2026-07-27-stop-activity-duplicate-candidates-design.md`。
 - [x] 死代码清理（原待办 #6，含一个潜在 NameError）
   - 目标：清理 `services/crawler.py` 旧函数式实现、`services/report.py` 旧活动级导出（含 `generate_markdown:39` 未导入 `datetime` 的 NameError 地雷）、`pipeline.process_with_isolation`、`services/task_lock.py`、`reports.py select_activities`、未使用导入、`poster_tasks.py` 空 `pass` 块、`tasks.py` 不可达分支、`notes.py` 重复 import；引用它们的测试随之迁移或删除。
   - 结果：crawler.py 仅保留 4 异常类 + `is_verification_required`；pipeline 删 `process_with_isolation`；task_lock.py 整模块删除；report.py 删 `generate_markdown`/`generate_xlsx`/`visible_activities`（保留被 note 级引用的 `format_activity_markdown`/`_activity_lines`，删码阶段实证修正边界）；reports.py 删 `select_activities`；清理 7 处未使用导入 + 3 处杂项；测试删 13 个死代码用例，新增 `test_dead_code_cleanup.py` 静态断言 10 项（先红后绿）。
