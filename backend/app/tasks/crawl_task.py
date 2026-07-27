@@ -41,6 +41,11 @@ from app.services.pipeline import deduplicate_results, run_stage, title_matches_
 from app.tasks.celery_app import celery_app
 
 
+def find_opencli(bin_name: str) -> str | None:
+    """解析 opencli 可执行文件路径（shutil.which 的薄封装，测试可 patch）。"""
+    return shutil.which(bin_name)
+
+
 def rate_limit_sleep(seconds: float, guard: Callable[[], None] | None = None) -> None:
     """可中断的频率控制 sleep：0.5s 分片，每片执行 guard（执行栅栏），stop 请求 0.5s 内响应。"""
     deadline = time.monotonic() + max(0.0, seconds)
@@ -414,6 +419,19 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         return
     task = db.get(CrawlTask, task_id)
     settings = get_settings()
+    if find_opencli(settings.opencli_bin) is None:
+        message = (
+            f"opencli 不可用：未找到命令 {settings.opencli_bin!r}"
+            "（请运行 npm install -g @jackwener/opencli 或在 .env 配置 OPENCLI_BIN 指向其绝对路径）"
+        )
+        task.status = "FAILED"
+        task.error_message = message
+        task.current_stage = None
+        task.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        log(db, task.id, "ERROR", message)
+        db.close()
+        return
     adapter = OpenCLIAdapter(settings)
     # 注册 task_id 到 adapter 让 run() 自动绑定 PID（如果 adapter 支持）
     if hasattr(adapter, "bind_task"):

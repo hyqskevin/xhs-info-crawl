@@ -17,6 +17,7 @@ class OpenCLIAdapter:
     def __init__(self,settings:Settings,session:str='xhs-crawler') -> None:
         self.settings=settings
         self.session=session
+        self._bin=(settings.opencli_bin or 'opencli').strip() or 'opencli'
         self._current_task_id: int | None = None
         self._current_run_token: str | None = None
         self._execution_guard: Callable[[], None] | None = None
@@ -105,12 +106,18 @@ class OpenCLIAdapter:
         effective_run_token = run_token if run_token is not None else self._current_run_token
         self._assert_execution_active(enforce_execution)
         effective_timeout = timeout if timeout is not None else self._command_timeout()
-        proc = subprocess.Popen(
-            ['opencli', *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        try:
+            proc = subprocess.Popen(
+                [self._bin, *args],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except FileNotFoundError:
+            raise OpenCLIError(
+                f"opencli 不可用：未找到命令 {self._bin!r}"
+                "（请运行 npm install -g @jackwener/opencli 或在 .env 配置 OPENCLI_BIN 指向其绝对路径）"
+            )
         if effective_task_id is not None:
             from app.services.task_registry import register, unregister
             register(effective_task_id, proc.pid, run_token=effective_run_token)

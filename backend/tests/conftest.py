@@ -38,6 +38,14 @@ def fast_rate_limit_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(crawl_task, "rate_limit_sleep", lambda *args, **kwargs: None)
 
 
+@pytest.fixture(autouse=True)
+def fake_opencli_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_crawl 的 opencli 预检默认通过；失败用例需显式重 patch find_opencli。"""
+    from app.tasks import crawl_task
+
+    monkeypatch.setattr(crawl_task, "find_opencli", lambda bin_name: f"/fake/{bin_name}")
+
+
 @pytest.fixture
 def celery_dispatches(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
     """Opt a test into crawl dispatch and expose the exact queued arguments."""

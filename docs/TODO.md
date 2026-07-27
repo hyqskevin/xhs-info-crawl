@@ -91,6 +91,12 @@
 
 ## 已完成
 
+- [x] OPENCLI_BIN 配置化 + 任务启动预检（根治 opencli PATH 依赖）
+  - 目标：适配器硬编码 'opencli' 依赖 worker PATH；2026-07-27 定时任务因 worker 重启环境缺 nvm bin 导致 17 个博主全部 Errno 2。加 `opencli_bin` 配置、Popen FileNotFoundError 转可读 OpenCLIError、run_crawl 启动预检 fail-fast。
+  - 结果：`Settings.opencli_bin`（env `OPENCLI_BIN`，默认 "opencli"）；适配器用 `self._bin` 调 Popen，FileNotFoundError 转成含 bin 路径与修复指引的 `OpenCLIError`；`run_crawl` claim 后预检 `find_opencli`（shutil.which 薄封装），找不到直接 FAILED + 指引报文 + ERROR 日志，不进搜索循环、不消耗配额；conftest 新增 autouse fake 预检 fixture；本机 `.env` 已配置 nvm 绝对路径，此后任何 shell 重启 worker 均可解析。
+  - 验收：`tests/test_opencli_bin.py` 5 用例先红后绿；后端 475 passed（仅剩已知 poster 环境失败）；`.env.example` 与 `docs/crawler-design.md` 同步；worker/beat 已重启（PID 93778/93783）。
+  - 关联：spec `docs/superpowers/specs/2026-07-27-opencli-bin-config-and-preflight-design.md`。
+  - 附带处置：重启时误中断真实任务 #19（RUNNING 孤儿），已标记 STOPPED 并写 WARNING 日志，可在仪表盘"继续抓取"恢复；其博主报错 `user store was not found` 是 opencli 搜不到对应账号的数据问题，与环境无关，待逐个人工核实账号名。
 - [x] 4. 抓取频率控制落地（SPEC P1）
   - 目标：`search_interval_min/max`（10-15s）与 `weekly_search_limit`（500/周）配置存在但零引用。关键词搜索之间按随机间隔 sleep；周搜索量超限记录 WARNING 并跳过。
   - 结果：新服务 `app/services/search_rate_limit.py`（`SearchRateLimiter` 任务内首次不等、之后 uniform(min,max)；`iso_week_key` Asia/Shanghai ISO 周；`weekly_search_count`/`increment_weekly_search`）；新表 `search_usage`（migration `0016`，week_key unique 全局跨任务累计，每次 search_recent 成功后 +1）；`crawl_task.rate_limit_sleep` 0.5s 分片可中断（每片过执行栅栏，stop 0.5s 内响应）；`run_crawl` 两个关键词循环统一走 `throttled_search` 闸门：超限 WARNING + 跳过剩余搜索、任务仍 COMPLETED，博主抓取不受限；conftest 新增 autouse fixture 默认把 rate_limit_sleep 置 no-op（既有测试不被真实 sleep 拖慢）；`.env.example` 注释与 `docs/crawler-design.md` 同步语义。

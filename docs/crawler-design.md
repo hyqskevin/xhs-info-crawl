@@ -3,6 +3,7 @@
 ## 爬虫工具
 
 - **工具**：OpenCLI (`jackwener/OpenCLI`)
+- **可执行文件**：默认按 worker 进程 PATH 解析；可用 `.env` 的 `OPENCLI_BIN` 配置绝对路径。**重启 celery worker/beat 时必须保证 opencli 可解析**（nvm 全局安装位于 `~/.nvm/versions/node/<版本>/bin`，nohup/非登录 shell 不带该 PATH）；任务启动时会预检，找不到直接 FAILED 并提示配置方法。
 - **核心命令**：
   - `opencli xiaohongshu search --keyword "{keyword}" --limit {n}`
   - `opencli xiaohongshu note --url "{note_url}"`
