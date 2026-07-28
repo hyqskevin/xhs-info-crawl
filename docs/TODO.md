@@ -38,6 +38,10 @@
   - 目标：当数据库完全为空（首次部署/重置）时，没有 admin 用户无法登录。当前 admin 凭据是手工 sql 新增。
   - 验收：迁移 `0012_seed_admin.py` 在 upgrade 时若 `users` 表为空则插入 admin 用户；密码来自环境变量 `INITIAL_ADMIN_PASSWORD`，未设置则使用 `Admin@123` 且 WARNING 提示"生产环境必须更改"；脚本幂等：若 admin 已存在则跳过。重置 db（删除数据文件后跑 alembic upgrade head）后能用默认密码登录。
   - 结果：迁移已实现并跑过真实 DB；实测 `alembic_version = 0012`，`users(1, admin, admin, 97-byte Argon2)`，Argon2.verify("Admin@123") → True。后端 316→321 passed（5 个 case：users 空 seed / 已存在跳过 / env 覆盖密码 / WARNING 日志 / downgrade 删除）。不更新 v0.2.0；累积到下个 release cycle。
+- [ ] 多小红书账号配置 + 抓取失效自动切换（2026-07-28 新增需求）
+  - 目标：支持配置多个**小红书账号**（抓取用的登录态，不是系统登录账号——与上面"多账号体系 + RBAC"是两回事）。配置 navbar 下新开「账号配置」页面：登记多个小红书账号（名称/备注/登录状态/启用），抓取时优先用主账号；当某账号在抓取中失效（未登录/扫码超时/被风控验证）时，自动切换到下一个可用账号继续，全部失效才 PAUSED 等人工处理。
+  - 验收：左侧配置导航新增「账号配置」页（账号 CRUD + 登录状态展示 + 启用开关 + 排序/优先级）；抓取任务启动预检与运行中 `AuthenticationRequired` 时按优先级尝试切换账号并记 INFO 日志（"账号 A 失效，切换到账号 B"）；切换后 whoami/搜索/下载均走新账号会话；所有账号都失效才进入现有 PAUSED + 扫码引导流程；spec 先行，后端/前端测试与 build 全绿。
+  - 待讨论（写 spec 前需对齐）：①多账号登录态在 opencli/Chrome 侧如何隔离（多 Chrome profile？CDP 端口？opencli 是否支持多账号 store——此前真实抓取出现过 `user store was not found`）；②"失效"判定信号复用现有 `AuthenticationRequired`/`VerificationRequired` 还是细分；③切换粒度：任务级（本次任务换账号）还是笔记级（下一篇就换）。
 ## 后续优化
 
 - [ ] 登录接口失败限流
