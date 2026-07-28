@@ -253,3 +253,4 @@
 - `notes.published_at`、`activities.start_time`：**北京墙钟 naive**（Asia/Shanghai 的墙钟数字，不带 tzinfo）。写入侧两条路径已统一：雪花算法（`note_id_published_at`）与 DOM 文本解析（`parse_published_at`）均返回 Asia/Shanghai 时区的 datetime，SQLite DateTime 落库时丢弃 tzinfo 即为北京墙钟 naive。
 - `created_at` / `updated_at` / `deleted_at` 等审计字段：UTC naive（`datetime.now(timezone.utc)` 落库后丢 tz）。
 - 查询侧构造边界（日期过滤、`week_bounds` 周报边界）一律使用 **naive** datetime，不加 `tzinfo=timezone.utc`；SQLite 绑定参数同样丢弃 tzinfo，与存储按墙钟数字字符串比较。
+- 显示侧（2026-07-28 补充）：前端凡渲染 UTC naive 审计字段（任务/日志的 `created_at`、`started_at`），统一经 `frontend/src/utils/datetime.ts formatUtcAsShanghai` 按 UTC 解析后转东八区墙钟；趋势图 x 轴同理。存储口径不变。

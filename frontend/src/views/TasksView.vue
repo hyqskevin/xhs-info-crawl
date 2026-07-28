@@ -3,6 +3,7 @@ import { Delete, View } from '@element-plus/icons-vue'
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
+import { formatUtcAsShanghai } from '@/utils/datetime'
 
 const rows = ref<any[]>([])
 const selected = ref<any[]>([])
@@ -57,12 +58,12 @@ onMounted(load)
       <ElTableColumn prop="failed_notes" label="失败" width="90" />
       <ElTableColumn prop="skipped_notes" label="已跳过" width="90" />
       <ElTableColumn label="进度" width="160"><template #default="scope"><ElProgress :percentage="progress(scope.row)" /></template></ElTableColumn>
-      <ElTableColumn prop="created_at" label="创建时间" min-width="180" />
+      <ElTableColumn label="创建时间" min-width="180"><template #default="scope">{{ formatUtcAsShanghai(scope.row.created_at) }}</template></ElTableColumn>
       <ElTableColumn prop="error_message" label="错误" min-width="220" show-overflow-tooltip />
       <ElTableColumn label="操作" min-width="120" class-name="action-column"><template #default="scope"><ElButton text :icon="View" @click="show(scope.row.id)">日志</ElButton></template></ElTableColumn>
     </ElTable>
   </ElCard>
-  <ElDrawer v-model="drawer" title="任务日志"><ElTimeline><ElTimelineItem v-for="item in logs" :key="item.id" :timestamp="item.created_at">{{ item.level }} - {{ item.message }}</ElTimelineItem></ElTimeline></ElDrawer>
+  <ElDrawer v-model="drawer" title="任务日志"><ElTimeline><ElTimelineItem v-for="item in logs" :key="item.id" :timestamp="formatUtcAsShanghai(item.created_at)">{{ item.level }} - {{ item.message }}</ElTimelineItem></ElTimeline></ElDrawer>
 </template>
 
 <style scoped>

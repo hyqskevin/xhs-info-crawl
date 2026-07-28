@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     search_interval_max: int = 15
     search_limit: int = 50
     weekly_search_limit: int = 500
+    consecutive_note_failure_limit: int = 3
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimaxi.com/v1"
     minimax_model: str = "MiniMax-M3"

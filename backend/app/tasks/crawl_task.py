@@ -17,7 +17,7 @@ from app.models.note import Note, NoteImage
 from app.models.schedule import ScheduledCrawl
 from app.models.task import CrawlTask, TaskLog
 from app.services.archive import archive_task_folder, archive_task_result
-from app.services.crawler import AuthenticationRequired, VerificationRequired
+from app.services.crawler import AuthenticationRequired, CrawlHalted, VerificationRequired
 from app.services.browser_launcher import open_xhs_login
 from app.services.crawl_city_guard import assert_city_code_exists
 from app.services.crawl_scope import resolve_crawl_scope
@@ -448,6 +448,7 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         log(db, task.id, "INFO", "登录预检通过")
         results: list[tuple[str, dict]] = []
         discovery_failures = 0
+        consecutive_failures = 0
         rate_limiter = SearchRateLimiter(settings.search_interval_min, settings.search_interval_max)
         week_key = iso_week_key()
 
@@ -543,6 +544,8 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
                 return
             try:
                 processor(entry)
+                # 正常返回（含标题不匹配/已存在等跳过）说明链路健康，连续失败计数清零
+                consecutive_failures = 0
             except ExecutionStopped:
                 db.rollback()
                 cleanup_incomplete_note(db, entry[1]["url"])
@@ -554,7 +557,15 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
             except AuthenticationRequired:
                 raise
             except Exception as exc:
+                consecutive_failures += 1
                 on_failure(entry, exc)
+                # 连续失败达到阈值视为系统性问题（登录态掉线/风控/opencli 异常），
+                # 熔断为 PAUSED 交给用户决策，避免整批笔记逐篇失败空跑
+                if consecutive_failures >= settings.consecutive_note_failure_limit:
+                    raise CrawlHalted(
+                        f"已连续 {consecutive_failures} 篇笔记处理失败，疑似登录态失效或触发风控。"
+                        f"最近一次错误：{exc}。请检查浏览器登录/验证状态后点「检测登录并继续」，或「结束抓取」。"
+                    )
         if finish_stop_if_requested(db, task.id, run_token):
             return
         task = db.get(CrawlTask, task.id)
@@ -569,14 +580,14 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         finish_stop_if_requested(db, task_id, run_token)
     except ExecutionSuperseded:
         db.rollback()
-    except AuthenticationRequired as exc:
+    except (AuthenticationRequired, CrawlHalted) as exc:
         task = db.get(CrawlTask, task_id)
         task.status = "PAUSED"
         task.error_message = str(exc)
         db.commit()
         log(db, task.id, "ERROR", str(exc))
-        # 未登录（whoami 超时归类）与安全验证都需要用户在浏览器里完成扫码/验证，
-        # 统一自动打开登录页；打开失败不影响 PAUSED 状态。
+        # 未登录（whoami 超时归类）、安全验证与连续失败熔断都需要用户在浏览器里
+        # 检查并完成扫码/验证，统一自动打开登录页；打开失败不影响 PAUSED 状态。
         page_kind = "验证页面" if isinstance(exc, VerificationRequired) else "登录页面，请完成扫码后点击「继续抓取」"
         try:
             open_xhs_login(settings)

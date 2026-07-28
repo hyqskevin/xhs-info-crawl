@@ -145,6 +145,20 @@ describe('DashboardView', () => {
     expect(mocks.restartTask).toHaveBeenCalledWith(4)
   })
 
+  it('lets the user stop a PAUSED task (halted by consecutive failures)', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any)
+    mocks.dashboard.mockResolvedValueOnce({ data: { data: { last_task: { id: 19, status: 'PAUSED', total_notes: 30, downloaded_notes: 5, ocr_notes: 5, extracted_notes: 5, success_notes: 5, failed_notes: 3, skipped_notes: 0, current_stage: null, current_note: null, error_message: '已连续 3 篇笔记处理失败，疑似登录态失效或触发风控', progress_percent: 30 } } } })
+    mocks.stopTask.mockResolvedValueOnce({ data: { data: { id: 19, status: 'STOPPED' } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const finishButton = wrapper.findAll('button').find((button) => button.text().includes('结束抓取'))
+    expect(finishButton, 'PAUSED（熔断/等待登录）任务必须显示「结束抓取」按钮').toBeTruthy()
+    await finishButton!.trigger('click')
+    await flushPromises()
+    expect(mocks.stopTask).toHaveBeenCalledWith(19)
+  })
+
   it('shows the security verification reason with manual recovery controls', async () => {
     mocks.dashboard.mockResolvedValueOnce({ data: { data: { last_task: { id: 12, status: 'PAUSED', total_notes: 20, downloaded_notes: 4, ocr_notes: 4, extracted_notes: 3, success_notes: 3, failed_notes: 0, skipped_notes: 0, current_stage: 'DOWNLOADING', current_note: '活动笔记', error_message: '检测到小红书安全验证，请在 Chrome 完成后点击检测登录并继续', progress_percent: 20 } } } })
     const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
@@ -218,7 +232,7 @@ describe('DashboardView', () => {
       weekly_activities_count: 5,
       pending_duplicates: 3,
       recent_logs: [
-        { id: 2, task_id: 19, level: 'ERROR', message: "博主 '从零发现宁波' 抓取失败", created_at: '2026-07-27T01:49:48' },
+        { id: 2, task_id: 19, level: 'ERROR', message: "博主 '从零发现宁波' 抓取失败", created_at: '2026-07-28T00:46:14' },
         { id: 1, task_id: 19, level: 'INFO', message: '抓取范围生效', created_at: '2026-07-27T01:49:47' },
       ],
     } } })
@@ -231,6 +245,8 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('待审核去重')
     expect(wrapper.text()).toContain('最近任务日志')
     expect(wrapper.text()).toContain("博主 '从零发现宁波' 抓取失败")
+    // 后端 created_at 为 UTC naive：00:46:14 UTC = 东八区 08:46:14
+    expect(wrapper.text()).toContain('2026-07-28 08:46:14')
 
     await wrapper.find('.log-line').trigger('click')
     expect(routerPush).toHaveBeenCalledWith('/tasks')

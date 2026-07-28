@@ -14,6 +14,11 @@ class VerificationRequired(AuthenticationRequired):
     pass
 
 
+class CrawlHalted(Exception):
+    """连续笔记处理失败达到阈值，任务应 PAUSED 等待用户决策（扫码/验证/结束）。"""
+    pass
+
+
 _VERIFICATION_SIGNALS = (
     "captcha",
     "安全验证",

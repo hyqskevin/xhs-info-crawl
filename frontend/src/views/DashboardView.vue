@@ -4,6 +4,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getHealth } from '@/api/health'
 import { api } from '@/api/client'
+import { formatUtcAsShanghai } from '@/utils/datetime'
 import CrawlTrendChart from '@/components/CrawlTrendChart.vue'
 import CrawlSuccessPie from '@/components/CrawlSuccessPie.vue'
 
@@ -204,7 +205,7 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
       <ElProgress :percentage="lastTask.progress_percent || 0" :indeterminate="lastTask.progress_percent == null && ['PENDING','RUNNING'].includes(lastTask.status)" />
       <ElAlert v-if="shouldShowLastTaskError" :title="lastTask.error_message" type="error" :closable="false" />
       <ElButton v-if="['FAILED','STOPPED'].includes(lastTask.status)" type="primary" :icon="RefreshRight" :loading="restarting" @click="restart">继续抓取</ElButton>
-      <ElButton v-if="lastTask.status === 'FAILED'" type="danger" :loading="stopping" @click="finish">结束抓取</ElButton>
+      <ElButton v-if="['FAILED','PAUSED'].includes(lastTask.status)" type="danger" :loading="stopping" @click="finish">结束抓取</ElButton>
       <ElButton v-if="lastTask.status === 'PAUSED'" :icon="Link" :loading="openingLogin" @click="openLogin">打开小红书登录</ElButton>
       <ElButton v-if="lastTask.status === 'PAUSED'" type="primary" :icon="RefreshRight" :loading="restarting" @click="restart">检测登录并继续</ElButton>
       <ElButton v-if="['PENDING','RUNNING','STOP_REQUESTED'].includes(lastTask.status)" type="danger" :loading="stopping || lastTask.status === 'STOP_REQUESTED'" :disabled="lastTask.status === 'STOP_REQUESTED'" @click="stop">停止抓取</ElButton>
@@ -247,7 +248,7 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
         <div v-for="log in summary.recent_logs" :key="log.id" class="log-line" @click="$router.push('/tasks')">
           <ElTag size="small" :type="log.level === 'ERROR' ? 'danger' : log.level === 'WARNING' ? 'warning' : 'info'">{{ log.level }}</ElTag>
           <span class="log-message">#{{ log.task_id }} {{ log.message }}</span>
-          <span class="log-time">{{ (log.created_at || '').replace('T', ' ').slice(0, 19) }}</span>
+          <span class="log-time">{{ formatUtcAsShanghai(log.created_at) }}</span>
         </div>
       </div>
       <ElEmpty v-else description="暂无任务日志" :image-size="60" />

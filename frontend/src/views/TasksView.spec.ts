@@ -9,8 +9,8 @@ const mocks = vi.hoisted(() => ({
     data: {
       data: {
         items: [
-          { id: 8, type: 'mixed', status: 'COMPLETED_WITH_ERRORS', total_notes: 10, downloaded_notes: 7, ocr_notes: 7, extracted_notes: 7, success_notes: 7, failed_notes: 1, skipped_notes: 2, current_stage: null, error_message: '一条失败' },
-          { id: 9, type: 'mixed', status: 'STOPPED', total_notes: 0, downloaded_notes: 0, ocr_notes: 0, extracted_notes: 0, success_notes: 0, failed_notes: 0, skipped_notes: 0, current_stage: null, error_message: null },
+          { id: 8, type: 'mixed', status: 'COMPLETED_WITH_ERRORS', total_notes: 10, downloaded_notes: 7, ocr_notes: 7, extracted_notes: 7, success_notes: 7, failed_notes: 1, skipped_notes: 2, current_stage: null, error_message: '一条失败', created_at: '2026-07-28T00:46:14' },
+          { id: 9, type: 'mixed', status: 'STOPPED', total_notes: 0, downloaded_notes: 0, ocr_notes: 0, extracted_notes: 0, success_notes: 0, failed_notes: 0, skipped_notes: 0, current_stage: null, error_message: null, created_at: '2026-07-27T16:00:00' },
         ],
       },
     },
@@ -60,5 +60,29 @@ describe('TasksView', () => {
     expect(ElMessageBox.confirm).toHaveBeenCalled()
     expect(mocks.batchDeleteTasks).toHaveBeenCalledWith([8, 9])
     expect(mocks.tasks).toHaveBeenCalled()
+  })
+
+  it('displays created_at converted from UTC to Asia/Shanghai (+8h)', async () => {
+    const wrapper = mount(TasksView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    // 后端 created_at 为 UTC naive：00:46:14 UTC = 东八区 08:46:14
+    expect(wrapper.text()).toContain('2026-07-28 08:46:14')
+    expect(wrapper.text()).toContain('2026-07-28 00:00:00')
+    expect(wrapper.text()).not.toContain('00:46:14Z')
+  })
+
+  it('shows log timestamps converted to Asia/Shanghai in the drawer', async () => {
+    mocks.logs.mockResolvedValueOnce({
+      data: { data: [{ id: 1, level: 'ERROR', message: '笔记处理失败', created_at: '2026-07-28T00:46:07' }] },
+    })
+    const wrapper = mount(TasksView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text().includes('日志'))!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('笔记处理失败')
+    expect(wrapper.text()).toContain('2026-07-28 08:46:07')
   })
 })

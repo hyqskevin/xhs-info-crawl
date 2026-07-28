@@ -6,15 +6,24 @@ const props = defineProps<{ tasks: any[] }>()
 const container = ref<HTMLDivElement | null>(null)
 let chart: echarts.ECharts | null = null
 
-function pad(n: number) {
-  return String(n).padStart(2, '0')
-}
-
+// 后端 started_at 为 UTC naive（无 Z 后缀）：按 UTC 解析再转东八区，
+// 避免 JS 默认把 UTC 数字当本地时间导致 x 轴时间慢 8h
 function formatTime(value: string | null) {
   if (!value) return '-'
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return '-'
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value}Z`
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) return '-'
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date)
+  if (!parts.length) return '-'
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  return `${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`
 }
 
 function buildOption() {
