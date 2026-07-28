@@ -62,6 +62,11 @@
 
 ## 已完成
 
+- [x] 日志时间东八区显示 + 笔记连续失败熔断（2026-07-28 用户反馈）
+  - 目标：①仪表盘「最近任务日志」、抓取日志页创建时间、日志抽屉时间显示的是 UTC（差 8h），要按东八区显示；②笔记处理连续失败时系统只记日志继续跑，要捕获这类系统性问题并把「扫码 / 中止」决策权交给用户。
+  - 结果：①根因为 `created_at`/`started_at` 是 UTC naive 而前端直接渲染原始字符串；新增 `frontend/src/utils/datetime.ts formatUtcAsShanghai`（无 Z 按 UTC 解析 → Intl 转 Asia/Shanghai 墙钟），应用到仪表盘日志、TasksView 创建时间列、日志抽屉 timestamp、抓取趋势图 x 轴（原 `new Date(value)` 把 UTC 数字当本地时间，同样差 8h）；存储口径不变，`docs/database-design.md` 时间口径章节补显示侧约定。②新异常 `CrawlHalted`；`run_crawl` 主循环连续失败计数（成功含跳过即清零），达阈值 `consecutive_note_failure_limit`（env 可配，默认 3）熔断：任务 PAUSED + error_message 指引「检测登录并继续 / 结束抓取」+ 自动打开登录页（与未登录 PAUSED 同路径）；仪表盘 PAUSED 状态新增「结束抓取」按钮；`.env.example` 同步。
+  - 验收：后端 `tests/test_consecutive_failure_halt.py` 4 用例先红后绿（熔断 PAUSED/计数清零/阈值可配/熔断后可停止）；前端 +7 用例（datetime 工具 4、TasksView 时间 2、DashboardView PAUSED 结束按钮 + 日志时间转换）；后端 505 passed、前端 75 passed、build 通过；commit `2e18c09`；spec `docs/superpowers/specs/2026-07-28-log-timezone-and-consecutive-failure-halt-design.md`。
+  - 部署：改动 `app/tasks`/`app/services`/config，worker/beat 已于 2026-07-28 09:02 重启（确认无进行中任务后执行）。
 - [x] 仪表盘与周报需求偏差对齐（原待办 #11，用户拍板方案 A 轻量版）
   - 目标：仪表盘补本周统计卡片（修正 `weekly_notes_count`/`weekly_activities_count` 口径为本周）+ 最近 5 条任务日志；周报补 `DELETE /reports/{id}` 与 Markdown 渲染预览。4 周趋势明确不做（与现有抓取折线图重合）。
   - 结果：`dashboard.py` summary 加 `_iso_week_start_utc_naive()`（北京周一 00:00 换算 UTC naive），两个 weekly 计数从全量改为 `created_at >= week_start`（原名不副实）；新增 `recent_logs`（TaskLog id desc 取 5）。`reports.py` 新增 `DELETE /{report_id}`（不存在 404，周报无磁盘文件只删 DB 行）。前端：DashboardView 三张统计卡片（本周抓取笔记/本周生成活动/待审核去重）+「最近任务日志」卡片（级别标签+点击跳任务日志页，空态占位）；ReportsView 操作列加删除按钮（ElMessageBox 二次确认）、预览从纯文本改为 marked+DOMPurify 渲染 HTML（`{ async: false }` 同步解析 + sanitize）；新依赖 marked/dompurify/@types/dompurify。
