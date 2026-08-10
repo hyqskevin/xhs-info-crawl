@@ -10,6 +10,8 @@ frontend/node_modules/
 frontend/dist/
 frontend/test-results/
 frontend/playwright-report/
+launcher/ui/node_modules/
+launcher/ui/dist/
 *.tsbuildinfo
 data/*
 !data/.gitkeep

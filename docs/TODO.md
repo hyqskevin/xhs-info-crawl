@@ -128,12 +128,18 @@
   - 部署：**API 需重启**(改动 `app/main.py` lifespan);worker 不需要重启(没改 worker 代码)。
   - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 7.1 + § 7.2
   - plan：`docs/superpowers/plans/2026-08-10-p2-static-mount-ocr-diagnostic.md`
-- [ ] P3 启动器 Python 后端（进程管理 + 状态服务 + env bootstrap）
+- [x] P3 启动器 Python 后端（进程管理 + 状态服务 + env bootstrap）
   - 目标：实现 `launcher/main.py`、`process_manager.py`、`status_server.py`、`env_bootstrap.py`、`port_finder.py`、`opencli_checker.py`、`ocr_installer.py`。
-  - 验收：端口探测、敏感配置自动生成（SECRET_KEY/INITIAL_ADMIN_PASSWORD）、API_HOST 强制 127.0.0.1、缓存环境变量设置、子进程启停心跳、状态服务各 endpoint；`launcher/tests/` 下 7 个测试文件全绿；服务进程重启提示。
-- [ ] P4 启动器 UI（Vue + Element Plus + Material Design 3）
+  - 结果：①`port_finder.py` 用 socket bind 探测可用端口；②`env_bootstrap.py` 实现 SECRET_KEY/INITIAL_ADMIN_PASSWORD 自动生成、.env 初始化、API_HOST 强制 127.0.0.1、PADDLE_PDX_CACHE_HOME/HF_HOME 设置；③`opencli_checker.py` 调 `opencli doctor` 解析状态（not_installed/daemon_not_running/extension_not_connected/timeout/unknown_error）；④`ocr_installer.py` 实现 URL 生成、状态检测、下载安装（SHA256 校验 + 解压 + pip 装 wheels）；⑤`process_manager.py` 管理 api/worker/beat 子进程（启停/重启/状态查询/日志写入/退出检测）；⑥`status_server.py` 提供 FastAPI 状态服务（status/restart/stop/opencli test/ocr install 等端点）；⑦`main.py` PyWebView 入口整合所有模块。
+  - 验收：`launcher/tests/` 7 个测试文件全绿（48 passed，含 port_finder 4 + env_bootstrap 13 + opencli_checker 7 + ocr_installer 8 + process_manager 7 + status_server 9）。
+  - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 2-5 + § 7.3 + § 13
+  - plan：`docs/superpowers/plans/2026-08-10-p3-launcher-backend.md`
+- [x] P4 启动器 UI（Vue + Element Plus + Material Design 3）
   - 目标：实现 `launcher/ui/` Vue 项目，遵循 M3 设计语言（暗色主题、语义化 CSS 变量、M3 组件映射、4dp 间距网格）。
-  - 验收：`launcher/ui/src/components/` 下 5 个组件（ServiceStatus/OpenCLIPanel/OcrPanel/LogViewer + App）；M3 设计令牌 CSS 变量；5 个组件 spec + 1 个设计令牌 spec 全绿；PyWebView 加载 `dist/index.html` 正常显示。
+  - 结果：①项目脚手架（package.json/vite.config.ts/tsconfig.json/index.html/main.ts）；②M3 设计令牌 `tokens.css`（颜色/排版/间距/圆角/阴影 CSS 变量）；③API 客户端 `client.ts`（封装 10 个状态服务端点）；④4 个子组件：ServiceStatus（服务状态卡片）、OpenCLIPanel（OpenCLI 连接卡片）、OcrPanel（OCR 增强卡片）、LogViewer（日志卡片）；⑤App.vue 整合（Top App Bar + 4 个子组件 + 底部操作栏 + 3s/5s 轮询 + OCR 安装进度轮询 + PyWebView exit API）；⑥构建验证 `npm run build` 产出 `dist/index.html` + `dist/assets/*`。
+  - 验收：7 个测试文件 62 passed（design-tokens 8 + client 11 + App 10 + ServiceStatus 9 + OpenCLIPanel 7 + OcrPanel 11 + LogViewer 6）；`npm run build` 成功产出 dist/；vue-tsc 类型检查通过（修复 @types/node 缺失和未使用导入）。
+  - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 4.6 + § 4.3 + § 4.7
+  - plan：`docs/superpowers/plans/2026-08-10-p4-launcher-ui.md`
 - [ ] P5 打包脚本 + GitHub Actions
   - 目标：实现 `scripts/package-macos.sh`、`scripts/package-windows.ps1`、`scripts/package-ocr-addon.sh`、`.github/workflows/release.yml`、`.github/workflows/release-ocr-addon.yml`。
   - 验收：macOS/Windows 用户包 zip 产出；OCR 增强包 3 个平台 zip 产出；源码 zip 产出；打包脚本本地验证可执行（dry-run）。
