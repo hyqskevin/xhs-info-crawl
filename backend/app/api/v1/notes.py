@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone as tz
 from typing import Annotated, Literal
 
 import logging
@@ -6,16 +6,18 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.activity import Activity
-from app.models.config import City
+from app.models.config import Blogger, City
 from app.models.note import Note, NoteImage
 from app.schemas.activity import ActivityRead
+from app.services.extraction import extract_activities
+from app.services.minimax import MiniMaxClient
 
 
 router = APIRouter(prefix="/notes", tags=["notes"])
@@ -45,6 +47,15 @@ class NoteUpdate(BaseModel):
 
 class NoteReviewRequest(BaseModel):
     status: Literal["APPROVED", "REJECTED"]
+
+
+class ActivityCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=256)
+    location: str = Field(default="", max_length=256)
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    type: str = Field(min_length=1, max_length=64)
+    summary: str = Field(default="", max_length=2000)
 
 
 def _visible_note(db: Session, note_id: int) -> Note:
@@ -120,6 +131,7 @@ def list_notes(
     start_date: date | None = None,
     end_date: date | None = None,
     keyword: str | None = None,
+    blogger_id: int | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
@@ -138,6 +150,14 @@ def list_notes(
         if stripped:
             pattern = f"%{stripped}%"
             filters.append(or_(Note.title.ilike(pattern), Note.content.ilike(pattern)))
+    if blogger_id is not None:
+        blogger = db.scalar(select(Blogger).where(Blogger.id == blogger_id))
+        if blogger is None:
+            raise HTTPException(404, "博主不存在")
+        if not blogger.profile_url:
+            # 博主无主页地址，无法匹配任何推文
+            return {"code": 200, "message": "success", "data": {"items": []}, "pagination": {"page": page, "page_size": page_size, "total": 0}}
+        filters.append(Note.source_url.like(blogger.profile_url + "%"))
 
     total = db.scalar(select(func.count()).select_from(Note).where(*filters)) or 0
     activity_counts = (
@@ -196,12 +216,6 @@ def update_note(note_id: int, payload: NoteUpdate, _: Auth, db: DB):
 @router.post("/{note_id}/review")
 def review_note(note_id: int, payload: NoteReviewRequest, _: Auth, db: DB):
     note = _visible_note(db, note_id)
-    if payload.status == "APPROVED":
-        # 校验至少 1 条有效子活动
-        has_activity = db.scalar(select(func.count(Activity.id)).where(
-            Activity.note_id == note.id, Activity.deleted_at.is_(None))) or 0
-        if has_activity == 0:
-            raise HTTPException(status_code=422, detail="推文无有效子活动，请先重新处理")
     note.review_status = payload.status
     db.commit()
     return {"code": 200, "message": "success", "data": {"id": note.id, "review_status": note.review_status}}
@@ -226,6 +240,119 @@ def reprocess_note(note_id: int, _: Auth, db: DB):
     note.published_at = None
     db.commit()
     return {"code": 202, "message": "success", "data": {"id": note.id, "status": note.status}}
+
+
+@router.post("/{note_id}/re-extract")
+def re_extract_note(note_id: int, _: Auth, db: DB):
+    """对单条推文重新提取活动（使用已有 OCR 数据，不重抓图片）。"""
+    note = _visible_note(db, note_id)
+    images = list(db.scalars(
+        select(NoteImage).where(NoteImage.note_id == note_id).order_by(NoteImage.id)
+    ).all())
+
+    # 拼合 OCR 文本
+    ocr_texts: list[str] = []
+    for image in images:
+        if image.ocr_text:
+            ocr_texts.append(f"[IMAGE {image.id}]\n{image.ocr_text}")
+    combined = f"标题：{note.title}\n正文：{note.content}\n" + "\n".join(ocr_texts)
+
+    # 提取活动
+    settings = get_settings()
+    reference_now = note.published_at.replace(tzinfo=None) if note.published_at else datetime.now(tz.utc).replace(tzinfo=None)
+    if settings.minimax_api_key:
+        client = MiniMaxClient(settings)
+        try:
+            extracted = extract_activities(combined, reference_now, lambda text: client.extract_many(text, datetime.now(tz.utc)))
+        except Exception as exc:
+            logger.warning("re-extract MiniMax 失败，降级规则提取 note_id=%s: %s", note_id, exc)
+            extracted = extract_activities(combined, reference_now, None)
+    else:
+        extracted = extract_activities(combined, reference_now, None)
+
+    # 校验
+    from app.services.activity_validator import classify_zero_activity, validate_activities
+
+    classification = classify_zero_activity(note, extracted)
+    if classification in {"all_before_publish", "no_activity_signals"}:
+        note.status = "NO_ACTIVITIES"
+        db.commit()
+        return {
+            "code": 200, "message": "success",
+            "data": {"status": note.status, "activities": [], "extracted_count": 0, "reason": classification},
+        }
+    if classification == "minimax_empty_retryable":
+        note.status = "EMPTY_RESULT_RETRYABLE"
+        db.commit()
+        return {
+            "code": 200, "message": "success",
+            "data": {"status": note.status, "activities": [], "extracted_count": 0, "reason": classification},
+        }
+
+    accepted, rejected = validate_activities(note, extracted)
+    for reason in rejected:
+        logger.info("re-extract 跳过活动 note_id=%s 原因=%s", note_id, reason)
+    if not accepted:
+        note.status = "NO_ACTIVITIES"
+        db.commit()
+        return {
+            "code": 200, "message": "success",
+            "data": {"status": note.status, "activities": [], "extracted_count": 0, "reason": "all_filtered"},
+        }
+
+    # 软删除旧活动，写入新活动
+    now = datetime.now(tz.utc)
+    db.execute(
+        update(Activity).where(Activity.note_id == note_id, Activity.deleted_at.is_(None))
+        .values(deleted_at=now)
+    )
+    new_activities: list[dict] = []
+    for fields in accepted:
+        activity = Activity(
+            note_id=note.id,
+            name=fields.get("name") or note.title,
+            city_code=note.city_code,
+            start_time=datetime.fromisoformat(fields["start_time"]) if fields.get("start_time") else None,
+            end_time=datetime.fromisoformat(fields["end_time"]) if fields.get("end_time") else None,
+            location=fields.get("location") or "",
+            type=fields.get("type") or "其他",
+            source_url=note.source_url,
+            source_image_indexes=fields.get("source_image_indexes") or [],
+            summary=fields.get("summary") or note.content[:300],
+            confidence=float(fields.get("confidence") or 0),
+        )
+        db.add(activity)
+        db.flush()
+        new_activities.append(ActivityRead.model_validate(activity).model_dump(mode="json"))
+
+    note.status = "PROCESSED"
+    db.commit()
+    return {
+        "code": 200, "message": "success",
+        "data": {"status": note.status, "activities": new_activities, "extracted_count": len(new_activities)},
+    }
+
+
+@router.post("/{note_id}/activities", status_code=201)
+def create_activity_for_note(note_id: int, payload: ActivityCreate, _: Auth, db: DB):
+    """手动为推文新增一条子活动。"""
+    note = _visible_note(db, note_id)
+    activity = Activity(
+        note_id=note.id,
+        name=payload.name,
+        city_code=note.city_code,
+        start_time=payload.start_time,
+        end_time=payload.end_time,
+        location=payload.location,
+        type=payload.type,
+        source_url=note.source_url,
+        summary=payload.summary,
+        confidence=1.0,
+    )
+    db.add(activity)
+    db.commit()
+    db.refresh(activity)
+    return {"code": 201, "message": "success", "data": ActivityRead.model_validate(activity).model_dump(mode="json")}
 
 
 @router.get("/{note_id}/images/{image_id}")
@@ -253,28 +380,15 @@ def _batch_status(db: Session, ids: list[int], target: str) -> list[int]:
 
 @router.post("/batch/approve")
 def approve_notes(payload: BatchRequest, _: Auth, db: DB):
-    """批量审核通过与单条审核同一规则：无有效子活动的推文跳过，并在 skipped 明细中返回。"""
     notes = list(db.scalars(select(Note).where(Note.id.in_(set(payload.ids)), Note.review_status.notin_(["DELETED", "MERGED"]))).all())
     if not notes:
         raise HTTPException(404, "没有可操作的推文")
-    activity_counts = dict(
-        db.execute(
-            select(Activity.note_id, func.count(Activity.id))
-            .where(Activity.note_id.in_([note.id for note in notes]), Activity.deleted_at.is_(None))
-            .group_by(Activity.note_id)
-        ).all()
-    )
     approved: list[int] = []
-    skipped: list[dict] = []
     for note in notes:
-        if activity_counts.get(note.id, 0) > 0:
-            note.review_status = "APPROVED"
-            approved.append(note.id)
-        else:
-            logger.warning("批量审核跳过无有效子活动的推文 note_id=%s", note.id)
-            skipped.append({"id": note.id, "reason": "推文无有效子活动，请先重新处理"})
+        note.review_status = "APPROVED"
+        approved.append(note.id)
     db.commit()
-    return {"code": 200, "message": "success", "data": {"approved_ids": approved, "approved_count": len(approved), "skipped": skipped}}
+    return {"code": 200, "message": "success", "data": {"approved_ids": approved, "approved_count": len(approved)}}
 
 
 @router.delete("/batch")

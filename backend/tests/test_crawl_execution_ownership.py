@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token
-from app.models.config import City, Keyword
+from app.models.config import City
 from app.models.note import Note
 from app.models.task import CrawlTask, TaskLog
 from app.core.config import Settings
@@ -17,7 +17,6 @@ def _auth() -> dict[str, str]:
 
 def _configured_city(db: Session) -> None:
     db.add(City(name="宁波", code="nb", enabled=True))
-    db.add(Keyword(word="活动", city_code="nb", enabled=True))
     db.commit()
 
 
@@ -127,7 +126,7 @@ def test_stop_requested_after_note_detail_prevents_download_and_note_write(
     download_calls = []
 
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def check_login(self):
@@ -172,19 +171,18 @@ def test_stop_requested_after_note_detail_prevents_download_and_note_write(
 
 def test_worker_binds_execution_guard_and_warning_sink(db_session, monkeypatch) -> None:
     city = City(name="宁波", code="nb", enabled=True, recent_filter="一周内")
-    keyword = Keyword(city_code="nb", word="活动", enabled=True)
     task = CrawlTask(
         type="mixed",
         status="PENDING",
         run_token="bound-token",
         params={"city": "nb", "keywords": ["活动"], "blogger_ids": []},
     )
-    db_session.add_all([city, keyword, task])
+    db_session.add_all([city, task])
     db_session.commit()
     captured = {}
 
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def check_login(self):

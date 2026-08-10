@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token
 from app.models.activity import Activity
-from app.models.config import City
+from app.models.config import Blogger, City
 from app.models.note import Note, NoteImage
 
 
@@ -170,6 +170,39 @@ def test_review_single_note_rejects_unknown_status(client: TestClient, db_sessio
     assert response.status_code == 422
 
 
+def _note_without_activities(db: Session) -> Note:
+    note = Note(
+        task_id=1,
+        platform_note_id="post-no-act",
+        title="纯推文无子活动",
+        content="活动内容在正文里",
+        source_url="https://www.xiaohongshu.com/explore/post-no-act",
+        city_code="nb",
+        status="NO_ACTIVITIES",
+        review_status="PENDING",
+        raw_data={},
+    )
+    db.add(note)
+    db.commit()
+    return note
+
+
+def test_review_single_note_without_activities_succeeds(client: TestClient, db_session: Session) -> None:
+    """推文本身即活动内容，无子活动也应能审核通过（spec: 2026-08-03-allow-review-without-activities-design）。"""
+    note = _note_without_activities(db_session)
+
+    response = client.post(
+        f"/api/v1/notes/{note.id}/review",
+        headers=_auth(),
+        json={"status": "APPROVED"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"id": note.id, "review_status": "APPROVED"}
+    db_session.refresh(note)
+    assert note.review_status == "APPROVED"
+
+
 def _seed_notes_for_keyword_search(db: Session) -> list[Note]:
     """为关键字搜索测试 seed 3 条已审核通过的推文。"""
     notes_data = [
@@ -235,6 +268,48 @@ def test_list_notes_keyword_with_no_match_returns_empty(client: TestClient, db_s
     _seed_notes_for_keyword_search(db_session)
 
     response = client.get("/api/v1/notes?keyword=不存在的关键字", headers=_auth())
+
+    assert response.status_code == 200
+    assert response.json()["data"]["items"] == []
+    assert response.json()["pagination"]["total"] == 0
+
+
+def test_list_notes_filter_by_blogger_id(client: TestClient, db_session: Session) -> None:
+    """按博主筛选：只返回该博主 profile_url 前缀匹配的推文。"""
+    blogger = Blogger(username="测试博主", profile_url="https://www.xiaohongshu.com/user/profile/abc123", enabled=True)
+    db_session.add(blogger)
+    db_session.flush()
+
+    note1 = Note(task_id=1, platform_note_id="n1", title="博主推文1", source_url="https://www.xiaohongshu.com/user/profile/abc123/note1", city_code="nb", status="PROCESSED", review_status="PENDING", raw_data={})
+    note2 = Note(task_id=1, platform_note_id="n2", title="其他博主推文", source_url="https://www.xiaohongshu.com/user/profile/xyz789/note2", city_code="nb", status="PROCESSED", review_status="PENDING", raw_data={})
+    db_session.add_all([note1, note2])
+    db_session.commit()
+
+    response = client.get(f"/api/v1/notes?blogger_id={blogger.id}", headers=_auth())
+
+    assert response.status_code == 200
+    items = response.json()["data"]["items"]
+    assert len(items) == 1
+    assert items[0]["title"] == "博主推文1"
+
+
+def test_list_notes_filter_by_blogger_id_not_found(client: TestClient, db_session: Session) -> None:
+    """不存在的博主返回 404。"""
+    response = client.get("/api/v1/notes?blogger_id=99999", headers=_auth())
+    assert response.status_code == 404
+
+
+def test_list_notes_filter_by_blogger_without_profile_url(client: TestClient, db_session: Session) -> None:
+    """博主无 profile_url 时返回空列表。"""
+    blogger = Blogger(username="无主页博主", profile_url=None, enabled=True)
+    db_session.add(blogger)
+    db_session.flush()
+
+    note = Note(task_id=1, platform_note_id="n1", title="某推文", source_url="https://www.xiaohongshu.com/explore/xxx", city_code="nb", status="PROCESSED", review_status="PENDING", raw_data={})
+    db_session.add(note)
+    db_session.commit()
+
+    response = client.get(f"/api/v1/notes?blogger_id={blogger.id}", headers=_auth())
 
     assert response.status_code == 200
     assert response.json()["data"]["items"] == []

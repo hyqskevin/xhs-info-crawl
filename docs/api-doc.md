@@ -364,6 +364,46 @@
 
 - 描述：测试 OpenCLI 连接
 
+## 连接检测接口（仪表盘排障）
+
+> 关联 spec: `docs/superpowers/specs/2026-08-03-diagnostics-panel-design.md`
+> 三个端点独立探测，仪表盘三按钮对应单端点；`/snapshot` 是入页聚合。
+> 503 仅用于"环境问题"（opencli bin 缺失），业务态 logged_in=false 仍返回 200。
+
+### GET /api/v1/diagnostics/snapshot
+
+- 描述：三合一聚合（opencli 二进制 / whoami 登录 / Chrome CDP）。任一子探测失败不影响其它字段。
+- 响应：
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "opencli": { "ok": true, "bin": "opencli", "resolved": "/usr/local/bin/opencli", "reason": null, "version": "0.1.2" },
+    "xhs_login": { "logged_in": true, "username": "小红", "user_id": "u-1", "reason": null },
+    "xhs_pool": { "cdp_endpoint": "http://127.0.0.1:9222", "cdp_reachable": true, "sessions": [{"id": "s1"}], "reason": null },
+    "checked_at": "2026-08-03T01:00:00+00:00"
+  }
+}
+```
+
+### GET /api/v1/diagnostics/opencli
+
+- 描述：探测 opencli 二进制。
+- 响应 200：与 `/snapshot` 中 `opencli` 字段一致。
+- 响应 503：`{"message": "opencli 不在 PATH，请设置 OPENCLI_BIN 环境变量指向 opencli 的绝对路径"}`。
+
+### GET /api/v1/diagnostics/xhs-login
+
+- 描述：探测当前 Chrome 是否已登录小红书（调 `OpenCLIAdapter.check_login()`）。
+- 响应 200：`{ logged_in, username, user_id, reason }`；`reason` 取值 `auth_required / timeout / other / None`。
+
+### GET /api/v1/diagnostics/xhs-pool
+
+- 描述：探测 Chrome CDP 端点可达性 + 当前 opencli browser sessions。
+- 响应 200：`{ cdp_endpoint, cdp_reachable, sessions, reason }`；`cdp_reachable=false` 时 `reason` 含连接失败原因。
+
 ## 海报接口
 
 ### GET /api/v1/settings/poster-templates
@@ -517,7 +557,7 @@
 
 ### POST /api/v1/notes/:id/review
 
-- 描述：审核一篇推文，不依赖列表批量勾选。
+- 描述：审核一篇推文，不依赖列表批量勾选。推文本身即活动内容，即使无子活动也可审核通过。
 - 请求：`{"status": "APPROVED"}` 或 `{"status": "REJECTED"}`。
 - 成功响应：`{"id": 1, "review_status": "APPROVED"}`。
 - 其他状态返回 `422`；推文不存在、已删除或已合并返回 `404`。
@@ -527,12 +567,27 @@
 
 ### POST /api/v1/notes/batch/approve
 
-- 描述：批量审核通过。与单条 review 同一规则：无有效子活动的推文**跳过**并保持原状态，不整批失败。
-- 响应：`approved_ids` / `approved_count` / `skipped`（`[{id, reason}]`，无跳过时为空数组）。
+- 描述：批量审核通过。推文本身即活动内容，全部选中推文直接通过，不再跳过无子活动的推文。
+- 响应：`approved_ids` / `approved_count`。
 
 ### POST /api/v1/notes/:id/reprocess
 
 - 描述：将 `NO_ACTIVITIES` / `EMPTY_RESULT_RETRYABLE` 状态的推文重置为 `PENDING`（清除 OCR/活动记录），配合任务 restart 重新抓取；其他状态返回 `409`。
+
+### POST /api/v1/notes/:id/re-extract
+
+- 描述：对单条推文重新提取活动，使用已有 OCR 数据（不重抓图片），跑 MiniMax 提取 → validator 校验，软删除旧活动并写入新活动。
+- 响应：`{ status, activities, extracted_count, reason? }`，无活动时返回 `NO_ACTIVITIES` / `EMPTY_RESULT_RETRYABLE` 状态及原因。
+
+### POST /api/v1/notes/:id/activities
+
+- 描述：手动为推文新增一条子活动。
+- 请求：`{ name, location?, start_time?, end_time?, type, summary? }`
+- 响应：`201`，返回新创建的 Activity 对象。
+
+### GET /api/v1/notes（新增参数）
+
+- 新增 `blogger_id`（可选）：按博主筛选推文，通过 `Note.source_url` 匹配博主 `profile_url` 前缀。博主不存在返回 `404`；博主无 `profile_url` 返回空列表。
 
 ### POST /api/v1/duplicates/:id/merge
 

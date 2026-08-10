@@ -59,4 +59,17 @@ def summary(_:Annotated[dict,Depends(get_current_user)],db:Annotated[Session,Dep
         {'id': log.id, 'task_id': log.task_id, 'level': log.level, 'message': log.message, 'created_at': log.created_at}
         for log in db.scalars(select(TaskLog).order_by(TaskLog.id.desc()).limit(5)).all()
     ]
-    return {'code':200,'message':'success','data':{'weekly_notes_count':db.scalar(select(func.count()).select_from(Note).where(Note.review_status.notin_(['DELETED','MERGED']), Note.created_at >= week_start)) or 0,'weekly_activities_count':db.scalar(select(func.count()).select_from(Activity).where(Activity.deleted_at.is_(None), Activity.created_at >= week_start)) or 0,'pending_duplicates':db.scalar(select(func.count()).select_from(NoteDuplicateCandidate).where(NoteDuplicateCandidate.status=='pending')) or 0,'pending_review':db.scalar(select(func.count()).select_from(Note).where(Note.review_status=='PENDING')) or 0,'last_task':last_task,'recent_logs':recent_logs}}
+    note_a_alias = Note.__table__.alias("note_a_alias")
+    note_b_alias = Note.__table__.alias("note_b_alias")
+    pending_dup_total = db.scalar(
+        select(func.count())
+        .select_from(NoteDuplicateCandidate)
+        .join(note_a_alias, note_a_alias.c.id == NoteDuplicateCandidate.note_a_id)
+        .join(note_b_alias, note_b_alias.c.id == NoteDuplicateCandidate.note_b_id)
+        .where(
+            NoteDuplicateCandidate.status == 'pending',
+            note_a_alias.c.review_status.notin_(['DELETED', 'MERGED']),
+            note_b_alias.c.review_status.notin_(['DELETED', 'MERGED']),
+        )
+    ) or 0
+    return {'code':200,'message':'success','data':{'weekly_notes_count':db.scalar(select(func.count()).select_from(Note).where(Note.review_status.notin_(['DELETED','MERGED']), Note.created_at >= week_start)) or 0,'weekly_activities_count':db.scalar(select(func.count()).select_from(Activity).where(Activity.deleted_at.is_(None), Activity.created_at >= week_start)) or 0,'pending_duplicates':pending_dup_total,'pending_review':db.scalar(select(func.count()).select_from(Note).where(Note.review_status=='PENDING')) or 0,'last_task':last_task,'recent_logs':recent_logs}}

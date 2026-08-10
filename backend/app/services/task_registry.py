@@ -1,6 +1,6 @@
 """任务子进程注册表：跨进程跟踪正在运行的爬虫子进程 PID。
 
-后端 FastAPI 进程和 worker Celery 进程通过 `/tmp/xhs_task_registry.json` 共享状态：
+后端 FastAPI 进程和 worker Celery 进程通过项目内 `data/run/task_registry.json` 共享状态：
 - worker `run_crawl` 启动子进程时 register(task_id, pid)
 - worker 子进程退出时 unregister(task_id)
 - 用户点停止时，后端从 registry 找到 PID 发 SIGTERM
@@ -12,6 +12,10 @@
 }
 
 并发安全：使用 fcntl.flock 文件锁。
+
+路径配置：通过 Settings.task_registry_path 配置，默认 `./data/run/task_registry.json`，
+所有写操作限制在项目内，不污染 /tmp 等系统目录。模块加载时解析一次，
+测试可通过 monkeypatch REGISTRY_PATH 隔离。
 """
 
 from __future__ import annotations
@@ -23,7 +27,16 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-REGISTRY_PATH = Path("/tmp/xhs_task_registry.json")
+from app.core.config import get_settings
+
+
+def _resolve_registry_path() -> Path:
+    """从 Settings 解析注册表路径（项目内绝对路径）。"""
+    return get_settings().task_registry_file
+
+
+# 模块加载时解析一次；测试可 monkeypatch 此变量隔离
+REGISTRY_PATH: Path = _resolve_registry_path()
 
 
 @contextmanager

@@ -48,7 +48,8 @@ def test_environment_example_contains_phase_one_settings() -> None:
         "OCR_ENABLED=false",
         "OCR_LANGUAGE=ch",
         "OCR_MIN_CONFIDENCE=0.5",
-        "PADDLEOCR_MODEL_DIR=./data/models/paddleocr",
+        "PADDLE_PDX_CACHE_HOME=./data/paddlex",
+        "HF_HOME=./data/huggingface",
         "XHS_SEARCH_TARGET_COUNT=50",
         "XHS_SEARCH_SCROLL_MAX_ROUNDS=8",
         "XHS_DETAIL_SCROLL_MAX_ROUNDS=8",
@@ -67,11 +68,16 @@ def test_pipeline_progress_fields_and_retry_settings_exist() -> None:
     assert {"current_stage", "downloaded_notes", "ocr_notes", "extracted_notes", "current_note"}.issubset(CrawlTask.__table__.columns.keys())
 
 
-def test_runtime_scripts_load_root_environment_file() -> None:
+def test_runtime_scripts_do_not_source_env_file() -> None:
+    """dev-*.sh 不应 `set -a; source .env`，避免 os.environ 旧值覆盖 .env 新值。
+
+    详见 spec: docs/superpowers/specs/2026-08-10-dev-scripts-no-source-env-design.md
+    """
     for name in ("dev-api.sh", "dev-worker.sh", "dev-beat.sh", "dev-web.sh"):
         content = (PROJECT_ROOT / "scripts" / name).read_text(encoding="utf-8")
-        assert "set -a" in content
-        assert 'source "$ROOT_DIR/.env"' in content
+        assert "set -a" not in content, f"{name} 不应使用 set -a"
+        assert 'source "$ROOT_DIR/.env"' not in content, f"{name} 不应 source .env"
+        assert "grep" in content, f"{name} 应使用 grep 读取启动参数"
 
 
 def test_init_script_merges_new_example_variables_without_overwriting_env() -> None:

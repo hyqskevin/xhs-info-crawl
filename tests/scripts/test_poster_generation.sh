@@ -15,6 +15,11 @@ ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-Admin@123}"
 API="$BASE_URL/api/v1"
 
+# 项目根目录（脚本需从项目根运行）
+ROOT_DIR="$(pwd)"
+# 临时文件统一放项目内 data/tmp/，避免污染系统 /tmp
+mkdir -p "$ROOT_DIR/data/tmp"
+
 # 期望时附加 IMAGE_PATH=sample.jpg 测试 AI 识别场景（可选）
 # IMAGE_PATH="${IMAGE_PATH:-}"
 
@@ -52,7 +57,7 @@ AUTH=( -H "Authorization: Bearer $TOKEN" )
 # ----- 2. 列出模板 -----
 say "场景 1.1 GET /settings/poster-templates"
 curl -fsS "${AUTH[@]}" "$API/settings/poster-templates" \
-  | python3 -m json.tool > /tmp/poster_templates.json
+  | python3 -m json.tool > "$ROOT_DIR/data/tmp/poster_templates.json"
 ok "返回 JSON"
 
 # ----- 3. 手动创建模板 -----
@@ -72,7 +77,7 @@ ok "新建模板 id=$TID"
 
 # ----- 4. 重名拒绝 -----
 say "场景 1.3 重名 POST 拒绝"
-CODE=$(curl -s -o /tmp/dup.json -w "%{http_code}" -X POST "${AUTH[@]}" \
+CODE=$(curl -s -o "$ROOT_DIR/data/tmp/dup.json" -w "%{http_code}" -X POST "${AUTH[@]}" \
   "$API/settings/poster-templates" -H "Content-Type: application/json" \
   -d "{\"name\":\"$NAME\",\"html_template\":\"<x/>\"}")
 if [[ "$CODE" != "409" && "$CODE" != "422" ]]; then
@@ -139,7 +144,7 @@ assert_contains "$HTML" "示例推文" "预览含 items 渲染"
 
 # ----- 11. 推文图片列表 -----
 say "场景 2.5 GET /posters/note-images/{note_id}"
-NOTE_IMAGES=$(curl -s -o /tmp/note_imgs.json -w "%{http_code}" "${AUTH[@]}" "$API/posters/note-images/1")
+NOTE_IMAGES=$(curl -s -o "$ROOT_DIR/data/tmp/note_imgs.json" -w "%{http_code}" "${AUTH[@]}" "$API/posters/note-images/1")
 # 期望 200（即使 note 1 无图也返空数组）
 if [[ "$NOTE_IMAGES" != "200" ]]; then
   fail "GET /posters/note-images/1 期望 200 实得 $NOTE_IMAGES"

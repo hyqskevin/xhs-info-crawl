@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, DateTime, Index, String
+from sqlalchemy import Boolean, DateTime, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
@@ -15,13 +15,6 @@ class City(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
-class Keyword(Base):
-    __tablename__ = "keywords"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    word: Mapped[str] = mapped_column(String(128))
-    city_code: Mapped[str] = mapped_column(String(32), index=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-
 class Blogger(Base):
     __tablename__ = "bloggers"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -30,3 +23,4 @@ class Blogger(Base):
     profile_url: Mapped[str | None] = mapped_column(String(512), nullable=True, default=None)
     city_code: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default=None)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    max_notes_per_crawl: Mapped[int] = mapped_column(Integer, default=0)  # 0 = 不限制

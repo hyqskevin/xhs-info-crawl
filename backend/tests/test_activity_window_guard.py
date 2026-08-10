@@ -68,6 +68,20 @@ def test_validate_drops_activity_before_publish(db_session: Session) -> None:
     assert classify_zero_activity(note, activities) == "all_before_publish"
 
 
+def test_validate_keeps_activity_same_day_earlier_than_publish(db_session: Session) -> None:
+    # 同一天合法活动不再被误判：published=7/22 10:00 UTC，活动=7/22 02:00 UTC → 接受
+    note = _make_note(
+        db_session,
+        content="7月22日起开始",
+        published_at=datetime(2026, 7, 22, 10, 0, tzinfo=timezone.utc),
+    )
+    activities = [_act("2026-07-22T02:00:00+00:00", name="同日早场")]
+    accepted, rejected = validate_activities(note, activities)
+    assert len(accepted) == 1
+    assert rejected == []
+    assert classify_zero_activity(note, activities) == "ok"
+
+
 def test_classify_minimax_empty_when_body_has_signal_but_no_activities(
     db_session: Session,
 ) -> None:

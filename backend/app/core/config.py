@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -53,7 +54,25 @@ class Settings(BaseSettings):
     ocr_use_doc_orientation_classify: bool = False
     ocr_use_doc_unwarping: bool = False
     ocr_use_textline_orientation: bool = False
-    paddleocr_model_dir: Path = Path("./data/models/paddleocr")
+    # 笔记内图片并行 OCR 线程数（1-4，本地 PaddleOCR 模型，不占网络带宽）
+    ocr_parallel_workers: int = 2
+    # MiniMax API 并发调用数（1-4，默认 1 向后兼容，小范围并行避免 529 限流）
+    minimax_concurrency: int = 1
+    # PaddleOCR 3.x 模型缓存目录(通过环境变量 PADDLE_PDX_CACHE_HOME 生效)
+    paddle_pdx_cache_home: Path = Field(
+        Path("./data/paddlex"),
+        validation_alias="PADDLE_PDX_CACHE_HOME",
+    )
+    # HuggingFace 缓存目录(paddlex 传递依赖,通过环境变量 HF_HOME 生效)
+    huggingface_cache_home: Path = Field(
+        Path("./data/huggingface"),
+        validation_alias="HF_HOME",
+    )
+    # 前端构建产物目录(打包版用,开发模式不存在则跳过挂载)
+    frontend_dist_path: Path = Field(
+        Path("./frontend/dist"),
+        validation_alias="FRONTEND_DIST_PATH",
+    )
     xhs_search_target_count: int = 50
     xhs_search_scroll_max_rounds: int = 8
     xhs_detail_scroll_max_rounds: int = 8
@@ -67,6 +86,12 @@ class Settings(BaseSettings):
     export_dir_setting: Path = Field(Path("./data/exports"), validation_alias="EXPORT_DIR")
     archive_dir_setting: Path = Field(Path("./data/archive"), validation_alias="ARCHIVE_DIR")
     celery_folder_setting: Path = Field(Path("./data/celery"), validation_alias="CELERY_FOLDER")
+    # 任务子进程注册表路径（跨 API 与 worker 进程共享）
+    task_registry_path: Path = Field(
+        Path("./data/run/task_registry.json"), validation_alias="TASK_REGISTRY_PATH"
+    )
+    # 临时文件目录（如海报渲染的临时 HTML）
+    tmp_dir_setting: Path = Field(Path("./data/tmp"), validation_alias="TMP_DIR")
 
     def resolve_project_path(self, path: Path) -> Path:
         return path if path.is_absolute() else self.project_root / path
@@ -101,6 +126,18 @@ class Settings(BaseSettings):
     def celery_folder(self) -> Path:
         return self.resolve_project_path(self.celery_folder_setting)
 
+    @computed_field
+    @property
+    def task_registry_file(self) -> Path:
+        """解析后的任务注册表文件路径（绝对路径，在项目内）。"""
+        return self.resolve_project_path(self.task_registry_path)
+
+    @computed_field
+    @property
+    def tmp_dir(self) -> Path:
+        """解析后的临时文件目录（绝对路径，在项目内）。"""
+        return self.resolve_project_path(self.tmp_dir_setting)
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
@@ -120,10 +157,24 @@ class Settings(BaseSettings):
             self.archive_dir,
             self.celery_folder / "queue",
             self.celery_folder / "processed",
+            self.task_registry_file.parent,
+            self.tmp_dir,
+            self.resolve_project_path(self.paddle_pdx_cache_home),
+            self.resolve_project_path(self.huggingface_cache_home),
         ):
             path.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    # 关键:在 Python 进程启动时设置环境变量,确保 paddleocr/huggingface 不污染用户 home
+    # 之前只靠 scripts/dev-worker.sh 的 export,直接跑 uvicorn/celery 时会缺失
+    cache_home = str(settings.paddle_pdx_cache_home.resolve())
+    hf_home = str(settings.huggingface_cache_home.resolve())
+    os.environ.setdefault("PADDLE_PDX_CACHE_HOME", cache_home)
+    os.environ.setdefault("HF_HOME", hf_home)
+    # 确保目录存在
+    settings.paddle_pdx_cache_home.mkdir(parents=True, exist_ok=True)
+    settings.huggingface_cache_home.mkdir(parents=True, exist_ok=True)
+    return settings

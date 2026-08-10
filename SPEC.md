@@ -804,23 +804,21 @@
 
 ### 7.2 本地验证环境
 
-#### 7.2.1 启动 Chrome 并开启 CDP
+#### 7.2.1 浏览器 session 管理
 
-**macOS：**
+opencli 自管理浏览器 session（CDP 模式连已存在浏览器，daemon+扩展模式用扩展接管），项目代码不传 `--user-data-dir`，也不引导用户在 `$HOME` 下创建独立 profile。
+
+本地验证如需开启 CDP，仅指定调试端口与来源白名单即可，复用 Chrome 默认 profile：
 
 ```bash
+# macOS
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
   --remote-debugging-port=9222 \
-  --user-data-dir="$HOME/chrome-debug-profile" \
   --remote-allow-origins="*"
-```
 
-**Linux：**
-
-```bash
+# Linux
 google-chrome \
   --remote-debugging-port=9222 \
-  --user-data-dir="$HOME/chrome-debug-profile" \
   --remote-allow-origins="*"
 ```
 

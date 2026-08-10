@@ -61,13 +61,15 @@ OCR_MIN_CONFIDENCE=0.5
 OCR_USE_DOC_ORIENTATION_CLASSIFY=false
 OCR_USE_DOC_UNWARPING=false
 OCR_USE_TEXTLINE_ORIENTATION=false
-PADDLEOCR_MODEL_DIR=./data/models/paddleocr
+# paddleocr 3.x 通过环境变量决定模型缓存位置（Settings 启动时自动 setdefault）
+PADDLE_PDX_CACHE_HOME=./data/paddlex
+HF_HOME=./data/huggingface
 ```
 
 - `OCR_LANGUAGE=ch`：中文场景。
 - `OCR_MIN_CONFIDENCE`：低于该置信度的文字被过滤。
 - 三个方向/矫正开关默认关闭，减少本机 CPU 开销；海报倾斜或旋转明显时再开启。
-- 模型目录位于 `data/`，不会提交到 Git。首次运行会下载模型，需要网络。
+- 模型缓存目录 `data/paddlex/official_models/` 不会提交到 Git。首次运行会下载模型，需要网络。`PADDLE_PDX_CACHE_HOME` 由 `get_settings()` 在进程启动时设置,无需手动 export(之前只靠 `scripts/dev-worker.sh` 的 export,直接跑 uvicorn/celery 会缺失)。
 
 ## 安装验证
 

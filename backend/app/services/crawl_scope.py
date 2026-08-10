@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.blogger_city import BloggerCity
-from app.models.config import Blogger, City, Keyword
+from app.models.config import Blogger, City
 from app.models.keyword_group import KeywordGroup, KeywordGroupCity, KeywordGroupWord
 
 
@@ -20,15 +20,6 @@ from app.models.keyword_group import KeywordGroup, KeywordGroupCity, KeywordGrou
 class CrawlScope:
     keywords: list[str]
     bloggers: list[Blogger]
-
-
-def _resolve_from_legacy_keyword_table(db: Session, city: City) -> list[str]:
-    stmt = (
-        select(Keyword.word)
-        .where(Keyword.city_code == city.code, Keyword.enabled.is_(True))
-        .order_by(Keyword.id)
-    )
-    return list(db.scalars(stmt).all())
 
 
 def _resolve_from_keyword_groups(
@@ -59,17 +50,15 @@ def _resolve_from_keyword_groups(
 
 
 def resolve_effective_keywords(db: Session, city: City, task_params: dict) -> list[str]:
-    """规则（2026-07-25 语义修正）：
+    """规则：
     - "keywords" 键存在 → 显式词（去空白去重）；空列表 = 显式禁用关键词
     - "keyword_group_ids" 键存在 → 叠加组并集（显式词 ∪ 组词，都选都抓）
-    - 两个键都不存在（老任务 params）→ 退回城市 enabled 关键词表
-    注意：pydantic model_dump() 恒含这两个键，所以"键存在"即表达了用户选择意图；
-    旧实现以 "keywords" in task_params 直接返回，导致组分支不可达。
+    - 两个键都不存在 → 返回空列表（legacy keywords 表已废弃）
     """
     has_keywords_key = "keywords" in task_params
     has_groups_key = "keyword_group_ids" in task_params
     if not has_keywords_key and not has_groups_key:
-        return _resolve_from_legacy_keyword_table(db, city)
+        return []
     explicit = [word.strip() for word in (task_params.get("keywords") or []) if str(word).strip()]
     group_words: list[str] = []
     ids = task_params.get("keyword_group_ids") or []

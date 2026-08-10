@@ -20,6 +20,14 @@
   - 目标：当前只有 admin。升级为多账号平等（`Administrator` 组默认有全部权限），新增"账号管理"左侧 nav；账号可以分组、分组关联权限集；`sub` 角色划分保留为未来"子账号"扩展。
   - 验收：新 `users/groups/permissions/group_permissions/user_groups` 表；新 `AccountsView.vue`（左 nav 新增），含账号 / 分组 / 权限 三 tab；后端 `require_permission(code)` 替换 `require_admin`；前端 49+ 测试，build 通过；实操：用 admin 新建 editor 账号 → 限定权限 → editor 登录验证无权页面 403。
   - 关联：spec `docs/superpowers/specs/2026-07-21-multi-account-rbac-design.md`（已写）。
+- [x] 一次性数据库迁移 `seed_admin` 启动后兜底管理员
+  - 目标：当数据库完全为空（首次部署/重置）时，没有 admin 用户无法登录。当前 admin 凭据是手工 sql 新增。
+  - 验收：迁移 `0012_seed_admin.py` 在 upgrade 时若 `users` 表为空则插入 admin 用户；密码来自环境变量 `INITIAL_ADMIN_PASSWORD`，未设置则使用 `Admin@123` 且 WARNING 提示"生产环境必须更改"；脚本幂等：若 admin 已存在则跳过。重置 db（删除数据文件后跑 alembic upgrade head）后能用默认密码登录。
+  - 结果：迁移已实现并跑过真实 DB；实测 `alembic_version = 0012`，`users(1, admin, admin, 97-byte Argon2)`，Argon2.verify("Admin@123") → True。后端 316→321 passed（5 个 case：users 空 seed / 已存在跳过 / env 覆盖密码 / WARNING 日志 / downgrade 删除）。不更新 v0.2.0；累积到下个 release cycle。
+- [x] OPENCLI_BIN 入配置中心「系统配置」tab（用户 2026-08-08 反馈）
+  - 目标：opencli 不在 PATH 时只能在 `.env` 改 `OPENCLI_BIN`，期望配置中心可视化填写自定义绝对路径（已用 nvm 安装：`/Users/kevin_w/.nvm/versions/node/v22.18.0/bin/opencli`）。
+  - 验收：复用 2026-08-03 已实现的 `GET/PUT /settings/system-config` 端点，仅补 `opencli_bin` 一项（`_ENV_KEY_MAP` 与 `SystemConfigIn` 加字段）；`SettingsView.vue` 系统配置 tab 新增「抓取工具」分组（ElInput + ElTooltip "支持绝对路径，留空回退 PATH 解析"）；后端 +1 测试（PUT 写 .env + GET 回读），前端 +1 测试（input 渲染 + 保存回传 payload）；后端全量 / 前端 87+ 测试 / build 全绿；用户实操：登录 → 配置中心 → 系统配置 → 抓取工具 → 填路径 → 保存 → 仪表盘系统状态卡 opencli 探测显示 ✓。
+  - 结果：spec `docs/superpowers/specs/2026-08-08-system-config-opencli-bin-design.md`；后端 `tests/test_system_config_api.py` +1 用例（PUT → 200 → .env 含 `OPENCLI_BIN=/Users/.../bin/opencli` → GET 回读）；前端 `SettingsView.spec.ts` +1 用例（input 渲染 placeholder="opencli" + setValue 后 updateSystemConfig payload 含字段）；前端全量 88 passed、build 通过；生产端点 `GET /settings/system-config` 实测返回 18 字段含 `opencli_bin`；worker / beat 已重启（PID 见 `data/logs/`）。部署：`app/api/v1/*.py` 与 `app/services/*.py` 都需重启 worker 才能让新 `OPENCLI_BIN` 在抓取流程生效。
 - [x] 城市复用 + 关键词组一对多
   - 目标：城市 DB unique 约束；关键词组 `KeywordGroup` 实体（可挂多个城市、可包含多个关键词）；仪表盘关键词下拉改为多选关键词组；`crawl_scope.resolve_crawl_scope` 改写。
   - 验收：新 migration `0013_keyword_groups.py`；新 API `settings/keyword-groups` 与 `tasks/crawl {keyword_group_ids}`；旧字段 `keywords` 兼容保留；前端 `SettingsView` 增加关键词组 tab；后端 308+ 测试，前端 49+ 测试，build 通过。
@@ -38,15 +46,100 @@
   - 目标：当数据库完全为空（首次部署/重置）时，没有 admin 用户无法登录。当前 admin 凭据是手工 sql 新增。
   - 验收：迁移 `0012_seed_admin.py` 在 upgrade 时若 `users` 表为空则插入 admin 用户；密码来自环境变量 `INITIAL_ADMIN_PASSWORD`，未设置则使用 `Admin@123` 且 WARNING 提示"生产环境必须更改"；脚本幂等：若 admin 已存在则跳过。重置 db（删除数据文件后跑 alembic upgrade head）后能用默认密码登录。
   - 结果：迁移已实现并跑过真实 DB；实测 `alembic_version = 0012`，`users(1, admin, admin, 97-byte Argon2)`，Argon2.verify("Admin@123") → True。后端 316→321 passed（5 个 case：users 空 seed / 已存在跳过 / env 覆盖密码 / WARNING 日志 / downgrade 删除）。不更新 v0.2.0；累积到下个 release cycle。
-- [ ] 多小红书账号配置 + 抓取失效自动切换（2026-07-28 新增需求）
+- [x] 多小红书账号配置 + 抓取失效自动切换（2026-07-28 新增需求）
   - 目标：支持配置多个**小红书账号**（抓取用的登录态，不是系统登录账号——与上面"多账号体系 + RBAC"是两回事）。配置 navbar 下新开「账号配置」页面：登记多个小红书账号（名称/备注/登录状态/启用），抓取时优先用主账号；当某账号在抓取中失效（未登录/扫码超时/被风控验证）时，自动切换到下一个可用账号继续，全部失效才 PAUSED 等人工处理。
-  - 验收：左侧配置导航新增「账号配置」页（账号 CRUD + 登录状态展示 + 启用开关 + 排序/优先级）；抓取任务启动预检与运行中 `AuthenticationRequired` 时按优先级尝试切换账号并记 INFO 日志（"账号 A 失效，切换到账号 B"）；切换后 whoami/搜索/下载均走新账号会话；所有账号都失效才进入现有 PAUSED + 扫码引导流程；spec 先行，后端/前端测试与 build 全绿。
-  - 待讨论（写 spec 前需对齐）：①多账号登录态在 opencli/Chrome 侧如何隔离（多 Chrome profile？CDP 端口？opencli 是否支持多账号 store——此前真实抓取出现过 `user store was not found`）；②"失效"判定信号复用现有 `AuthenticationRequired`/`VerificationRequired` 还是细分；③切换粒度：任务级（本次任务换账号）还是笔记级（下一篇就换）。
+  - 结果：①新模型 `XhsAccount`（name/remark/session_name/login_status/enabled/priority）+ migration `0019_xhs_accounts.py`；②API `/api/v1/xhs-accounts` CRUD + `POST /{id}/check-login`（调 opencli whoami）；③`crawl_task.py` 改造为两阶段流水线（download_and_ocr → extract_and_save），`load_xhs_accounts` 按 priority 排序加载账号，主循环捕获 `AuthenticationRequired`/`VerificationRequired` 时 `account_index += 1` 切换到下一个账号并记 INFO 日志，全部失效抛 `CrawlHalted` 进入 PAUSED；④无账号配置时回退默认 session 'xhs-crawler'，向后兼容；⑤前端 SettingsView 新增「账号配置」tab（CRUD + 检测登录按钮 + 启用开关 + 优先级），DashboardView 发起抓取卡片新增「操作账号」下拉（可选，不选则按 priority 自动）。
+  - 验收：后端 `625 passed, 1 skipped`（+20 新 case：XhsAccount 模型/API/CRUD/check-login/笔记级切换/全部失效 PAUSED/无账号回退），前端 `106 passed`（+17 新 case：账号配置 tab CRUD/检测登录/Dashboard 操作账号下拉），build 通过；spec `docs/superpowers/specs/2026-08-10-multi-xhs-account-design.md`。
+  - 部署：**worker 必须重启**（改动 `app/tasks/crawl_task.py` + `app/services/opencli_adapter.py`）；执行 `alembic upgrade head`（migration 0019 建 xhs_accounts 表）；uvicorn `--reload` 自动加载 API 层。
+
+- [x] 仪表盘连接检测面板（opencli 连通 + 小红书号登录 + 浏览器池）
+  - 目标：仪表盘目前只有一个"后端服务"健康卡片，看不到 opencli 二进制是否在 PATH、当前 whoami 登录的是哪个小红书号、Chrome 是否能拉起。用户排障常卡在"opencli 找不到""未登录""Chrome 拉不起来"三件事，需要在仪表盘一发即查。
+  - 结果：新文件 `app/services/diagnostics.py`（`probe_opencli/probe_xhs_login/probe_xhs_pool/probe_snapshot`，异常隔离）；新路由 `app/api/v1/diagnostics.py` 注册 4 端点（snapshot + 3 单测）；`DashboardView.vue` 加「连接检测」卡片，三段独立检测按钮 + 失败原因文案 + loading 态；入页自动调 `/snapshot` 一次（不轮询）；`api.client.ts` 加 4 个调用方法；`docs/api-doc.md` 补「连接检测接口」章节。
+  - 验收：后端 `tests/test_diagnostics_api.py` 6 用例先红后绿（snapshot 三段 / opencli bin 缺失 503 / auth_required 200 / timeout 200 / CDP 不可达 200 / snapshot 隔离失败）；前端 `DashboardView.spec.ts` 3 新用例（卡片三段渲染 / 单按钮只更新一段 / 失败 reason 渲染）；后端 `532 passed, 1 skipped`（基线 526 + 6 新），前端 `79 passed`（基线 76 + 3 新），build 通过。spec `docs/superpowers/specs/2026-08-03-diagnostics-panel-design.md`。
+  - 部署：改动 `app/api/v1/*.py` 与 `app/services/*.py`（uvicorn `--reload` 自动加载），前端 Vite HMR 自动刷新；**worker/beat 不需重启**。
+
+- [x] 允许无子活动推文审核通过（用户 2026-08-03 反馈）
+  - 目标：推文本身即活动内容，即使 MiniMax 未提取出结构化子活动，也应能审核通过。移除 `review_note` 和 `batch/approve` 的活动数量前置校验。
+  - 结果：`notes.py` 的 `review_note` 删 `has_activity` 校验，`approve_notes` 删 `activity_counts` 查询与 `skipped` 跳过逻辑；`test_notes_api.py` 新增 `test_review_single_note_without_activities_succeeds`，`test_review_consistency.py` 的 `test_batch_approve_skips_notes_without_activities` 改为 `test_batch_approve_allows_notes_without_activities`；`docs/api-doc.md` 同步。
+  - 验收：后端 `530 passed, 1 skipped`（+2 新 case，-2 旧 case 替换），前端 `79 passed`，build 通过。spec `docs/superpowers/specs/2026-08-03-allow-review-without-activities-design.md`。
+  - 部署：改动 `app/api/v1/*.py`，uvicorn `--reload` 自动加载；**worker/beat 不需重启**。
+
+- [x] 推文编辑页展示活动 + 单条重提取 + 手动补充活动（用户 2026-08-03 新增需求）
+  - 目标：点击编辑推文后，弹窗/详情页能展示该推文下已有的子活动列表。无活动时提供"重新提取"按钮，对单条推文重新触发 OCR + MiniMax 活动提取（不重抓整篇推文）。同时支持手动新增活动（名称、地点、开始/结束时间、类型、简介）。
+  - 验收：推文编辑弹窗增加"识别活动"区域（列表展示已有活动 + 空态提示）；"重新提取"按钮触发后端 `POST /notes/{id}/re-extract` 端点，异步跑 OCR→MiniMax→validator 流程，返回提取结果；"手动添加"按钮弹出活动表单，提交后写入 `activities` 表关联当前推文；spec 先行，后端/前端测试与 build 全绿。
+
+- [x] 仪表盘连接检测与后端健康合并上移 + 配置中心移除 opencli 测试（用户 2026-08-03 新增需求）
+  - 目标：仪表盘当前"后端服务"健康卡片和"连接检测"卡片分开，占用空间。合并为一张"系统状态"卡片，放到"发起抓取"卡片上方，整合健康状态 + opencli/登录/Chrome 三项检测。配置中心 SettingsView 的 opencli 测试按钮不再需要（仪表盘已有）。
+  - 验收：仪表盘「系统状态」卡片位于抓取卡片上方，含后端健康（绿/红）+ 三项连接检测（opencli/登录/Chrome 池），每项可独立重测；配置中心 SettingsView 移除 opencli 测试按钮及相关代码；spec 先行，后端/前端测试与 build 全绿。
+
+- [x] 配置中心博主白名单支持每个博主抓取数量上限（用户 2026-08-03 新增需求）
+  - 目标：博主管理支持为每个博主设置 `max_notes_per_crawl`（每次抓取该博主最多取多少篇笔记），默认 0 表示不限制。抓取时按此值截断博主笔记列表。
+  - 验收：`Blogger` 模型新增 `max_notes_per_crawl` 字段（migration 0017）；博主 CRUD API 支持读写该字段；前端 SettingsView 博主表格新增"抓取上限"列（可编辑，默认 0=不限制）；`crawl_task` 博主循环在取到上限后停止该博主；spec 先行，后端/前端测试与 build 全绿；worker/beat 改动后重启。
+
+- [x] 活动管理增加按博主筛选推文（用户 2026-08-03 新增需求）
+  - 目标：活动管理（推文列表）页增加"博主"筛选下拉框，选择博主后只显示该博主发布的推文。博主来源为配置中心已录入的博主白名单（按城市过滤）。
+  - 验收：后端 `GET /notes` 新增 `blogger_id` 查询参数，通过 `Note.source_url` 匹配博主 `profile_url` 前缀；前端 ActivitiesView 工具栏新增"博主"下拉（ElSelect，按当前城市过滤博主列表，支持搜索）；选择博主后列表刷新，清空博主恢复全部；spec 先行，后端/前端测试与 build 全绿。
+
+- [x] 配置中心 env 级配置可视化 + 定时任务抓取批次配置（用户 2026-08-03 新增需求）
+  - 目标：将 `.env` 中的配置项搬到配置中心界面，单开"系统配置"tab，支持可视化配置活动识别模型（MiniMax）、PaddleOCR、单笔记流水线重试、小红书滚动策略、抓取数量。定时任务页新增"抓取批次"tab，展示抓取相关配置。
+  - 结果：后端 `GET/PUT /settings/system-config` 端点读写 `.env` 文件，保留注释和空行，支持 17 个配置项；前端 SettingsView 新增"系统配置"RadioButton + 5 组分组表单，SchedulesView 新增"抓取批次"RadioButton + 2 组表单；api/client.ts 新增 `systemConfig`/`updateSystemConfig` 方法。
+  - 验收：后端 `tests/test_system_config_api.py` 4 用例（GET 默认值 / PUT 更新 / 保留注释 / 追加新 key），前端 `SettingsView.spec.ts` +3 用例（系统配置 tab 展示 / 保存 / 隐藏新增按钮），`SchedulesView.spec.ts` +2 用例（抓取批次 tab 展示 / 保存）；后端 `544 passed, 1 skipped`（+4 新），前端 `87 passed`（+5 新），build 通过。spec `docs/superpowers/specs/2026-08-03-system-config-and-crawl-batch-design.md`。
+  - 部署：改动 `app/api/v1/*.py`，uvicorn `--reload` 自动加载；**worker/beat 不需重启**（仅 API 层改动）。注意：修改配置后需重启 worker/beat 才能让新配置在抓取流程中生效。
+
+- [x] 仪表盘抓取前先选定操作账号 + 扫码登录确认
+  - 目标：现在 Dashboard 抓取卡片默认走「当前 Chrome 已登录的小红书账号」，无法指定具体哪个。引入「操作账号」概念：抓取任务启动前用户在 Dashboard 选择本次抓取用哪个 XhsAccount 池（如有，按其内账号轮询；若只有一个账号，自动选中且不可改）；点击「开始抓取」后必须显式调用 whoami 探测，未登录则**阻塞任务发起**，弹「扫码登录」引导并自动打开 Chrome 登录页；用户在前端再次点击「检测登录」→ whoami 通过 → 才把任务真正下发到 Celery。
+  - 结果：随「多小红书账号配置 + 抓取失效自动切换」一并实现。①`/api/v1/xhs-accounts` CRUD + `POST /{id}/check-login`（whoami 探测）；②`POST /api/v1/tasks/crawl` 接受 `xhs_account_id`（可选），不传则按 priority 自动选第一个；③DashboardView 发起抓取卡片新增「操作账号」下拉（ElSelect，clearable，不选则自动按优先级）；④前端「检测登录」按钮调 `check-login` 端点，返回登录状态更新 ElTag 三态（unknown/logged_in/logged_out）。
+  - 验收：后端 `625 passed, 1 skipped`，前端 `106 passed`，build 通过。
+  - 与「多账号 + 自动切换」配套：本条是启动前预检+选定，后者是运行中切换。两者共用同一份 XhsAccount 配置，已合并实现。
+
 ## 后续优化
+
+- [x] MiniMax 批量并行集成到 crawl_task（2026-08-10 衔接项）
+  - 目标：`MiniMaxClient.extract_many_parallel` 方法已实现并测试通过（默认 `minimax_concurrency=1` 串行，最高 4 并行），但 `crawl_task.py` 仍保持逐篇 `extract_many` 调用。需把"逐篇下载→OCR→MiniMax→写DB"重构为"批量下载+OCR → 批量并行 MiniMax → 写DB"两阶段流水线，让 MiniMax 真正并行起来。
+  - 结果：`crawl_task.py` 拆分 `process_note` 为 `download_and_ocr`（阶段1：下载+OCR，产出 `StagedNote`）和 `extract_and_save`（阶段2：MiniMax 提取+写 Activity）；主循环先逐篇 `download_and_ocr` 收集 `staged_notes`，再批量调 `MiniMaxClient.extract_many_parallel(texts, reference)` 并行提取，结果按顺序 `zip` 回写 DB；并发数由 `settings.minimax_concurrency` 控制（默认 1=串行，向后兼容）；`run_stage` 包裹 `extract_many_parallel` 提供指数退避重试。
+  - 验收：后端 `625 passed, 1 skipped`（含多篇并行提取 + concurrency=1 串行回退 + 529 重试场景），前端 `106 passed`，build 通过；spec `docs/superpowers/specs/2026-08-10-crawl-pipeline-parallel-speedup-design.md`。
+  - 部署：**worker 必须重启**（改动 `app/tasks/crawl_task.py`）。
+
+- [x] 侧边 navbar 折叠收拢 + 子页面 tab 改二级目录（用户 2026-08-10 反馈）
+  - 目标：①侧边 navbar 支持向左折叠收拢（Element Plus `ElAside` + `ElMenu :collapse` 自带能力，点击按钮切换）；②配置中心和定时任务的页面内 RadioButton tab 改为 navbar 一级目录下的二级目录（`ElSubMenu` + `ElMenuItem`，组件自带）。
+  - 结果：`AppLayout.vue` 新增折叠按钮（`isCollapse` ref + localStorage 持久化），`ElAside :width` 动态切换 64px/220px，`ElMenu :collapse="isCollapse"`；配置中心改为 `ElSubMenu`（`/settings`）下挂 6 个 `ElMenuItem`（城市抓取配置/博主白名单/关键词组/博主组/账号配置/系统配置，各带 `?tab=` query）；定时任务改为 `ElSubMenu`（`/schedules`）下挂 2 个 `ElMenuItem`（定时任务列表/抓取批次配置）；`ElMenu router :default-active="route.fullPath"` 实现二级菜单直接路由。
+  - 验收：前端 `106 passed`（含 AppLayout 折叠按钮 + 二级菜单渲染 + localStorage 持久化用例），build 通过。
+  - 关联：Element Plus `ElMenu` 支持 `:collapse` 属性；`ElSubMenu` 支持二级目录。
 
 - [ ] 登录接口失败限流
   - 目标：`/auth/login` 无失败限流，内部工具风险低，但可加内存级失败计数 + 指数退避。
   - 验收：连续 5 次失败返回 429；测试覆盖。
+
+## 打包分发（2026-08-10 新增独立工作流）
+
+> 当前工程只能 git clone 安装，需打包成最终用户双击即用的桌面程序。spec `docs/superpowers/specs/2026-08-10-one-click-packaging-design.md`。
+
+- [x] P1 路径修复：废弃死配置 `paddleocr_model_dir` + 在 Python 代码设置 `PADDLE_PDX_CACHE_HOME`/`HF_HOME`
+  - 目标：审计发现 `paddleocr_model_dir` 是死配置（`paddleocr_adapter.py` 从未使用），且 `PADDLE_PDX_CACHE_HOME`/`HF_HOME` 只在 `scripts/dev-worker.sh` 里 export，直接跑 uvicorn/celery 会污染 `~/.paddlex/`（违反 AGENTS.md 硬约束）。
+  - 结果：删除 `config.py` 的 `paddleocr_model_dir`；新增 `paddle_pdx_cache_home`/`huggingface_cache_home` 字段（`Field` + `validation_alias`）；`get_settings()` 用 `os.environ.setdefault` 设置两个变量 + `mkdir` 创建目录；`.env.example`/`test_scaffold_contract.py`/`conftest.py`/`docs/paddleocr-setup.md` 同步更新；新增 `test_paddleocr_cache_env.py`（4 测试）+ 扩展 `test_config.py`（5 测试）；附带修复开发 DB 遗留的 keywords 表未 drop 问题。
+  - 验收：后端 `637 passed, 1 skipped, 0 failed`（含 P1 相关 12 测试 + `test_project_internal_writes` 静态扫描）；grep 确认生产代码无 `paddleocr_model_dir`/`PADDLEOCR_MODEL_DIR` 残留。
+  - 部署：**worker 必须重启**（改动 `app/core/config.py` Settings 字段 + `get_settings()`）。重启后 `get_settings()` 自动设置 `PADDLE_PDX_CACHE_HOME`/`HF_HOME`，paddleocr 不再污染 `~/.paddlex/`。
+  - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 7.3
+  - plan：`docs/superpowers/plans/2026-08-10-p1-paddleocr-path-fix.md`
+- [x] P2 后端静态文件挂载 + OCR 诊断接口
+  - 目标：让后端直接服务前端构建产物（打包版需要），并新增 OCR 诊断接口供启动器测试。
+  - 结果：`main.py` 新增 `mount_static_frontend_if_exists` 函数(dist 不存在则跳过;存在则挂载 `/assets` + SPA fallback);`lifespan` 启动时调用;Settings 新增 `frontend_dist_path` 字段;新增 `POST /api/v1/diagnostics/ocr` 接口(5 种状态:ocr_disabled/paddleocr_not_installed/model_not_found/inference_failed/ok);新增 `app/services/diagnostics_ocr.py` 服务;生成测试图 `tests/fixtures/ocr_test.png`。
+  - 验收：后端 `646 passed, 1 skipped, 0 failed`(含 P2 新增 9 测试 + `test_project_internal_writes` 静态扫描)。
+  - 部署：**API 需重启**(改动 `app/main.py` lifespan);worker 不需要重启(没改 worker 代码)。
+  - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 7.1 + § 7.2
+  - plan：`docs/superpowers/plans/2026-08-10-p2-static-mount-ocr-diagnostic.md`
+- [ ] P3 启动器 Python 后端（进程管理 + 状态服务 + env bootstrap）
+  - 目标：实现 `launcher/main.py`、`process_manager.py`、`status_server.py`、`env_bootstrap.py`、`port_finder.py`、`opencli_checker.py`、`ocr_installer.py`。
+  - 验收：端口探测、敏感配置自动生成（SECRET_KEY/INITIAL_ADMIN_PASSWORD）、API_HOST 强制 127.0.0.1、缓存环境变量设置、子进程启停心跳、状态服务各 endpoint；`launcher/tests/` 下 7 个测试文件全绿；服务进程重启提示。
+- [ ] P4 启动器 UI（Vue + Element Plus + Material Design 3）
+  - 目标：实现 `launcher/ui/` Vue 项目，遵循 M3 设计语言（暗色主题、语义化 CSS 变量、M3 组件映射、4dp 间距网格）。
+  - 验收：`launcher/ui/src/components/` 下 5 个组件（ServiceStatus/OpenCLIPanel/OcrPanel/LogViewer + App）；M3 设计令牌 CSS 变量；5 个组件 spec + 1 个设计令牌 spec 全绿；PyWebView 加载 `dist/index.html` 正常显示。
+- [ ] P5 打包脚本 + GitHub Actions
+  - 目标：实现 `scripts/package-macos.sh`、`scripts/package-windows.ps1`、`scripts/package-ocr-addon.sh`、`.github/workflows/release.yml`、`.github/workflows/release-ocr-addon.yml`。
+  - 验收：macOS/Windows 用户包 zip 产出；OCR 增强包 3 个平台 zip 产出；源码 zip 产出；打包脚本本地验证可执行（dry-run）。
+- [ ] P6 端到端验收 + 文档
+  - 目标：在干净环境验证打包版完整流程；补齐用户文档和开发者文档。
+  - 验收：macOS 解压双击 → 三进程运行 → 装 OpenCLI → 测试通过 → 打开网页；OCR 一键安装流程；端口冲突自动处理；`INSTALL.md`/`docs/deployment.md`/`README-USER.md` 更新；E2E 测试文档 `tests/test-launcher-startup.md` 等 3 个。
 
 
 <!-- 在此追加产品优化、体验改进、稳定性增强等事项。建议格式如下：
@@ -65,6 +158,67 @@
 - [ ] 在阶段一现有功能不回退的前提下完成迁移和验收。
 
 ## 已完成
+
+- [x] 废弃 legacy keywords 表 + 修复关键词组管理 bug + 配置入口去重（用户 2026-08-10 反馈）
+  - 目标：①legacy `keywords` 表与关键词组功能重复，废弃方案 A 彻底清理；②关键词组名称无法修改；③关键词输入后不展示；④定时任务"分组管理"tab 与配置中心重复。
+  - 结果：①后端新增 `PATCH /keyword-groups/{id}` 端点（更新 name/description/enabled，重名 409）；②删除 `Keyword` 模型、`_resolve_from_legacy_keyword_table`、`sync_keywords`、`normalize_keywords`、`KeywordIn`、`MODELS/SCHEMAS` 中的 keywords 项；③`CityIn` 移除 `keywords` 字段，`dump_city` 不再返回 keywords；④`/{kind}` 路由 Literal 从 `["keywords","bloggers"]` 改为 `["bloggers"]`；⑤migration `0018_drop_keywords_table.py` drop keywords 表；⑥前端 `KeywordGroupSettings.vue` 修复名称编辑（解除 disabled）+ 关键词输入（改用 `newWord` ref + `v-model`）+ save() 编辑时调 `patchKeywordGroup`；⑦`SettingsView.vue` 移除城市 tab 的关键词列和输入框；⑧`SchedulesView.vue` 移除"分组管理"tab（关键词组+博主组管理统一到配置中心）；⑨`SettingsView.vue` 新增"博主组"tab（内嵌 `BloggerGroupSettings` 组件）；⑩`api/client.ts` 新增 `patchKeywordGroup` 方法。
+  - 验收：新增 `tests/test_keyword_group_patch_and_legacy_cleanup.py` 9 用例（PATCH name/desc/enabled + 重名 409 + 不存在 404 + Keyword 模型删除 + legacy 函数删除 + 无兜底返回空 + 表已 drop），先红后绿；后端 `605 passed, 1 skipped`（+9 新，修复 15 个测试文件的 Keyword import），前端 `89 passed`，build 通过；spec `docs/superpowers/specs/2026-08-10-keyword-group-cleanup-and-bugfix-design.md`。
+  - 部署：**worker 必须重启**（改动 `app/services/crawl_scope.py` + `app/api/v1/tasks.py`）；执行 `alembic upgrade head`（migration 0018 drop keywords 表）；uvicorn `--reload` 自动加载 API 层。
+
+- [x] 修复 extract_activity_fields 非法日期导致 "day is out of range for month" 笔记处理崩溃（用户 2026-08-10 反馈抓取报错）
+  - 目标：抓取某笔记时报 `ValueError: day is out of range for month`，整篇笔记处理失败。
+  - 根因：`backend/app/services/extraction.py` 的 `extract_activity_fields` 函数三个 `datetime()` 构造（原第 69/71/73 行）未包 try/except。当文本/MiniMax 返回非法日期（如 "2月30日"、"11月31日"、"2026-02-30"、"13月1日"）时直接抛 ValueError 冒泡到 crawl_task。同文件 `normalize_activity_datetime` 已有 try/except 保护，但 `extract_activity_fields` 在调用 normalize 之前就构造 start_time，缺同样保护。
+  - 证据：DB TaskLog task_id=24 记录 `笔记处理失败 [https://...6a72d842000000002500a1de]：day is out of range for month`；复现脚本 `extract_activity_fields("2月30日", now, None)` 直接抛 ValueError。
+  - 结果：三个 datetime 构造分支（iso/cn/short_dot）各包 try/except，非法日期时 `start_time = None`，让后续 normalize 流程正常处理其他字段。
+  - 验收：`tests/test_pipeline_services.py` 新增 13 用例（12 非法日期参数化 + 1 合法日期无回归），先红后绿；后端 `597 passed, 1 skipped`（+13 新）；spec `docs/superpowers/specs/2026-08-10-extract-activity-fields-invalid-date-design.md`。
+  - 部署：改动 `app/services/extraction.py`，**worker 必须重启**才能让修复在抓取流程生效。
+
+- [x] 抓取流水线并行加速：图片并行 OCR + MiniMax 可配置并发（用户 2026-08-10 反馈"如何加快抓取进度"）
+  - 目标：单篇笔记流水线 OCR 串行（18 张图逐张识别）和 MiniMax 串行调用是主要瓶颈。实现笔记内图片并行 OCR（本地 PaddleOCR，不占网络带宽）和 MiniMax 可配置并发调用（默认 1，最高 4）。
+  - 结果：①`Settings` 新增 `ocr_parallel_workers`（默认 2，1-4）和 `minimax_concurrency`（默认 1，1-4）字段；②`OCRService` 新增 `process_batch` 方法（ThreadPoolExecutor 并行 + 子线程内重试，按输入顺序返回结果）；③`MiniMaxClient` 新增 `extract_many_parallel` 方法（并发数由 settings 控制，方法已就绪供后续 crawl_task 批量集成）；④`crawl_task.py` OCR 部分从串行循环改为 `process_batch` 并行调用；⑤系统配置 API `_ENV_KEY_MAP`/`SystemConfigIn` 新增两个字段；⑥`.env.example` 新增 `OCR_PARALLEL_WORKERS`/`MINIMAX_CONCURRENCY`；⑦前端 `SettingsView.vue` 系统配置 tab 新增"并行线程数"和"并发调用数"两个 ElInputNumber。
+  - 验收：新增 `tests/test_crawl_parallel_speedup.py` 11 用例（Settings 字段 4 + MiniMax 并行 3 + OCR 并行 4，先红后绿）；后端 `584 passed, 1 skipped`（+11 新），前端 `90 passed`，build 通过；spec `docs/superpowers/specs/2026-08-10-crawl-pipeline-parallel-speedup-design.md`。
+  - 部署：**worker 必须重启**才能让并行 OCR 在抓取流程生效（改动 `app/tasks/crawl_task.py` + `app/services/ocr.py`）；uvicorn `--reload` 已加载 API 层配置项；MiniMax 并行方法已实现但 crawl_task 暂保持逐篇调用（默认 concurrency=1 串行，后续可重构为两阶段流水线）。
+
+- [x] 所有写操作限制在项目内，不污染项目外部目录（用户 2026-08-10 反馈）
+  - 目标：整个项目写操作、下载的文件操作都只能放在项目内，不能污染项目外部文件目录。
+  - 结果：①`task_registry.py` 从 `/tmp/xhs_task_registry.json` 改为 `Settings.task_registry_path`（默认 `./data/run/task_registry.json`）；②`poster_renderer.py` 从 `tempfile.mkdtemp()` 改为 `Settings.tmp_dir`（默认 `./data/tmp/poster-render-*`）；③`dev-worker.sh` 新增 `HF_HOME=$ROOT_DIR/data/huggingface` 重定向（预防 huggingface_hub 写 `~/.cache/huggingface`）；④测试代码 `test_task_registry.py`/`test_adapter_popen_register.py` 改用 `tmp_path` fixture + monkeypatch；`test_system_config_api.py` 改用 `tmp_path`；⑤测试脚本 `test_poster_*.sh` 从 `/tmp/*` 改为 `$ROOT_DIR/data/tmp/*`；⑥文档 `SPEC.md`/`crawler-design.md` 删除 `$HOME/chrome-debug-profile` 示例；⑦`AGENTS.md` 新增"项目内写操作规范"章节；⑧`.env.example` 新增 `TASK_REGISTRY_PATH`/`TMP_DIR` 配置项。
+  - 验收：新增 `tests/test_project_internal_writes.py` 10 用例（Settings 字段 + task_registry 路径 + 静态扫描无硬编码外部路径）；后端 `573 passed, 1 skipped`（+10 新）；spec `docs/superpowers/specs/2026-08-10-project-internal-writes-only-design.md`。
+  - 部署：重启 worker 后生效（task_registry 路径变更 + HF_HOME 新增）。
+
+- [x] dev-*.sh 不再 source 全部 .env，配置中心改 .env 后进程自动刷新（用户 2026-08-10 反馈"又回去了"）
+  - 目标：配置中心改 OPENCLI_BIN 后，仪表盘先临时生效但 uvicorn --reload 重启后又回退旧值。根因：dev-api/worker/beat/web.sh 用 `set -a; source .env` 全量注入 os.environ，pydantic_settings 优先级 `os.environ > .env`，reload 后新子进程从父进程继承旧 os.environ，.env 新值被覆盖。
+  - 结果：四个 dev 脚本改为 `grep` 只读启动参数（API_HOST/API_PORT/CELERY_*/WEB_*），不 source 全部 .env；pydantic_settings 直接读 .env 文件，不受 os.environ 干扰；`update_system_config` 已有的 `os.environ` 同步 + `cache_clear` 保留，让 API 层立即生效。
+  - 验收：新增 `tests/test_dev_scripts.py` 3 用例（脚本存在 / 不 source .env / 用 grep 读参数），更新 `test_scaffold_contract.py` 旧测试从"应 source"改为"不应 source"；后端 `563 passed, 1 skipped`；实测 uvicorn 重启后 `/diagnostics/opencli` 返回 `ok: true, bin: /Users/hanamaki_mac_mini/.local/bin/opencli`，`/diagnostics/xhs-pool` 返回 `mode: daemon, daemon_running: true, extension_connected: true`。spec `docs/superpowers/specs/2026-08-10-dev-scripts-no-source-env-design.md`。
+  - 部署：重启 uvicorn + worker + beat 后生效。
+
+- [x] 修复同一天合法活动被误判为 `all_before_publish`（用户 2026-08-03 反馈）
+  - 目标：note id 337（"在xhs用这招！机票便宜"）正文含"7月27日起"被 MiniMax 解析为 `2026-07-27T00:00/T10:00`，与 published_at `2026-07-27 19:14:25` 同日但早于发布时分，validator 用 `parsed < published_at` 严格小于直接拒绝并归为 `all_before_publish`。改为按"日期"判断：活动 `start_time` 与 `published_at` 同日或之后即视为合法；仅严格更早的日期（含跨日更早）才拒绝。
+  - 结果：`activity_validator` 的 `validate_activities` 与 `_is_before_publish` 改为 `parsed.date() < published.date()` 判定（先 `.astimezone(UTC)`），`classify_zero_activity` 同步；`all_before_publish` 分支追加一条 INFO 日志列出被拒绝的 `(name, start_time)` 前 5 条 + 总数，便于后续复盘；既有 `test_validate_skips_activity_before_published_at` 行为不变（前一日仍拒绝）。
+  - 验收：`tests/test_activity_validator.py` 新增 6 用例（先红后绿：同日早场接受 / 次日接受 / 前一日拒绝 / 跨时区同日接受 / class 同日早场→ok / class 前一日→all_before_publish）+ `tests/test_activity_window_guard.py` 1 用例（DB fixture 同日早场接受）；后端 `526 passed, 1 skipped`（基线 518 + 7 新），前端 `76 passed`，无回归。spec `docs/superpowers/specs/2026-08-03-same-day-activity-accept-design.md`。
+  - 部署：改动 `app/services/*.py` 与 `app/tasks/*.py`，**worker/beat 必须重启**才能生效。
+
+- [x] 配置中心 env 级配置可视化 + 定时任务抓取批次配置（用户 2026-08-03 新增需求）
+  - 目标：将 `.env` 中的配置项搬到配置中心界面，单开"系统配置"tab，支持可视化配置活动识别模型（MiniMax）、PaddleOCR、单笔记流水线重试、小红书滚动策略、抓取数量。定时任务页新增"抓取批次"tab，展示抓取相关配置。
+  - 结果：后端 `GET/PUT /settings/system-config` 端点读写 `.env` 文件，保留注释和空行，支持 17 个配置项；前端 SettingsView 新增"系统配置"RadioButton + 5 组分组表单，SchedulesView 新增"抓取批次"RadioButton + 2 组表单；api/client.ts 新增 `systemConfig`/`updateSystemConfig` 方法。
+  - 验收：后端 `tests/test_system_config_api.py` 4 用例，前端 `SettingsView.spec.ts` +3 用例，`SchedulesView.spec.ts` +2 用例；后端 `544 passed, 1 skipped`（+4 新），前端 `87 passed`（+5 新），build 通过。spec `docs/superpowers/specs/2026-08-03-system-config-and-crawl-batch-design.md`。
+  - 部署：改动 `app/api/v1/*.py`，uvicorn `--reload` 自动加载；**worker/beat 不需重启**（仅 API 层改动）。注意：修改配置后需重启 worker/beat 才能让新配置在抓取流程中生效。
+
+- [x] 允许无子活动推文审核通过 + 推文编辑页活动展示/重提取/手动补充 + 仪表盘系统状态合并 + 博主抓取上限 + 活动管理博主筛选（用户 2026-08-03 新增需求包）
+  - 目标：①允许无子活动推文审核通过；②推文编辑弹窗展示活动列表 + 单条重提取 + 手动新增活动；③仪表盘"后端服务"和"连接检测"合并为"系统状态"卡片并上移；④配置中心移除 opencli 测试按钮；⑤博主支持 `max_notes_per_crawl` 抓取数量上限；⑥活动管理增加按博主筛选推文。
+  - 结果：①`notes.py` 移除审核活动数量校验；②新增 `POST /notes/{id}/re-extract` 和 `POST /notes/{id}/activities` 端点，前端 ActivitiesView 编辑弹窗增加活动区域；③DashboardView 新增"系统状态"卡片整合后端健康 + opencli/登录/Chrome 检测；④SettingsView 移除 opencli 测试按钮；⑤`Blogger` 模型新增 `max_notes_per_crawl` 字段（migration 0017），`crawl_task` 截断超出上限的笔记，前端 SettingsView 新增"抓取上限"列；⑥`GET /notes` 新增 `blogger_id` 参数，前端 ActivitiesView 新增博主下拉筛选。
+  - 验收：后端 `540 passed, 1 skipped`（+3 新 case），前端 `82 passed`（+3 新 case），build 通过。spec `docs/superpowers/specs/2026-08-03-note-edit-activities-re-extract-design.md`、`docs/superpowers/specs/2026-08-03-allow-review-without-activities-design.md`、`docs/superpowers/specs/2026-08-03-activities-blogger-filter-design.md`、`docs/superpowers/specs/2026-08-03-diagnostics-panel-design.md`。
+
+- [x] 博主层错误纳入抓取熔断（stale page identity 等 CDP 异常自动停）
+  - 目标：博主抓取出现 `Page not found: ... — stale page identity` 等 OpenCLI 异常时，任务不会傻跑下去；按 `consecutive_note_failure_limit` 阈值熔断 PAUSED，提示「CDP session / 浏览器标签页可能已过期」。
+  - 验收：[crawl_task.py](file:///Users/kevin_w/Documents/github/xhs-info-crawl/backend/app/tasks/crawl_task.py) 博主循环把异常计入 `consecutive_failures`，达到阈值抛 `CrawlHalted`；成功时清零；`AuthenticationRequired`/`ExecutionStopped`/`ExecutionSuperseded` 不计入。后端 `518 passed, 1 skipped`（4 新 case：博主连续失败熔断/成功重置/`AuthenticationRequired` 不计入/阈值可配）；worker + beat 已重启（2026-08-03 09:19）。
+  - 关联 spec：[2026-07-30-blogger-circuit-breaker-design.md](file:///Users/kevin_w/Documents/github/xhs-info-crawl/docs/superpowers/specs/2026-07-30-blogger-circuit-breaker-design.md)；测试 [test_blogger_circuit_breaker.py](file:///Users/kevin_w/Documents/github/xhs-info-crawl/backend/tests/test_blogger_circuit_breaker.py)。
+
+- [x] 修复仪表盘与去重审核列表候选数不一致
+  - 目标：`/api/v1/dashboard/summary` 的 `pending_duplicates` 与 `/api/v1/duplicates` 列表对得上；避免悬空 pending 候选（指向已 DELETED/MERGED 推文）让前端 `Promise.all` 整体 reject 导致列表空白。
+  - 验收：后端 `/duplicates` 默认 join 过滤两侧 Note 可见（DELETED/MERGED）；`dashboard.summary.pending_duplicates` 同步同口径；新增 `scripts/prune_orphan_duplicates.py` 一次性脚本（已对生产 DB 跑：`scanned=4 pruned=1 kept=3`）；前端 `DuplicatesView.vue` 改用 `Promise.allSettled`，单侧 404 跳过本条而不是全失败；后端 514 passed / 1 skipped，前端 15 文件 / 76 tests。
+  - 关联 spec：`docs/superpowers/specs/2026-07-30-duplicates-orphan-candidates-design.md`。
+  - 实现：`backend/app/api/v1/duplicates.py`、`backend/app/api/v1/dashboard.py`、`backend/app/services/prune_orphan_duplicates.py`、`backend/scripts/prune_orphan_duplicates.py`、`frontend/src/views/DuplicatesView.vue`。
+  - 测试：`backend/tests/test_duplicates_orphan.py`（4 case）、`backend/tests/test_prune_orphan_duplicates.py`（5 case）、`frontend/src/views/DuplicatesView.spec.ts` 加 "skips orphan pair without dropping the rest"。
 
 - [x] 日志时间东八区显示 + 笔记连续失败熔断（2026-07-28 用户反馈）
   - 目标：①仪表盘「最近任务日志」、抓取日志页创建时间、日志抽屉时间显示的是 UTC（差 8h），要按东八区显示；②笔记处理连续失败时系统只记日志继续跑，要捕获这类系统性问题并把「扫码 / 中止」决策权交给用户。

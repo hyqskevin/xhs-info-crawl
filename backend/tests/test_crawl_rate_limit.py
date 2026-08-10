@@ -40,7 +40,7 @@ def _seed_task(db: Session, keywords: list[str], token: str) -> CrawlTask:
 
 def _install_fakes(db_session: Session, monkeypatch, queries: list[str]) -> None:
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def check_login(self):

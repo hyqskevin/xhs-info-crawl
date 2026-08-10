@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token
-from app.models.config import City, Keyword
+from app.models.config import City
 
 
 def _auth() -> dict[str, str]:
@@ -16,12 +16,11 @@ def test_list_cities_empty(client: TestClient) -> None:
     assert resp.json()["data"] == []
 
 
-def test_create_city_with_keywords(client: TestClient, db_session: Session) -> None:
+def test_create_city(client: TestClient, db_session: Session) -> None:
     resp = client.post(
         "/api/v1/settings/cities",
         json={
             "name": "杭州",
-            "keywords": ["周末", "展览"],
             "recent_filter": "一周内",
             "enabled": True,
         },
@@ -31,31 +30,28 @@ def test_create_city_with_keywords(client: TestClient, db_session: Session) -> N
     body = resp.json()["data"]
     assert body["name"] == "杭州"
     assert "code" in body
-    assert sorted(body["keywords"]) == ["周末", "展览"]
 
-    # DB 也确认关键词已写入
+    # DB 确认城市已写入
     city = db_session.query(City).filter_by(name="杭州").one()
-    words = {row.word for row in db_session.query(Keyword).filter_by(city_code=city.code).all()}
-    assert words == {"周末", "展览"}
+    assert city.code == body["code"]
 
 
-def test_update_city_replaces_keywords(client: TestClient) -> None:
+def test_update_city(client: TestClient) -> None:
     create = client.post(
         "/api/v1/settings/cities",
-        json={"name": "深圳", "keywords": ["旧词"]},
+        json={"name": "深圳"},
         headers=_auth(),
     )
     city_id = create.json()["data"]["id"]
 
     upd = client.put(
         f"/api/v1/settings/cities/{city_id}",
-        json={"name": "深圳", "keywords": ["新词A", "新词B"], "recent_filter": "半年内"},
+        json={"name": "深圳", "recent_filter": "半年内"},
         headers=_auth(),
     )
     assert upd.status_code == 200, upd.text
     data = upd.json()["data"]
     assert data["recent_filter"] == "半年内"
-    assert sorted(data["keywords"]) == ["新词A", "新词B"]
 
 
 def test_update_city_rejects_unknown_id(client: TestClient) -> None:
@@ -65,23 +61,6 @@ def test_update_city_rejects_unknown_id(client: TestClient) -> None:
         headers=_auth(),
     )
     assert resp.status_code == 404
-
-
-def test_delete_city_cascades_keywords(client: TestClient, db_session: Session) -> None:
-    create = client.post(
-        "/api/v1/settings/cities",
-        json={"name": "成都", "keywords": ["k1", "k2"]},
-        headers=_auth(),
-    )
-    city_id = create.json()["data"]["id"]
-    city_code = create.json()["data"]["code"]
-
-    delete = client.delete(f"/api/v1/settings/cities/{city_id}", headers=_auth())
-    assert delete.status_code == 200
-
-    # 关键词表被级联清掉
-    remaining = db_session.query(Keyword).filter_by(city_code=city_code).count()
-    assert remaining == 0
 
 
 def test_opencli_config_endpoint(client: TestClient) -> None:

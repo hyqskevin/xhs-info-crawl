@@ -16,6 +16,10 @@ router = APIRouter(prefix="/duplicates", tags=["duplicates"])
 User = Annotated[dict, Depends(get_current_user)]
 DB = Annotated[Session, Depends(get_db)]
 
+# 注：与 dashboard.summary 的 pending_duplicates 计数必须保持一致；
+# 因此过滤两侧 Note 可见（不允许 DELETED/MERGED）。
+_NOT_VISIBLE_STATUSES = ["DELETED", "MERGED"]
+
 
 class MergeIn(BaseModel):
     keep: Literal["a", "b"] = "a"
@@ -27,9 +31,28 @@ def dump(value):
 
 @router.get("")
 def candidates(_: User, db: DB, status: str | None = None, page: int = 1, page_size: int = 20):
+    note_a_alias = Note.__table__.alias("note_a_alias")
+    note_b_alias = Note.__table__.alias("note_b_alias")
     filters = [NoteDuplicateCandidate.status == (status or "pending")]
-    total = db.scalar(select(func.count()).select_from(NoteDuplicateCandidate).where(*filters)) or 0
-    rows = db.scalars(select(NoteDuplicateCandidate).where(*filters).offset((page - 1) * page_size).limit(page_size)).all()
+    visible_clause = Note.review_status.notin_(_NOT_VISIBLE_STATUSES)
+    base_stmt = (
+        select(NoteDuplicateCandidate)
+        .join(note_a_alias, note_a_alias.c.id == NoteDuplicateCandidate.note_a_id)
+        .join(note_b_alias, note_b_alias.c.id == NoteDuplicateCandidate.note_b_id)
+        .where(note_a_alias.c.review_status.notin_(_NOT_VISIBLE_STATUSES))
+        .where(note_b_alias.c.review_status.notin_(_NOT_VISIBLE_STATUSES))
+        .where(*filters)
+    )
+    total = db.scalar(select(func.count()).select_from(NoteDuplicateCandidate).join(
+        note_a_alias, note_a_alias.c.id == NoteDuplicateCandidate.note_a_id
+    ).join(
+        note_b_alias, note_b_alias.c.id == NoteDuplicateCandidate.note_b_id
+    ).where(
+        note_a_alias.c.review_status.notin_(_NOT_VISIBLE_STATUSES),
+        note_b_alias.c.review_status.notin_(_NOT_VISIBLE_STATUSES),
+        *filters
+    )) or 0
+    rows = db.scalars(base_stmt.order_by(NoteDuplicateCandidate.id).offset((page - 1) * page_size).limit(page_size)).all()
     return {"code": 200, "message": "success", "data": {"items": [dump(row) for row in rows]}, "pagination": {"page": page, "page_size": page_size, "total": total}}
 
 

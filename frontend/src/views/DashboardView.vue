@@ -12,6 +12,7 @@ const status = ref<'loading' | 'ok' | 'error'>('loading')
 const database = ref('SQLite')
 const cities = ref<any[]>([])
 const bloggers = ref<any[]>([])
+const xhsAccounts = ref<any[]>([])
 const submitting = ref(false)
 const restarting = ref(false)
 const openingLogin = ref(false)
@@ -19,6 +20,43 @@ const stopping = ref(false)
 const lastTask = ref<any>(null)
 const summary = ref<any>({ weekly_notes_count: 0, weekly_activities_count: 0, pending_duplicates: 0, recent_logs: [] })
 const analytics = ref<any>({ recent_tasks: [], status_counts: {}, schedules: [] })
+const diagnostics = ref<any>({
+  opencli: { ok: null, bin: 'opencli', resolved: null, reason: null, version: null },
+  xhs_login: { logged_in: null, username: null, user_id: null, reason: null },
+  xhs_pool: { mode: 'unknown', version: null, version_tuple: null, daemon_running: null, extension_connected: null, profiles: [], daemon_port: null, cdp_endpoint: '', cdp_reachable: null, sessions: [], reason: null },
+  checked_at: null,
+})
+const diagLoading = ref<Record<string, boolean>>({ opencli: false, xhs_login: false, xhs_pool: false })
+const reasonText = (key: string | null | undefined) => {
+  switch (key) {
+    case 'auth_required': return '小红书未登录，请在 Chrome 完成扫码后重试'
+    case 'timeout': return '检测超时：可能未登录或浏览器等待扫码'
+    case 'other': return '检测失败，详见服务器日志'
+    default: return key || ''
+  }
+}
+const xhsLoginTag = computed(() => {
+  const v = diagnostics.value.xhs_login
+  if (v.logged_in === true) return { type: 'success' as const, text: `已登录: ${v.username || v.user_id || '未知账号'}` }
+  if (v.logged_in === false) {
+    if (v.reason === 'timeout') return { type: 'warning' as const, text: '登录检测超时' }
+    return { type: 'danger' as const, text: '未登录' }
+  }
+  return { type: 'info' as const, text: '未检测' }
+})
+const xhsPoolTag = computed(() => {
+  const v = diagnostics.value.xhs_pool
+  if (v.mode === 'daemon') {
+    if (v.daemon_running && v.extension_connected) return { type: 'success' as const, text: `Daemon 已连接 · ${(v.profiles || []).length} profiles` }
+    return { type: 'danger' as const, text: 'Daemon 未就绪' }
+  }
+  if (v.mode === 'cdp') {
+    if (v.cdp_reachable === true) return { type: 'success' as const, text: `CDP 可达 · ${(v.sessions || []).length} sessions` }
+    if (v.cdp_reachable === false) return { type: 'danger' as const, text: 'CDP 不可达' }
+  }
+  if (v.mode === 'unknown') return { type: 'danger' as const, text: '未就绪' }
+  return { type: 'info' as const, text: '未检测' }
+})
 const scheduleStatusMeta: Record<string, { type: string; label: string }> = {
   COMPLETED: { type: 'success', label: '成功' },
   COMPLETED_WITH_ERRORS: { type: 'warning', label: '部分成功' },
@@ -32,7 +70,7 @@ const weekdayLabels: Record<number, string> = { 1: '一', 2: '二', 3: '三', 4:
 const pad2 = (n: number) => String(n).padStart(2, '0')
 const scheduleStatusOf = (task: any) => scheduleStatusMeta[task?.status] || { type: 'info', label: task?.status || '' }
 let pollTimer: ReturnType<typeof setInterval> | undefined
-const form = reactive({ city: '', keyword_group_ids: [] as number[], recent_filter: '一周内', blogger_ids: [] as number[] })
+const form = reactive({ city: '', keyword_group_ids: [] as number[], recent_filter: '一周内', blogger_ids: [] as number[], xhs_account_id: null as number | null })
 const recentFilters = ['不限', '一天内', '一周内', '半年内']
 const cityKeywordGroups = ref<any[]>([])
 const selectedCity = computed(() => cities.value.find((city) => city.code === form.city))
@@ -65,10 +103,21 @@ watch(() => form.city, async () => {
 })
 
 async function initialize() {
-  const [cityResponse, bloggerResponse] = await Promise.all([api.settings('cities'), api.settings('bloggers'), loadLatestTask()])
-  cities.value = cityResponse.data.data.filter((city: any) => city.enabled)
-  bloggers.value = bloggerResponse.data.data
-  if (cities.value.length) form.city = cities.value[0].code
+  try {
+    const [cityResponse, bloggerResponse] = await Promise.all([api.settings('cities'), api.settings('bloggers')])
+    cities.value = (cityResponse.data.data || []).filter((city: any) => city.enabled)
+    bloggers.value = bloggerResponse.data.data || []
+    if (cities.value.length) form.city = cities.value[0].code
+  } catch {
+    cities.value = []
+    bloggers.value = []
+  }
+  try {
+    const accountResponse = await api.xhsAccounts()
+    xhsAccounts.value = (accountResponse.data.data || []).filter((account: any) => account.enabled)
+  } catch {
+    xhsAccounts.value = []
+  }
   try {
     const result = await getHealth()
     database.value = result.database === 'sqlite' ? 'SQLite' : result.database
@@ -76,7 +125,34 @@ async function initialize() {
   } catch {
     status.value = 'error'
   }
+  loadDiagnosticsSnapshot()
+  loadLatestTask()
   pollTimer = setInterval(loadLatestTask, 3000)
+}
+
+async function loadDiagnosticsSnapshot() {
+  try {
+    const res = await api.diagnosticsSnapshot()
+    diagnostics.value = { ...diagnostics.value, ...res.data.data }
+  } catch (error: any) {
+    // 单点失败不应影响仪表盘其他卡片
+    diagnostics.value.checked_at = new Date().toISOString()
+  }
+}
+
+async function probe(section: 'opencli' | 'xhs_login' | 'xhs_pool') {
+  diagLoading.value[section] = true
+  try {
+    const fn = section === 'opencli' ? api.diagnosticsOpencli : section === 'xhs_login' ? api.diagnosticsXhsLogin : api.diagnosticsXhsPool
+    const res = await fn()
+    diagnostics.value = { ...diagnostics.value, [section]: res.data.data, checked_at: new Date().toISOString() }
+  } catch (error: any) {
+    const reason = error.response?.data?.message || error.response?.data?.detail || '检测失败'
+    diagnostics.value = { ...diagnostics.value, [section]: { ...diagnostics.value[section], ok: section === 'opencli' ? false : diagnostics.value[section].ok, logged_in: section === 'xhs_login' ? false : diagnostics.value[section].logged_in, mode: section === 'xhs_pool' ? 'unknown' : diagnostics.value[section].mode, cdp_reachable: section === 'xhs_pool' ? false : diagnostics.value[section].cdp_reachable, reason }, checked_at: new Date().toISOString() }
+    ElMessage.error(reason)
+  } finally {
+    diagLoading.value[section] = false
+  }
 }
 
 async function loadLatestTask() {
@@ -97,7 +173,9 @@ async function start() {
   }
   submitting.value = true
   try {
-    await api.createTask({ type: 'mixed', city: form.city, keyword_group_ids: form.keyword_group_ids, recent_filter: form.recent_filter, blogger_ids: form.blogger_ids })
+    const payload: Record<string, any> = { type: 'mixed', city: form.city, keyword_group_ids: form.keyword_group_ids, recent_filter: form.recent_filter, blogger_ids: form.blogger_ids }
+    if (form.xhs_account_id != null) payload.xhs_account_id = form.xhs_account_id
+    await api.createTask(payload)
     ElMessage.success('抓取任务已提交，可到任务日志查看进度')
     await loadLatestTask()
   } catch (error: any) {
@@ -169,6 +247,35 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
       <ElCard shadow="never" class="stat-card"><div class="stat-card__content"><span>待审核去重</span><strong>{{ summary.pending_duplicates }}</strong></div></ElCard>
     </div>
 
+    <ElCard shadow="never" class="system-status-card">
+      <template #header><div class="card-title"><ElIcon><Connection /></ElIcon><strong>系统状态</strong></div></template>
+      <div class="system-status-grid">
+        <div class="system-item">
+          <span class="system-label">后端服务</span>
+          <ElTag :type="status === 'ok' ? 'success' : status === 'loading' ? 'info' : 'danger'">{{ status === 'ok' ? '运行正常' : status === 'loading' ? '检测中' : '不可用' }}</ElTag>
+          <span class="system-detail">{{ database }}</span>
+        </div>
+        <div class="system-item">
+          <span class="system-label">opencli</span>
+          <ElTag :type="diagnostics.opencli.ok === true ? 'success' : diagnostics.opencli.ok === false ? 'danger' : 'info'">{{ diagnostics.opencli.ok === true ? `已就绪${diagnostics.opencli.version ? ' v' + diagnostics.opencli.version : ''}` : diagnostics.opencli.ok === false ? '缺失' : '未检测' }}</ElTag>
+          <ElButton size="small" :loading="diagLoading.opencli" @click="probe('opencli')">检测</ElButton>
+          <p v-if="diagnostics.opencli.ok === false && diagnostics.opencli.reason" class="system-reason">{{ diagnostics.opencli.reason }}</p>
+        </div>
+        <div class="system-item">
+          <span class="system-label">小红书登录</span>
+          <ElTag :type="xhsLoginTag.type">{{ xhsLoginTag.text }}</ElTag>
+          <ElButton size="small" :loading="diagLoading.xhs_login" @click="probe('xhs_login')">检测</ElButton>
+          <p v-if="diagnostics.xhs_login.logged_in === false && diagnostics.xhs_login.reason" class="system-reason">{{ reasonText(diagnostics.xhs_login.reason) }}</p>
+        </div>
+        <div class="system-item">
+          <span class="system-label">浏览器连接</span>
+          <ElTag :type="xhsPoolTag.type">{{ xhsPoolTag.text }}</ElTag>
+          <ElButton size="small" :loading="diagLoading.xhs_pool" @click="probe('xhs_pool')">检测</ElButton>
+          <p v-if="diagnostics.xhs_pool.reason" class="system-reason">{{ diagnostics.xhs_pool.reason }}</p>
+        </div>
+      </div>
+    </ElCard>
+
     <ElCard shadow="never" class="crawl-card">
       <template #header><div class="card-title"><ElIcon><VideoPlay /></ElIcon><strong>发起抓取</strong></div></template>
       <ElForm label-position="top">
@@ -182,6 +289,11 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
               <span style="float:left">{{ blogger.username }}</span>
               <span v-if="!blogger.profile_url" style="float:right;color:var(--el-color-warning);font-size:12px">待补充</span>
             </ElOption>
+          </ElSelect>
+        </ElFormItem>
+        <ElFormItem label="操作账号">
+          <ElSelect v-model="form.xhs_account_id" clearable placeholder="不选则自动按优先级">
+            <ElOption v-for="account in xhsAccounts" :key="account.id" :label="account.name" :value="account.id" />
           </ElSelect>
         </ElFormItem>
         </div>
@@ -253,8 +365,6 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
       </div>
       <ElEmpty v-else description="暂无任务日志" :image-size="60" />
     </ElCard>
-
-    <ElCard shadow="never" class="status-card"><div class="status-card__content"><ElIcon :size="28" color="var(--el-color-primary)"><Connection /></ElIcon><div><strong>后端服务</strong><p>{{ status === 'ok' ? '服务运行正常' : status === 'loading' ? '正在检查服务' : '服务暂不可用' }}</p></div><ElTag :type="status === 'ok' ? 'success' : status === 'loading' ? 'info' : 'danger'">{{ database }}</ElTag></div></ElCard>
   </div>
 </template>
 
@@ -285,4 +395,13 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 .crawl-grid :deep(.el-select) { width: 100%; }
 .crawl-actions { display: flex; align-items: center; gap: 16px; color: var(--el-text-color-secondary); }
 @media (max-width: 800px) { .crawl-grid { grid-template-columns: 1fr; } }
+.system-status-card { margin-bottom: 20px; }
+.system-status-grid { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 16px; }
+@media (max-width: 1000px) { .system-status-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px) { .system-status-grid { grid-template-columns: 1fr; } }
+.system-item { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--el-border-color-light); border-radius: 6px; }
+.system-label { color: var(--el-text-color-secondary); font-size: 13px; }
+.system-item .el-button { align-self: flex-start; }
+.system-reason { color: var(--el-color-danger); font-size: 12px; margin: 4px 0 0; line-height: 1.4; word-break: break-word; }
+.system-detail { color: var(--el-text-color-secondary); font-size: 12px; }
 </style>

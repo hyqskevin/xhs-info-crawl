@@ -9,10 +9,16 @@ const rows = ref<any[]>([])
 const dialog = ref(false)
 const editingId = ref<number | null>(null)
 const form = reactive<any>({ name: '', description: '', city_codes: [], words: [], enabled: true })
+const newWord = ref('')
 
 async function load() {
-  const resp = await api.keywordGroups()
-  rows.value = resp.data.data.items || []
+  try {
+    const resp = await api.keywordGroups()
+    rows.value = resp.data.data.items || []
+  } catch (error) {
+    ElMessage.error('关键词组数据加载失败')
+    rows.value = []
+  }
 }
 
 function resetForm() {
@@ -45,6 +51,11 @@ async function save() {
     return
   }
   if (editingId.value) {
+    await api.patchKeywordGroup(editingId.value, {
+      name: form.name.trim(),
+      description: form.description?.trim() || null,
+      enabled: form.enabled,
+    })
     await api.updateKeywordGroupCities(editingId.value, form.city_codes)
     await api.updateKeywordGroupWords(editingId.value, form.words)
     ElMessage.success('已更新')
@@ -69,11 +80,14 @@ async function remove(row: any) {
   await load()
 }
 
-function addWord(value: string) {
-  const w = value.trim()
-  if (!w || form.words.includes(w)) return false
+function addWordFromInput() {
+  const w = newWord.value.trim()
+  if (!w || form.words.includes(w)) {
+    newWord.value = ''
+    return
+  }
   form.words.push(w)
-  return true
+  newWord.value = ''
 }
 
 function removeWord(value: string) {
@@ -132,7 +146,7 @@ onMounted(load)
     <ElDialog v-model="dialog" :title="editingId ? '编辑关键词组' : '新增关键词组'" width="640">
       <ElForm label-width="90px">
         <ElFormItem label="名称">
-          <ElInput v-model="form.name" :disabled="!!editingId" placeholder="例如：展览" aria-label="关键词组名称" />
+          <ElInput v-model="form.name" placeholder="例如：展览" aria-label="关键词组名称" />
         </ElFormItem>
         <ElFormItem label="说明">
           <ElInput v-model="form.description" placeholder="可选" aria-label="说明" />
@@ -142,9 +156,10 @@ onMounted(load)
             <ElTag v-for="word in form.words" :key="word" closable @close="removeWord(word)">{{ word }}</ElTag>
           </div>
           <ElInput
-            :model-value="''"
+            v-model="newWord"
             placeholder="回车添加"
-            @keyup.enter="(e: any) => { if (addWord(e.target.value)) e.target.value = '' }"
+            aria-label="关键词输入"
+            @keyup.enter="addWordFromInput"
           />
         </ElFormItem>
         <ElFormItem label="挂载城市">

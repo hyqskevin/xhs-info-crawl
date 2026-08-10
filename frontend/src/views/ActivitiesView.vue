@@ -6,6 +6,7 @@ import { api } from '@/api/client'
 
 const rows = ref<any[]>([])
 const cities = ref<any[]>([])
+const bloggers = ref<any[]>([])
 const total = ref(0)
 const drawer = ref(false)
 const editDialog = ref(false)
@@ -15,28 +16,37 @@ const noteEditFromDetail = ref(false)
 const detail = ref<any>({ activities: [], images: [] })
 const form = reactive<any>({})
 const noteForm = reactive<any>({ title: '', content: '', city_code: '', published_at: null, source_url: '' })
+const noteActivities = ref<any[]>([])
+const reExtracting = ref(false)
+const addActivityDialog = ref(false)
+const addActivitySaving = ref(false)
+const newActivityForm = reactive({ name: '', location: '', start_time: null as Date | null, end_time: null as Date | null, type: '其他', summary: '' })
 const editingId = ref<number | null>(null)
 const imageUrls = ref<string[]>([])
 const imagesLoading = ref(false)
 const selectedRows = ref<any[]>([])
 const batchDeleting = ref(false)
 const batchApproving = ref(false)
-const filters = reactive({ city: '', review_status: '', keyword: '', dates: [] as string[], page: 1, page_size: 20 })
+const filters = reactive({ city: '', review_status: '', keyword: '', blogger_id: null as number | null, dates: [] as string[], page: 1, page_size: 20 })
 const statusLabels: Record<string, string> = { PENDING: '待审核', APPROVED: '已通过', REJECTED: '未通过', RAW: '待审核', NEEDS_REVIEW: '待完善' }
 const statusTypes: Record<string, string> = { PENDING: 'primary', APPROVED: 'success', REJECTED: 'danger', RAW: 'primary', NEEDS_REVIEW: 'warning' }
 const cityNames = computed(() => Object.fromEntries(cities.value.map((city) => [city.code, city.name])))
+const bloggerFilteredByCity = computed(() => {
+  if (!filters.city) return bloggers.value
+  return bloggers.value.filter((blogger: any) => (blogger.city_codes || []).includes(filters.city))
+})
 const detailDrawerSize = computed(() => window.innerWidth < 768 ? '95%' : '70%')
 
 function queryParams() {
-  const params: any = { city: filters.city || undefined, review_status: filters.review_status || undefined, start_date: filters.dates?.[0] || undefined, end_date: filters.dates?.[1] || undefined, page: filters.page, page_size: filters.page_size }
+  const params: any = { city: filters.city || undefined, review_status: filters.review_status || undefined, start_date: filters.dates?.[0] || undefined, end_date: filters.dates?.[1] || undefined, blogger_id: filters.blogger_id || undefined, page: filters.page, page_size: filters.page_size }
   const kw = filters.keyword?.trim()
   if (kw) params.keyword = kw
   return params
 }
 async function load() { const response = await api.notes(queryParams()); rows.value = response.data.data.items; total.value = response.data.pagination.total }
-async function initialize() { cities.value = (await api.settings('cities')).data.data; await load() }
+async function initialize() { try { const [cityResp, bloggerResp] = await Promise.all([api.settings('cities'), api.settings('bloggers')]); cities.value = cityResp.data.data || []; bloggers.value = bloggerResp.data.data || [] } catch { cities.value = []; bloggers.value = [] } await load() }
 function applyFilters() { filters.page = 1; load() }
-function resetFilters() { Object.assign(filters, { city: '', review_status: '', keyword: '', dates: [], page: 1, page_size: 20 }); load() }
+function resetFilters() { Object.assign(filters, { city: '', review_status: '', keyword: '', blogger_id: null, dates: [], page: 1, page_size: 20 }); load() }
 function formatTime(value: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '待确认' }
 function formatDate(value: string | null) { return value ? new Date(value).toISOString().slice(0, 10) : '待确认' }
 
@@ -64,6 +74,44 @@ async function show(id: number) {
 function openEdit(activity: any) { editingId.value = activity.id; Object.keys(form).forEach(key => delete form[key]); Object.assign(form, activity); editDialog.value = true }
 async function saveActivity() { await api.updateActivity(editingId.value!, { ...form, start_time: form.start_time ? new Date(form.start_time).toISOString() : null, end_time: form.end_time ? new Date(form.end_time).toISOString() : null }); editDialog.value = false; await show(detail.value.id); await load(); ElMessage.success('活动已更新') }
 async function removeActivity(activity: any) { await ElMessageBox.confirm('确认删除该识别活动？', '删除确认', { type: 'warning' }); await api.deleteActivity(activity.id); await show(detail.value.id); await load() }
+async function reExtractNote() {
+  reExtracting.value = true
+  try {
+    const response = await api.reExtractNote(noteForm.id)
+    noteActivities.value = response.data.data.activities || []
+    const count = response.data.data.extracted_count || 0
+    ElMessage.success(count > 0 ? `已提取 ${count} 条活动` : '未提取到活动')
+  } catch { ElMessage.error('活动提取失败，请重试') }
+  finally { reExtracting.value = false }
+}
+function openAddActivity() {
+  Object.assign(newActivityForm, { name: '', location: '', start_time: null, end_time: null, type: '其他', summary: '' })
+  addActivityDialog.value = true
+}
+async function saveNewActivity() {
+  if (!newActivityForm.name.trim() || !newActivityForm.type) { ElMessage.warning('请填写活动名称和类型'); return }
+  addActivitySaving.value = true
+  try {
+    const response = await api.createNoteActivity(noteForm.id, {
+      name: newActivityForm.name.trim(),
+      location: newActivityForm.location,
+      start_time: newActivityForm.start_time ? new Date(newActivityForm.start_time).toISOString() : null,
+      end_time: newActivityForm.end_time ? new Date(newActivityForm.end_time).toISOString() : null,
+      type: newActivityForm.type,
+      summary: newActivityForm.summary,
+    })
+    noteActivities.value.push(response.data.data)
+    addActivityDialog.value = false
+    ElMessage.success('活动已添加')
+  } catch { ElMessage.error('活动添加失败') }
+  finally { addActivitySaving.value = false }
+}
+async function removeEditActivity(activity: any) {
+  await ElMessageBox.confirm('确认删除该识别活动？', '删除确认', { type: 'warning' })
+  await api.deleteActivity(activity.id)
+  noteActivities.value = noteActivities.value.filter(a => a.id !== activity.id)
+  await load()
+}
 async function openNoteEdit(note: any, fromDetail = false) {
   const value = fromDetail ? note : (await api.note(note.id)).data.data
   Object.assign(noteForm, {
@@ -74,6 +122,7 @@ async function openNoteEdit(note: any, fromDetail = false) {
     published_at: value.published_at ? new Date(value.published_at) : null,
     source_url: value.source_url || '',
   })
+  noteActivities.value = value.activities || []
   noteEditFromDetail.value = fromDetail
   noteEditDialog.value = true
 }
@@ -115,6 +164,7 @@ onUnmounted(releaseImages)
   <ElCard shadow="never" class="page-card">
     <div class="toolbar filters-toolbar">
       <ElSelect v-model="filters.city" placeholder="城市" clearable class="filter-item"><ElOption v-for="city in cities" :key="city.code" :label="city.name" :value="city.code" /></ElSelect>
+      <ElSelect v-model="filters.blogger_id" placeholder="博主" clearable filterable class="filter-item" @change="applyFilters"><ElOption v-for="blogger in bloggerFilteredByCity" :key="blogger.id" :label="blogger.username" :value="blogger.id" /></ElSelect>
       <ElInput v-model="filters.keyword" placeholder="搜索推文标题或正文" clearable class="filter-item" aria-label="关键字" @keyup.enter="applyFilters" />
       <ElDatePicker v-model="filters.dates" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="推文开始日期" end-placeholder="推文结束日期" aria-label="发布时间" />
       <ElSelect v-model="filters.review_status" placeholder="审核状态" clearable class="filter-item"><ElOption label="待审核" value="PENDING" /><ElOption label="已通过" value="APPROVED" /><ElOption label="已驳回" value="REJECTED" /></ElSelect>
@@ -153,9 +203,33 @@ onUnmounted(releaseImages)
       <ElFormItem label="发布时间"><ElDatePicker v-model="noteForm.published_at" aria-label="发布时间" type="datetime" placeholder="待确认" /></ElFormItem>
       <ElFormItem label="原文链接"><ElInput v-model="noteForm.source_url" aria-label="原文链接" disabled /></ElFormItem>
     </ElForm>
+    <ElDivider />
+    <h4 style="margin: 0 0 12px">识别活动</h4>
+    <ElTable v-if="noteActivities.length" :data="noteActivities" size="small">
+      <ElTableColumn prop="name" label="名称" min-width="140" />
+      <ElTableColumn prop="location" label="地点" min-width="120" />
+      <ElTableColumn label="开始时间" min-width="150"><template #default="scope">{{ formatTime(scope.row.start_time) }}</template></ElTableColumn>
+      <ElTableColumn label="结束时间" min-width="150"><template #default="scope">{{ scope.row.end_time ? formatTime(scope.row.end_time) : '-' }}</template></ElTableColumn>
+      <ElTableColumn label="操作" width="150"><template #default="scope"><ElButton text :icon="Edit" @click="openEdit(scope.row)">编辑</ElButton><ElButton text type="danger" @click="removeEditActivity(scope.row)">删除</ElButton></template></ElTableColumn>
+    </ElTable>
+    <ElEmpty v-else description="暂无识别活动">
+      <ElButton :loading="reExtracting" @click="reExtractNote">重新提取</ElButton>
+    </ElEmpty>
+    <ElButton type="primary" style="margin-top: 12px" @click="openAddActivity">+ 手动添加活动</ElButton>
     <template #footer><ElButton @click="noteEditDialog=false">取消</ElButton><ElButton type="primary" :loading="noteSaving" @click="saveNote">保存推文</ElButton></template>
   </ElDialog>
   <ElDialog v-model="editDialog" title="编辑识别活动" width="680"><ElForm label-width="90px"><ElFormItem label="名称"><ElInput v-model="form.name" aria-label="活动名称" /></ElFormItem><ElFormItem label="地点"><ElInput v-model="form.location" aria-label="活动地点" /></ElFormItem><ElFormItem label="摘要"><ElInput v-model="form.summary" aria-label="活动摘要" type="textarea" /></ElFormItem></ElForm><template #footer><ElButton @click="editDialog=false">取消</ElButton><ElButton type="primary" @click="saveActivity">保存</ElButton></template></ElDialog>
+  <ElDialog v-model="addActivityDialog" title="手动添加活动" width="520px">
+    <ElForm label-width="90px">
+      <ElFormItem label="活动名称" required><ElInput v-model="newActivityForm.name" aria-label="新活动名称" maxlength="256" /></ElFormItem>
+      <ElFormItem label="地点"><ElInput v-model="newActivityForm.location" aria-label="新活动地点" maxlength="256" /></ElFormItem>
+      <ElFormItem label="开始时间"><ElDatePicker v-model="newActivityForm.start_time" aria-label="新活动开始时间" type="datetime" placeholder="待确认" /></ElFormItem>
+      <ElFormItem label="结束时间"><ElDatePicker v-model="newActivityForm.end_time" aria-label="新活动结束时间" type="datetime" placeholder="待确认" /></ElFormItem>
+      <ElFormItem label="类型" required><ElSelect v-model="newActivityForm.type" aria-label="新活动类型"><ElOption label="展览" value="展览" /><ElOption label="市集" value="市集" /><ElOption label="演出" value="演出" /><ElOption label="赛事" value="赛事" /><ElOption label="讲座" value="讲座" /><ElOption label="工作坊" value="工作坊" /><ElOption label="亲子" value="亲子" /><ElOption label="户外" value="户外" /><ElOption label="美食" value="美食" /><ElOption label="其他" value="其他" /></ElSelect></ElFormItem>
+      <ElFormItem label="简介"><ElInput v-model="newActivityForm.summary" aria-label="新活动简介" type="textarea" :rows="3" maxlength="2000" /></ElFormItem>
+    </ElForm>
+    <template #footer><ElButton @click="addActivityDialog=false">取消</ElButton><ElButton type="primary" :loading="addActivitySaving" @click="saveNewActivity">保存</ElButton></template>
+  </ElDialog>
 </template>
 
 <style scoped>

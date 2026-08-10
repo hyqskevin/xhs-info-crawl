@@ -11,6 +11,11 @@ ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-Admin@123}"
 API="$BASE_URL/api/v1"
 
+# 项目根目录（脚本需从项目根运行）
+ROOT_DIR="$(pwd)"
+# 临时文件统一放项目内 data/tmp/，避免污染系统 /tmp
+mkdir -p "$ROOT_DIR/data/tmp"
+
 TOKEN=$(curl -fsS -X POST "$API/auth/login" -H "Content-Type: application/json" \
   -d "{\"username\":\"$ADMIN_USERNAME\",\"password\":\"$ADMIN_PASSWORD\"}" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["access_token"])')
@@ -47,11 +52,11 @@ TASK_ID=$(echo "$TASK" | python3 -c 'import sys,json;print(json.load(sys.stdin)[
 # 3. preview HTML
 HTML=$(curl -fsS "${AUTH[@]}" "$API/poster-tasks/$TASK_ID/preview" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["html"])')
-echo "$HTML" > /tmp/multi-render.html
+echo "$HTML" > "$ROOT_DIR/data/tmp/multi-render.html"
 
 # 4. http server
 PORT=8988
-( cd /tmp && python3 -m http.server "$PORT" >/dev/null 2>&1 ) &
+( cd "$ROOT_DIR/data/tmp" && python3 -m http.server "$PORT" >/dev/null 2>&1 ) &
 SERVER_PID=$!
 trap "kill $SERVER_PID 2>/dev/null || true" EXIT
 sleep 1

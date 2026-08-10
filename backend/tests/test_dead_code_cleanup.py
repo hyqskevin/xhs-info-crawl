@@ -71,7 +71,7 @@ def _imported_names(path: Path) -> set[str]:
     ("app/api/v1/poster_tasks.py", {"City"}),
     ("app/api/v1/reports.py", {"BytesIO", "func"}),
     ("app/services/poster_renderer.py", {"json"}),
-    ("app/scripts/dedupe_cities.py", {"defaultdict"}),
+    ("app/scripts/dedupe_cities.py", {"defaultdict", "Keyword"}),
 ])
 def test_unused_imports_removed(rel_path: str, forbidden: set[str]) -> None:
     names = _imported_names(BACKEND_ROOT / rel_path)

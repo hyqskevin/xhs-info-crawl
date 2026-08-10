@@ -89,6 +89,25 @@ cd backend && pytest -q             # 后端
 cd frontend && npm run test -- --run  # 前端
 ```
 
+## 项目内写操作规范
+
+**所有写操作（文件下载、缓存、临时文件、日志、数据库）必须限制在项目根目录内，不得污染项目外部目录（`/tmp`、`~/.paddlex`、`~/.cache`、`$HOME` 等）。**
+
+### 硬约束
+
+- 生产代码禁止硬编码 `/tmp/`、`Path.home()`、`expanduser('~')`、`tempfile.gettempdir()`
+- 第三方库缓存目录必须通过环境变量重定向到项目内：
+  - `PADDLE_PDX_CACHE_HOME=$ROOT_DIR/data/paddlex`（PaddleOCR）
+  - `HF_HOME=$ROOT_DIR/data/huggingface`（huggingface_hub）
+- 临时文件用 `Settings.tmp_dir`（默认 `./data/tmp`），不用 `tempfile.mkdtemp()`
+- 跨进程共享文件用 `Settings.task_registry_path`（默认 `./data/run/task_registry.json`）
+- 测试代码用 pytest `tmp_path` fixture，不直接写 `/tmp`
+- 测试脚本用 `$ROOT_DIR/data/tmp/`，不硬编码 `/tmp`
+
+### 验证
+
+`backend/tests/test_project_internal_writes.py` 静态扫描生产代码，确保无硬编码外部路径。新增服务代码后跑该测试确认合规。
+
 ## 服务进程管理
 
 `uvicorn` 在本地通常带 `--reload` 启动，源码改动后会自动重载。但 **celery worker、Celery beat、定时任务、消费消息队列的后台进程不会自动重载**：

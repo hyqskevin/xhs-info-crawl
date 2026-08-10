@@ -40,7 +40,7 @@ def _is_before_publish(activity: dict[str, Any], published_at: datetime | None) 
         parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except ValueError:
         return False
-    return parsed.astimezone(timezone.utc) < published_at.astimezone(timezone.utc)
+    return parsed.astimezone(timezone.utc).date() < published_at.astimezone(timezone.utc).date()
 
 
 def classify_zero_activity(note: Any, extracted: list[dict[str, Any]]) -> str:
@@ -65,13 +65,18 @@ def validate_activities(
     *,
     future_window_days: int = 60,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """返回 (accepted, rejected_messages)。"""
+    """返回 (accepted, rejected_messages)。
+
+    判定口径：按"日期"比较，活动 ``start_time`` 与 ``note.published_at`` 同日或之后即视为合法；
+    仅当活动日期严格早于推文发布时间所在日期才拒绝（避免同日合法活动被误杀）。
+    """
     published_at = getattr(note, "published_at", None)
     if published_at is None:
         return list(activities), []
     accepted: list[dict[str, Any]] = []
     rejected: list[str] = []
     published_utc = published_at.astimezone(timezone.utc)
+    published_date = published_utc.date()
     for activity in activities:
         raw = activity.get("start_time")
         if not raw:
@@ -83,9 +88,10 @@ def validate_activities(
             rejected.append(f"无法解析 start_time={raw!r}")
             continue
         parsed_utc = parsed.astimezone(timezone.utc)
-        if parsed_utc < published_utc:
+        if parsed_utc.date() < published_date:
             rejected.append(
-                f"活动 {activity.get('name')!r} 日期 {raw} 早于推文发布时间 {published_at.isoformat()}"
+                f"活动 {activity.get('name')!r} 日期 {parsed_utc.date().isoformat()} "
+                f"早于推文发布时间 {published_date.isoformat()}"
             )
             continue
         # 不再硬性限定 "活动距离发布时间" 上限；保留 future_window_days 参数兼容性，无副作用

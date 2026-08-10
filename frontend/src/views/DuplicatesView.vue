@@ -7,10 +7,24 @@ const rows = ref<any[]>([])
 
 async function load() {
   const items = (await api.duplicates()).data.data.items
-  rows.value = await Promise.all(items.map(async (row: any) => {
-    const [left, right] = await Promise.all([api.note(row.note_a_id), api.note(row.note_b_id)])
-    return { ...row, note_a: left.data.data, note_b: right.data.data }
-  }))
+  const resolved = await Promise.all(
+    items.map(async (row: any) => {
+      const [left, right] = await Promise.allSettled([
+        api.note(row.note_a_id),
+        api.note(row.note_b_id),
+      ])
+      // 任一侧不可见（候选指向已 MERGED/DELETED 推文）则丢弃本条
+      if (left.status === 'rejected' || right.status === 'rejected') {
+        return null
+      }
+      return {
+        ...row,
+        note_a: (left as any).value.data.data,
+        note_b: (right as any).value.data.data,
+      }
+    }),
+  )
+  rows.value = resolved.filter((row): row is object => row !== null)
 }
 
 async function merge(id: number, keep = 'a') {

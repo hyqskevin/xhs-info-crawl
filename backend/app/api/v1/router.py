@@ -6,12 +6,14 @@ from app.api.v1.activities import router as activities_router
 from app.api.v1.poster_templates import router as poster_templates_router
 from app.api.v1.poster_tasks import router as poster_tasks_router
 from app.api.v1.settings import router as settings_router
+from app.api.v1.xhs_accounts import router as xhs_accounts_router
 from app.api.v1.schedules import router as schedules_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.tasks import router as tasks_router
 from app.api.v1.duplicates import router as duplicates_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.notes import router as notes_router
+from app.api.v1.diagnostics import router as diagnostics_router
 
 
 api_router = APIRouter()
@@ -21,9 +23,11 @@ api_router.include_router(activities_router)
 api_router.include_router(poster_templates_router)  # before settings_router due to /{kind} collision
 api_router.include_router(poster_tasks_router)
 api_router.include_router(settings_router)
+api_router.include_router(xhs_accounts_router)
 api_router.include_router(schedules_router)
 api_router.include_router(reports_router)
 api_router.include_router(tasks_router)
 api_router.include_router(duplicates_router)
 api_router.include_router(dashboard_router)
 api_router.include_router(notes_router)
+api_router.include_router(diagnostics_router)

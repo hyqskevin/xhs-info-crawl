@@ -9,14 +9,15 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _clean_registry():
-    from pathlib import Path
-    p = Path("/tmp/xhs_task_registry.json")
-    if p.exists():
-        p.unlink()
+def _isolate_registry(tmp_path, monkeypatch):
+    """隔离 registry 文件到 tmp_path，不污染 /tmp。"""
+    from app.services import task_registry
+
+    registry = tmp_path / "task_registry.json"
+    monkeypatch.setattr(task_registry, "REGISTRY_PATH", registry)
     yield
-    if p.exists():
-        p.unlink()
+    if registry.exists():
+        registry.unlink()
 
 
 def _settings():

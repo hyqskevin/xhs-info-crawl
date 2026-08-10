@@ -22,12 +22,6 @@ def _seed_city(db: Session, name: str, code: str) -> City:
     return city
 
 
-def _add_legacy_keyword(db: Session, city_code: str, word: str) -> None:
-    from app.models.config import Keyword
-    db.add(Keyword(word=word, city_code=city_code, enabled=True))
-    db.commit()
-
-
 def _make_group(
     db: Session, *, name: str, city_codes: list[str], words: list[str], enabled: bool = True
 ) -> int:
@@ -67,18 +61,16 @@ def test_resolve_keywords_excludes_disabled_group(db_session: Session) -> None:
 
 def test_resolve_keywords_empty_group_ids_returns_empty(db_session: Session) -> None:
     city = _seed_city(db_session, "上海", "sh")
-    _add_legacy_keyword(db_session, "sh", "兜底词")
     words = resolve_effective_keywords(db_session, city, {"keyword_group_ids": []})
     # 显式空组列表 = 不选任何组（与显式空 keywords 一致：键存在即表达意图，不回退）
     assert words == []
 
 
-def test_resolve_keywords_legacy_table_when_no_group_ids(db_session: Session) -> None:
+def test_resolve_keywords_returns_empty_when_no_task_params(db_session: Session) -> None:
+    """legacy keywords 表已废弃，无 task_params 时返回空列表。"""
     city = _seed_city(db_session, "上海", "sh")
-    _add_legacy_keyword(db_session, "sh", "兜底词A")
-    _add_legacy_keyword(db_session, "sh", "兜底词B")
     words = resolve_effective_keywords(db_session, city, {})
-    assert set(words) == {"兜底词A", "兜底词B"}
+    assert words == []
 
 
 def test_resolve_keywords_union_of_explicit_and_groups(db_session: Session) -> None:

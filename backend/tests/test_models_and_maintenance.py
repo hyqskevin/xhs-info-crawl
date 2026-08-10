@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import verify_password
-from app.models.config import Blogger, City, Keyword
+from app.models.config import Blogger, City
 from app.models.duplicate import DuplicateCandidate
 from app.models.note import Note, NoteImage
 from app.models.task import CrawlTask, TaskLog
@@ -16,7 +16,7 @@ def test_phase_one_models_persist_relationship_data(db_session: Session) -> None
     city = City(name="上海", code="shanghai")
     db_session.add(city)
     db_session.flush()
-    db_session.add_all([Keyword(word="周末活动", city_code=city.code), Blogger(platform_user_id="u1", username="博主", profile_url="https://example.com/u1", city_code=city.code)])
+    db_session.add_all([Blogger(platform_user_id="u1", username="博主", profile_url="https://example.com/u1", city_code=city.code)])
     task = CrawlTask(type="keyword", status="PENDING", params={"city": "shanghai"})
     db_session.add(task)
     db_session.flush()

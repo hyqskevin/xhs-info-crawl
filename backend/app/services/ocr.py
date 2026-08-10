@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from time import sleep
 from typing import Callable
 
 
@@ -20,3 +22,42 @@ class OCRService:
 
     def process_many(self, images: list[Path]) -> list[dict[str, str]]:
         return [self.process(image) for image in images]
+
+    def process_batch(
+        self,
+        images: list[Path],
+        workers: int = 2,
+        attempts: int = 1,
+        delay: float = 0.0,
+    ) -> list[dict[str, str]]:
+        """并行处理多张图片，按输入顺序返回结果。
+
+        workers=1 时退化为串行（等价于 process_many）。
+        attempts>1 时每张图片在子线程内重试（OCR 失败重试，不致命）。
+        PaddleOCR 单例 predict 线程安全，本地模型不占网络带宽。
+        """
+
+        def process_with_retry(image: Path) -> dict[str, str]:
+            if attempts <= 1:
+                return self.process(image)
+            last_result: dict[str, str] = {"status": "failed", "text": "", "error": "not executed"}
+            for _ in range(max(1, attempts)):
+                last_result = self.process(image)
+                if last_result["status"] != "failed":
+                    return last_result
+                sleep(delay)
+            return last_result
+
+        if workers <= 1 or len(images) <= 1:
+            return [process_with_retry(image) for image in images]
+
+        results: list[dict[str, str] | None] = [None] * len(images)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_index = {
+                executor.submit(process_with_retry, image): idx
+                for idx, image in enumerate(images)
+            }
+            for future in as_completed(future_to_index):
+                idx = future_to_index[future]
+                results[idx] = future.result()
+        return [r if r is not None else {"status": "failed", "text": "", "error": "unknown"} for r in results]

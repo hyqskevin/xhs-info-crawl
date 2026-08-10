@@ -104,7 +104,7 @@ def test_run_crawl_preflight_invokes_find_opencli(db_session: Session, monkeypat
     monkeypatch.setattr(crawl_task_module, "find_opencli", lambda bin_name: seen.append(bin_name) or "/fake/opencli")
 
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def check_login(self):

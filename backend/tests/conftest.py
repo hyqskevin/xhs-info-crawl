@@ -7,13 +7,97 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-# Settings and Celery read environment values while app modules are imported.
+# settings and Celery read environment values while app modules are imported.
 # Keep pytest isolated from the developer's JWT secret and filesystem broker.
 os.environ["SECRET_KEY"] = "pytest-only-jwt-secret-at-least-32-bytes"
 os.environ["CELERY_BROKER_URL"] = "memory://"
 
+from app.core.config import Settings, get_settings
 from app.core.database import Base, get_db
 from app.main import app
+
+
+# Build the list of env var names that pydantic_settings may read from
+# os.environ, so the autouse fixture below can clear them. Order does not
+# matter; missing keys are skipped.
+_SETTINGS_ENV_KEYS: list[str] = [
+    "APP_NAME",
+    "APP_ENV",
+    "API_V1_PREFIX",
+    "API_HOST",
+    "API_PORT",
+    "WEB_HOST",
+    "WEB_PORT",
+    "CORS_ORIGINS",
+    "SECRET_KEY",  # back-filled below to keep JWT secret isolated
+    "JWT_EXPIRE_HOURS",
+    "DATABASE_URL",
+    "CELERY_BROKER_URL",  # back-filled below to keep Celery in memory
+    "CELERY_TIMEZONE",
+    "CELERY_WORKER_POOL",
+    "CELERY_WORKER_CONCURRENCY",
+    "CELERY_LOG_LEVEL",
+    "WEEKLY_CRAWL_DAY_OF_WEEK",
+    "WEEKLY_CRAWL_HOUR",
+    "WEEKLY_CRAWL_MINUTE",
+    "OPENCLI_CDP_ENDPOINT",
+    "OPENCLI_BIN",
+    "OPENCLI_BROWSER_COMMAND_TIMEOUT",
+    "XHS_LOGIN_URL",
+    "XHS_LOGIN_BROWSER",
+    "SEARCH_INTERVAL_MIN",
+    "SEARCH_INTERVAL_MAX",
+    "SEARCH_LIMIT",
+    "WEEKLY_SEARCH_LIMIT",
+    "CONSECUTIVE_NOTE_FAILURE_LIMIT",
+    "MINIMAX_API_KEY",
+    "MINIMAX_BASE_URL",
+    "MINIMAX_MODEL",
+    "MINIMAX_VISION_MODEL",
+    "MINIMAX_CHAT_PATH",
+    "MINIMAX_TIMEOUT_SECONDS",
+    "OCR_ENABLED",
+    "OCR_LANGUAGE",
+    "OCR_MIN_CONFIDENCE",
+    "OCR_USE_DOC_ORIENTATION_CLASSIFY",
+    "OCR_USE_DOC_UNWARPING",
+    "OCR_USE_TEXTLINE_ORIENTATION",
+    "PADDLE_PDX_CACHE_HOME",
+    "HF_HOME",
+    "XHS_SEARCH_TARGET_COUNT",
+    "XHS_SEARCH_SCROLL_MAX_ROUNDS",
+    "XHS_DETAIL_SCROLL_MAX_ROUNDS",
+    "XHS_SCROLL_PIXELS",
+    "XHS_SCROLL_STAGNANT_ROUNDS",
+    "PIPELINE_STAGE_MAX_RETRIES",
+    "PIPELINE_STAGE_RETRY_DELAY_SECONDS",
+    "ACTIVITY_FUTURE_WINDOW_DAYS",
+    "DATA_DIR",
+    "IMAGE_DIR",
+    "EXPORT_DIR",
+    "ARCHIVE_DIR",
+    "CELERY_FOLDER",
+    "INITIAL_ADMIN_PASSWORD",
+]
+
+
+@pytest.fixture(autouse=True)
+def isolate_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear all Settings-env vars from os.environ so tests see the code defaults.
+
+    Without this fixture, an outer shell that runs `set -a && source .env` pollutes
+    os.environ with values like OPENCLI_BIN or OPENCLI_BROWSER_COMMAND_TIMEOUT.
+    pydantic_settings then reads them instead of the .env file or the code defaults,
+    breaking tests that assert default behaviour (e.g. opencli_bin == 'opencli').
+    """
+    for key in _SETTINGS_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    # Reactivate the keys conftest pinned at import time so other fixtures stay green.
+    monkeypatch.setenv("SECRET_KEY", "pytest-only-jwt-secret-at-least-32-bytes")
+    monkeypatch.setenv("CELERY_BROKER_URL", "memory://")
+    # Drop any cached Settings instance so the next get_settings() picks up the
+    # cleaned environment.
+    get_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)

@@ -50,6 +50,84 @@ def test_validate_skips_activity_before_published_at(note_at):
     assert rejected and "过期活动" in rejected[0]
 
 
+# ----- 按日期比较：同一天合法活动不再被误判 -----
+
+def test_validate_accepts_activity_same_day_earlier_than_publish():
+    # 关联 bug：note id 337 正文"7月27日起"，published=07-27 19:14，活动=07-27 10:00 同日早于发布
+    from zoneinfo import ZoneInfo
+
+    published = datetime(2026, 7, 27, 19, 14, tzinfo=ZoneInfo("Asia/Shanghai"))
+    activity = datetime(2026, 7, 27, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    note = FakeNote(published_at=published)
+    activities = [{"name": "7月27日起", "start_time": activity.isoformat()}]
+    accepted, rejected = validate_activities(note, activities)
+    assert len(accepted) == 1
+    assert rejected == []
+
+
+def test_validate_accepts_activity_next_day():
+    from zoneinfo import ZoneInfo
+
+    published = datetime(2026, 7, 27, 19, 14, tzinfo=ZoneInfo("Asia/Shanghai"))
+    activity = datetime(2026, 7, 28, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    note = FakeNote(published_at=published)
+    accepted, rejected = validate_activities(note, [{"name": "次日", "start_time": activity.isoformat()}])
+    assert len(accepted) == 1
+    assert rejected == []
+
+
+def test_validate_rejects_activity_previous_day():
+    from zoneinfo import ZoneInfo
+
+    published = datetime(2026, 7, 27, 19, 14, tzinfo=ZoneInfo("Asia/Shanghai"))
+    activity = datetime(2026, 7, 26, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    note = FakeNote(published_at=published)
+    accepted, rejected = validate_activities(note, [{"name": "前一日", "start_time": activity.isoformat()}])
+    assert accepted == []
+    assert rejected and "前一日" in rejected[0]
+
+
+def test_validate_rejects_activity_previous_day_in_local_zone():
+    # 真正"前一日"案例：发布时间 北京 7/27 12:00 = UTC 7/27 04:00；活动 北京 7/26 11:00 → 严格前一日拒绝
+    from zoneinfo import ZoneInfo
+
+    published = datetime(2026, 7, 27, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    activity = datetime(2026, 7, 26, 11, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    note = FakeNote(published_at=published)
+    accepted, rejected = validate_activities(note, [{"name": "前一日本地", "start_time": activity.isoformat()}])
+    assert accepted == []
+    assert rejected and "前一日本地" in rejected[0]
+
+
+def test_validate_accepts_same_date_across_timezones():
+    # published UTC 7/27 11:14 (+08 = 19:14)；活动 UTC 7/27 03:00 (+08 = 11:00) → 同 UTC 日，接受
+    published = datetime(2026, 7, 27, 11, 14, tzinfo=timezone.utc)
+    activity = datetime(2026, 7, 27, 3, 0, tzinfo=timezone.utc)
+    note = FakeNote(published_at=published)
+    accepted, rejected = validate_activities(note, [{"name": "跨时区同日", "start_time": activity.isoformat()}])
+    assert len(accepted) == 1
+    assert rejected == []
+
+
+def test_classify_returns_ok_when_activity_same_day_earlier():
+    from zoneinfo import ZoneInfo
+
+    published = datetime(2026, 7, 27, 19, 14, tzinfo=ZoneInfo("Asia/Shanghai"))
+    activity = datetime(2026, 7, 27, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    note = FakeNote(published_at=published, content="页面", raw_data={})
+    extracted = [{"name": "7月27日起", "start_time": activity.isoformat()}]
+    assert classify_zero_activity(note, extracted) == "ok"
+
+
+def test_classify_returns_all_before_publish_when_date_strictly_earlier(note_at):
+    note = FakeNote(published_at=note_at, content="页面", raw_data={})
+    extracted = [
+        {"name": "a", "start_time": (note_at - timedelta(days=3)).isoformat()},
+        {"name": "b", "start_time": (note_at - timedelta(days=1)).isoformat()},
+    ]
+    assert classify_zero_activity(note, extracted) == "all_before_publish"
+
+
 def test_validate_keeps_activity_without_start_time(note_at):
     note = FakeNote(published_at=note_at)
     activities = [{"name": "时间未知", "start_time": None}]

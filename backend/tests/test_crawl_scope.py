@@ -2,16 +2,19 @@
 关键词列表与博主列表。
 
 规则：
-- task_params 字段不存在 → 取城市 enabled 配置（默认行为）
-- task_params 字段是空列表 [] → 视作用户主动禁用该项
-- task_params 字段是非空列表 → 用列表里的（覆盖默认）
+- task_params 含 "keywords" → 用显式词（去空白去重）；空列表 = 显式禁用
+- task_params 含 "keyword_group_ids" → 叠加组并集
+- 两个键都不存在 → 返回空列表（legacy keywords 表已废弃）
+- task_params 含 "blogger_ids" → 按 ID 过滤；空列表 = 显式禁用
+- task_params 不含 "blogger_ids" → 取城市 enabled 博主
 """
 
 import pytest
 from sqlalchemy.orm import Session
 
 from app.models.blogger_city import BloggerCity
-from app.models.config import Blogger, City, Keyword
+from app.models.config import Blogger, City
+from app.models.keyword_group import KeywordGroup, KeywordGroupCity, KeywordGroupWord
 
 
 def _make_city(db_session: Session, code: str = "nb", name: str = "宁波") -> City:
@@ -21,10 +24,16 @@ def _make_city(db_session: Session, code: str = "nb", name: str = "宁波") -> C
     return city
 
 
-def _make_keyword(db_session: Session, city: City, word: str) -> Keyword:
-    kw = Keyword(word=word, city_code=city.code, enabled=True)
-    db_session.add(kw)
-    return kw
+def _make_keyword_group(db_session: Session, city: City, words: list[str], name: str = "默认组") -> KeywordGroup:
+    """创建关键词组并挂到城市下，返回组对象。"""
+    g = KeywordGroup(name=name)
+    db_session.add(g)
+    db_session.flush()
+    db_session.add(KeywordGroupCity(keyword_group_id=g.id, city_code=city.code, enabled=True))
+    for w in words:
+        db_session.add(KeywordGroupWord(keyword_group_id=g.id, word=w, enabled=True))
+    db_session.flush()
+    return g
 
 
 def _make_blogger(db_session: Session, city: City, username: str, profile_url: str = "https://xhs/u/x") -> Blogger:
@@ -44,20 +53,17 @@ def _make_blogger(db_session: Session, city: City, username: str, profile_url: s
 
 # ===== 关键词 =====
 
-def test_resolve_effective_keywords_uses_city_config_when_task_param_missing(db_session: Session):
+def test_resolve_effective_keywords_returns_empty_when_task_param_missing(db_session: Session):
+    """legacy keywords 表已废弃，无 task_params 时返回空列表。"""
     city = _make_city(db_session)
-    _make_keyword(db_session, city, "A")
-    _make_keyword(db_session, city, "B")
     db_session.flush()
 
     from app.services.crawl_scope import resolve_effective_keywords
-    assert resolve_effective_keywords(db_session, city, {}) == ["A", "B"]
+    assert resolve_effective_keywords(db_session, city, {}) == []
 
 
 def test_resolve_effective_keywords_overrides_city_config_when_task_param_set(db_session: Session):
     city = _make_city(db_session)
-    _make_keyword(db_session, city, "A")
-    _make_keyword(db_session, city, "B")
     db_session.flush()
 
     from app.services.crawl_scope import resolve_effective_keywords
@@ -66,11 +72,21 @@ def test_resolve_effective_keywords_overrides_city_config_when_task_param_set(db
 
 def test_resolve_effective_keywords_returns_empty_when_task_param_disables(db_session: Session):
     city = _make_city(db_session)
-    _make_keyword(db_session, city, "A")
     db_session.flush()
 
     from app.services.crawl_scope import resolve_effective_keywords
     assert resolve_effective_keywords(db_session, city, {"keywords": []}) == []
+
+
+def test_resolve_effective_keywords_combines_explicit_with_keyword_groups(db_session: Session):
+    """显式 keywords 与 keyword_group_ids 叠加求并集。"""
+    city = _make_city(db_session)
+    g = _make_keyword_group(db_session, city, ["G1", "G2"], name="组1")
+    db_session.flush()
+
+    from app.services.crawl_scope import resolve_effective_keywords
+    result = resolve_effective_keywords(db_session, city, {"keywords": ["A"], "keyword_group_ids": [g.id]})
+    assert set(result) == {"A", "G1", "G2"}
 
 
 # ===== 博主 =====
@@ -138,11 +154,10 @@ def test_blogger_bound_to_two_cities_returned_for_both(db_session: Session):
 
 def test_resolve_crawl_scope_combines_both(db_session: Session):
     city = _make_city(db_session)
-    _make_keyword(db_session, city, "A")
     b1 = _make_blogger(db_session, city, "b1")
     db_session.flush()
 
     from app.services.crawl_scope import resolve_crawl_scope
-    scope = resolve_crawl_scope(db_session, city, {})
+    scope = resolve_crawl_scope(db_session, city, {"keywords": ["A"]})
     assert scope.keywords == ["A"]
     assert [b.username for b in scope.bloggers] == ["b1"]

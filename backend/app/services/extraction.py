@@ -65,16 +65,26 @@ def extract_activity_fields(text: str, now: datetime, llm: LLM | None) -> dict[s
     cn = re.search(r"(\d{1,2})月(\d{1,2})日(?:\s*(\d{1,2}):(\d{2}))?", text)
     short_dot = re.search(r"(?<!\d)(\d{1,2})\.(\d{1,2})(?:[ T]?(\d{1,2}):(\d{1,2}))?", text)
     start_time = None
+    # 三个分支都可能匹配到非法日期（如 2月30日、2026-02-30、13月1日），统一用 try/except 容忍
     if iso:
-        start_time = datetime(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)), int(iso.group(4) or 0), int(iso.group(5) or 0)).isoformat()
+        try:
+            start_time = datetime(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)), int(iso.group(4) or 0), int(iso.group(5) or 0)).isoformat()
+        except ValueError:
+            start_time = None
     elif cn:
-        start_time = datetime(now.year, int(cn.group(1)), int(cn.group(2)), int(cn.group(3) or 0), int(cn.group(4) or 0)).isoformat()
+        try:
+            start_time = datetime(now.year, int(cn.group(1)), int(cn.group(2)), int(cn.group(3) or 0), int(cn.group(4) or 0)).isoformat()
+        except ValueError:
+            start_time = None
     elif short_dot:
-        candidate = datetime(now.year, int(short_dot.group(1)), int(short_dot.group(2)), int(short_dot.group(3) or 0), int(short_dot.group(4) or 0))
-        now_naive = now.replace(tzinfo=None) if isinstance(now, datetime) else now
-        if candidate < now_naive:
-            candidate = candidate.replace(year=candidate.year + 1)
-        start_time = candidate.isoformat()
+        try:
+            candidate = datetime(now.year, int(short_dot.group(1)), int(short_dot.group(2)), int(short_dot.group(3) or 0), int(short_dot.group(4) or 0))
+            now_naive = now.replace(tzinfo=None) if isinstance(now, datetime) else now
+            if candidate < now_naive:
+                candidate = candidate.replace(year=candidate.year + 1)
+            start_time = candidate.isoformat()
+        except ValueError:
+            start_time = None
     price_match = re.search(r"(免费|\d+(?:\.\d+)?\s*元(?:起)?)", text)
     location_match = re.search(r"(?:地点[:：]?\s*)?([一-龥]{2,}(?:中心|滨江|广场|公园|书局|剧场|博物馆))", text)
     kind = "演出" if re.search(r"音乐|演出|相声|乐队", text) else "展览" if re.search(r"展览|艺术展", text) else "其他"

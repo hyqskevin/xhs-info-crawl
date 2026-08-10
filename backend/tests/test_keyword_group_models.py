@@ -2,7 +2,7 @@
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
-from app.models.config import City, Keyword
+from app.models.config import City
 from app.models.keyword_group import KeywordGroup, KeywordGroupCity, KeywordGroupWord
 
 
@@ -73,34 +73,3 @@ def test_city_name_unique_constraint(db_session: Session) -> None:
         assert False, "应该 unique 失败"
     except Exception:
         db_session.rollback()
-
-
-def test_keyword_group_inherits_keywords_after_migration_simulation(db_session: Session) -> None:
-    """模拟 0013 数据迁移步骤：从 keywords (city_code, word) → (default keyword group per city) + words."""
-    nb = _seed_city(db_session, "宁波", "nb")
-    db_session.add_all([
-        Keyword(word="活动", city_code="nb", enabled=True),
-        Keyword(word="展览", city_code="nb", enabled=True),
-        Keyword(word="活动", city_code="nb", enabled=True),  # dupe
-    ])
-    db_session.commit()
-
-    # 模拟 migration 行为
-    g = KeywordGroup(name=f"{nb.name}-默认", description="由 0013 migration 从 keywords 历史生成")
-    db_session.add(g)
-    db_session.commit()
-    db_session.refresh(g)
-    db_session.add(KeywordGroupCity(keyword_group_id=g.id, city_code="nb"))
-
-    seen = set()
-    keywords = db_session.scalars(db_session.query(Keyword).statement).all()
-    for k in keywords:
-        if k.city_code == "nb" and k.enabled and k.word not in seen:
-            seen.add(k.word)
-            db_session.add(KeywordGroupWord(keyword_group_id=g.id, word=k.word))
-    db_session.commit()
-
-    words = db_session.scalars(
-        db_session.query(KeywordGroupWord).statement
-    ).all()
-    assert {w.word for w in words} == {"活动", "展览"}

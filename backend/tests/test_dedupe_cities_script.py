@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.database import engine
 from app.models.blogger_city import BloggerCity
-from app.models.config import Blogger, City, Keyword
+from app.models.config import Blogger, City
 from app.models.note import Note
 from app.models.task import CrawlTask
 from app.scripts.dedupe_cities import dedupe_cities

@@ -31,6 +31,19 @@ const mocks = vi.hoisted(() => ({
       { id: 32, name: '每周三下午', enabled: false, day_of_week: 3, hour: 14, minute: 0, city_code: 'shanghai', last_task: null },
     ],
   } } }),
+  diagnosticsSnapshot: vi.fn().mockResolvedValue({ data: { data: {
+    opencli: { ok: true, bin: 'opencli', resolved: '/usr/local/bin/opencli', reason: null, version: '0.1.2' },
+    xhs_login: { logged_in: true, username: '小红', user_id: 'u-1', reason: null },
+    xhs_pool: { mode: 'cdp', version: 'v1.7.2', version_tuple: [1, 7, 2], cdp_endpoint: 'http://127.0.0.1:9222', cdp_reachable: true, sessions: [{ id: 's1' }], reason: null },
+    checked_at: '2026-08-03T01:00:00Z',
+  } } }),
+  diagnosticsOpencli: vi.fn().mockResolvedValue({ data: { data: { ok: true, bin: 'opencli', resolved: '/usr/local/bin/opencli', reason: null, version: '0.1.2' } } }),
+  diagnosticsXhsLogin: vi.fn().mockResolvedValue({ data: { data: { logged_in: false, username: null, user_id: null, reason: 'auth_required' } } }),
+  diagnosticsXhsPool: vi.fn().mockResolvedValue({ data: { data: { mode: 'cdp', version: 'v1.7.2', version_tuple: [1, 7, 2], cdp_endpoint: 'http://127.0.0.1:9222', cdp_reachable: false, sessions: [], reason: 'CDP 端点连接被拒' } } }),
+  xhsAccounts: vi.fn().mockResolvedValue({ data: { data: [
+    { id: 1, name: '主账号', remark: '日常', session_name: 'main', enabled: true, priority: 1, login_status: 'logged_in' },
+    { id: 2, name: '备用账号', remark: '', session_name: 'backup', enabled: true, priority: 2, login_status: 'logged_out' },
+  ] } }),
 }))
 vi.mock('@/api/client', () => ({ api: mocks }))
 
@@ -258,5 +271,125 @@ describe('DashboardView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('暂无任务日志')
+  })
+
+  it('renders diagnostics card with three sections after snapshot loads', async () => {
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('系统状态')
+    expect(wrapper.text()).toContain('后端服务')
+    expect(wrapper.text()).toContain('opencli')
+    expect(wrapper.text()).toContain('小红书登录')
+    expect(wrapper.text()).toContain('浏览器连接')
+    // 默认 snapshot mock：opencli ok=true、login 成功、pool ok
+    expect(wrapper.text()).toContain('已就绪')
+    expect(wrapper.text()).toContain('已登录: 小红')
+    expect(wrapper.text()).toContain('CDP 可达')
+    expect(mocks.diagnosticsSnapshot).toHaveBeenCalled()
+  })
+
+  it('single probe button updates only that section', async () => {
+    mocks.diagnosticsSnapshot.mockResolvedValueOnce({ data: { data: {
+      opencli: { ok: true, bin: 'opencli', resolved: '/usr/local/bin/opencli', reason: null, version: '0.1.0' },
+      xhs_login: { logged_in: false, username: null, user_id: null, reason: 'auth_required' },
+      xhs_pool: { mode: 'cdp', version: null, version_tuple: null, cdp_endpoint: 'http://127.0.0.1:9222', cdp_reachable: false, sessions: [], reason: 'CDP 端点连接被拒' },
+      checked_at: '2026-08-03T01:00:00Z',
+    } } })
+    mocks.diagnosticsOpencli.mockResolvedValueOnce({ data: { data: { ok: false, bin: 'opencli', resolved: null, reason: 'opencli 不在 PATH，请设置 OPENCLI_BIN 环境变量', version: null } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const opencliButton = wrapper.findAll('.system-item').find((item) => item.text().includes('opencli'))!.find('button')!
+    await opencliButton.trigger('click')
+    await flushPromises()
+
+    expect(mocks.diagnosticsOpencli).toHaveBeenCalled()
+    // opencli 段更新为失败
+    expect(wrapper.text()).toContain('缺失')
+    expect(wrapper.text()).toContain('OPENCLI_BIN')
+    // 其它两段保持 snapshot 初值
+    expect(wrapper.text()).toContain('未登录')
+    expect(wrapper.text()).toContain('CDP 不可达')
+  })
+
+  it('shows failure reason text when diagnostics.ok is false', async () => {
+    mocks.diagnosticsSnapshot.mockResolvedValueOnce({ data: { data: {
+      opencli: { ok: false, bin: 'opencli', resolved: null, reason: 'opencli 不在 PATH，请设置 OPENCLI_BIN 环境变量', version: null },
+      xhs_login: { logged_in: false, username: null, user_id: null, reason: 'timeout' },
+      xhs_pool: { mode: 'cdp', version: null, version_tuple: null, cdp_endpoint: 'http://127.0.0.1:9222', cdp_reachable: false, sessions: [], reason: 'CDP 端点 http://127.0.0.1:9222 连接被拒' },
+      checked_at: '2026-08-03T01:00:00Z',
+    } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('OPENCLI_BIN')
+    expect(wrapper.text()).toContain('检测超时：可能未登录或浏览器等待扫码')
+    expect(wrapper.text()).toContain('CDP 端点 http://127.0.0.1:9222 连接被拒')
+  })
+
+  it('shows daemon mode tag when xhs_pool mode is daemon', async () => {
+    mocks.diagnosticsSnapshot.mockResolvedValueOnce({ data: { data: {
+      opencli: { ok: true, bin: 'opencli', resolved: '/usr/local/bin/opencli', reason: null, version: 'v1.8.5' },
+      xhs_login: { logged_in: true, username: '小红', user_id: 'u-1', reason: null },
+      xhs_pool: { mode: 'daemon', version: 'v1.8.5', version_tuple: [1, 8, 5], daemon_running: true, extension_connected: true, profiles: ['jjm94buu'], daemon_port: 19825, cdp_endpoint: null, cdp_reachable: null, sessions: [], reason: null },
+      checked_at: '2026-08-10T01:00:00Z',
+    } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('浏览器连接')
+    expect(wrapper.text()).toContain('Daemon 已连接')
+    expect(wrapper.text()).toContain('1 profiles')
+  })
+
+  it('shows daemon failure reason when extension disconnected', async () => {
+    mocks.diagnosticsSnapshot.mockResolvedValueOnce({ data: { data: {
+      opencli: { ok: true, bin: 'opencli', resolved: '/usr/local/bin/opencli', reason: null, version: 'v1.8.5' },
+      xhs_login: { logged_in: true, username: '小红', user_id: 'u-1', reason: null },
+      xhs_pool: { mode: 'daemon', version: 'v1.8.5', version_tuple: [1, 8, 5], daemon_running: true, extension_connected: false, profiles: [], daemon_port: 19825, cdp_endpoint: null, cdp_reachable: null, sessions: [], reason: '浏览器扩展未连接' },
+      checked_at: '2026-08-10T01:00:00Z',
+    } } })
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('浏览器扩展未连接')
+  })
+
+  it('renders 操作账号 select and loads xhs accounts on mount', async () => {
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(mocks.xhsAccounts).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('操作账号')
+    // ElSelect 选项在 popper 中渲染，通过 ElOption 组件检查
+    const accountFormItem = wrapper.findAll('.el-form-item').find((item) => item.text().includes('操作账号'))
+    expect(accountFormItem, '必须存在操作账号 form item').toBeTruthy()
+    const accountSelect = accountFormItem!.findComponent(ElSelect)
+    expect(accountSelect.exists()).toBe(true)
+    const optionLabels = accountSelect.findAllComponents({ name: 'ElOption' }).map((opt) => opt.props('label'))
+    expect(optionLabels).toEqual(['主账号', '备用账号'])
+  })
+
+  it('includes xhs_account_id in crawl request when an account is selected', async () => {
+    const wrapper = mount(DashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const selects = wrapper.findAllComponents(ElSelect)
+    // selects: [0]city [1]keyword_groups [2]recent_filter [3]blogger_ids [4]xhs_account_id
+    selects[0].vm.$emit('update:modelValue', 'shanghai')
+    await flushPromises()
+    selects[1].vm.$emit('update:modelValue', [12])
+    selects[2].vm.$emit('update:modelValue', '一天内')
+    selects[3].vm.$emit('update:modelValue', [9])
+    selects[4].vm.$emit('update:modelValue', 1)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text().includes('开始抓取'))!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.createTask).toHaveBeenCalledWith({
+      type: 'mixed', city: 'shanghai', keyword_group_ids: [12], recent_filter: '一天内', blogger_ids: [9], xhs_account_id: 1,
+    })
   })
 })

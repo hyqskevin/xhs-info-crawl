@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token
-from app.models.config import City, Keyword
+from app.models.config import City
 from app.models.task import CrawlTask, TaskLog
 
 
@@ -15,7 +15,6 @@ def _auth() -> dict[str, str]:
 
 def test_crawl_auto_stops_previous_running_task(client: TestClient, db_session: Session, celery_dispatches: list[tuple]):
     db_session.add(City(name="上海", code="city-99f1e469", enabled=True))
-    db_session.add(Keyword(word="活动", city_code="city-99f1e469", enabled=True))
     db_session.commit()
 
     previous = CrawlTask(
@@ -47,7 +46,6 @@ def test_crawl_auto_stops_previous_running_task(client: TestClient, db_session: 
 
 def test_crawl_auto_stops_previous_pending_task(client: TestClient, db_session: Session, celery_dispatches: list[tuple]):
     db_session.add(City(name="上海", code="city-99f1e469", enabled=True))
-    db_session.add(Keyword(word="活动", city_code="city-99f1e469", enabled=True))
     db_session.commit()
 
     previous = CrawlTask(
@@ -78,7 +76,6 @@ def test_crawl_auto_stops_previous_pending_task(client: TestClient, db_session: 
 
 def test_crawl_creates_new_task_after_stopping_previous(client: TestClient, db_session: Session, celery_dispatches: list[tuple]):
     db_session.add(City(name="上海", code="city-99f1e469", enabled=True))
-    db_session.add(Keyword(word="活动", city_code="city-99f1e469", enabled=True))
     db_session.commit()
 
     previous = CrawlTask(
@@ -110,7 +107,6 @@ def test_crawl_creates_new_task_after_stopping_previous(client: TestClient, db_s
 
 def test_crawl_returns_success_when_no_previous_task(client: TestClient, db_session: Session, celery_dispatches: list[tuple]):
     db_session.add(City(name="上海", code="city-99f1e469", enabled=True))
-    db_session.add(Keyword(word="活动", city_code="city-99f1e469", enabled=True))
     db_session.commit()
 
     response = client.post(

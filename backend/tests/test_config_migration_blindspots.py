@@ -25,7 +25,6 @@ EXPECTED_TABLES = {
     "keyword_group_cities",
     "keyword_group_words",
     "keyword_groups",
-    "keywords",
     "note_duplicate_candidates",
     "note_images",
     "notes",

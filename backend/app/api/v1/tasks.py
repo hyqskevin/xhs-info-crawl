@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.core.security import require_admin
 from app.models.task import CrawlTask,TaskLog
 from app.models.blogger_city import BloggerCity
-from app.models.config import Blogger, City, Keyword
+from app.models.config import Blogger, City
 from app.core.config import get_settings
 from app.services.crawler import AuthenticationRequired
 from app.services.opencli_adapter import OpenCLIAdapter
@@ -44,8 +44,6 @@ def crawl(payload:CrawlIn,_:Admin,db:DB):
         db.commit()
     city=db.scalar(select(City).where(City.code==payload.city,City.enabled.is_(True)))
     if not city: raise HTTPException(422,'请选择已启用的城市')
-    configured_keywords=set(db.scalars(select(Keyword.word).where(Keyword.city_code==city.code,Keyword.enabled.is_(True))).all())
-    if any(keyword not in configured_keywords for keyword in payload.keywords): raise HTTPException(422,'关键词不属于所选城市')
     if payload.keyword_group_ids:
         from app.models.keyword_group import KeywordGroup, KeywordGroupCity
         group_rows = db.execute(

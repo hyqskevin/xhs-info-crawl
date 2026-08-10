@@ -1,13 +1,21 @@
 <script setup lang="ts">
 import { Delete, Edit, Plus } from '@element-plus/icons-vue'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRoute } from 'vue-router'
 import { api } from '@/api/client'
-import KeywordGroupSettings from '@/components/KeywordGroupSettings.vue'
-import BloggerGroupSettings from '@/components/BloggerGroupSettings.vue'
 
-const tab = ref<'schedules' | 'groups'>('schedules')
-const groupTab = ref<'keyword' | 'blogger'>('keyword')
+const route = useRoute()
+const tab = ref<'schedules' | 'batch'>((route.query.tab as any) || 'schedules')
+watch(() => route.query.tab, (newTab) => {
+  if (newTab) {
+    tab.value = newTab as any
+    load()
+  }
+})
+const batchConfig = ref<Record<string, any>>({})
+const batchLoading = ref(false)
+const batchSaving = ref(false)
 const rows = ref<any[]>([])
 const cities = ref<any[]>([])
 const keywordGroups = ref<any[]>([])
@@ -30,6 +38,10 @@ function resetForm() {
 }
 
 async function load() {
+  if (tab.value === 'batch') {
+    await loadBatchConfig()
+    return
+  }
   const [schedulesResp, citiesResp, kgResp, bgResp] = await Promise.all([
     api.schedules(), api.settings('cities'), api.keywordGroups(), api.bloggerGroups(),
   ])
@@ -122,16 +134,37 @@ const statusMeta: Record<string, { type: string; label: string }> = {
 }
 const lastTaskMeta = computed(() => (task: any) => statusMeta[task?.status] || { type: 'info', label: task?.status || '' })
 
+async function loadBatchConfig() {
+  batchLoading.value = true
+  try {
+    const res = await api.systemConfig()
+    batchConfig.value = res.data.data || {}
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '加载抓取批次配置失败')
+  } finally {
+    batchLoading.value = false
+  }
+}
+
+async function saveBatchConfig() {
+  batchSaving.value = true
+  try {
+    await api.updateSystemConfig(batchConfig.value)
+    ElMessage.success('抓取批次配置已保存，重启服务后生效')
+    await loadBatchConfig()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '保存失败')
+  } finally {
+    batchSaving.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
 <template>
   <ElCard shadow="never" class="page-card">
     <div class="toolbar">
-      <ElRadioGroup v-model="tab">
-        <ElRadioButton value="schedules">定时任务</ElRadioButton>
-        <ElRadioButton value="groups">分组管理</ElRadioButton>
-      </ElRadioGroup>
       <ElButton v-if="tab === 'schedules'" type="primary" :icon="Plus" @click="openCreate">新增定时任务</ElButton>
     </div>
 
@@ -185,14 +218,48 @@ onMounted(load)
       </ElTable>
     </template>
 
-    <template v-else>
-      <ElRadioGroup v-model="groupTab" class="group-tab">
-        <ElRadioButton value="keyword">关键词组</ElRadioButton>
-        <ElRadioButton value="blogger">博主组</ElRadioButton>
-      </ElRadioGroup>
-      <KeywordGroupSettings v-if="groupTab === 'keyword'" :cities="cities" />
-      <BloggerGroupSettings v-else />
-    </template>
+    <ElCard v-if="tab === 'batch'" v-loading="batchLoading" shadow="never" class="config-card">
+      <template #header>抓取批次配置 <span class="config-hint">修改后需重启服务生效</span></template>
+
+      <ElForm label-width="180px" label-position="left">
+        <div class="config-group">
+          <h4 class="config-group-title">抓取数量</h4>
+          <ElFormItem label="单次搜索上限">
+            <ElInputNumber v-model="batchConfig.search_limit" :min="10" :max="500" :step="10" style="width: 100%" />
+          </ElFormItem>
+          <ElFormItem label="每周搜索上限">
+            <ElInputNumber v-model="batchConfig.weekly_search_limit" :min="0" :max="5000" :step="50" style="width: 100%" />
+          </ElFormItem>
+          <ElFormItem label="连续失败熔断阈值">
+            <ElInputNumber v-model="batchConfig.consecutive_note_failure_limit" :min="1" :max="20" :step="1" style="width: 100%" />
+          </ElFormItem>
+          <ElFormItem label="活动有效窗口（天）">
+            <ElInputNumber v-model="batchConfig.activity_future_window_days" :min="7" :max="365" :step="7" style="width: 100%" />
+          </ElFormItem>
+        </div>
+
+        <div class="config-group">
+          <h4 class="config-group-title">小红书滚动策略</h4>
+          <ElFormItem label="目标笔记数">
+            <ElInputNumber v-model="batchConfig.xhs_search_target_count" :min="10" :max="200" :step="10" style="width: 100%" />
+          </ElFormItem>
+          <ElFormItem label="最大滚动轮数">
+            <ElInputNumber v-model="batchConfig.xhs_search_scroll_max_rounds" :min="1" :max="30" :step="1" style="width: 100%" />
+          </ElFormItem>
+          <ElFormItem label="滚动像素">
+            <ElInputNumber v-model="batchConfig.xhs_scroll_pixels" :min="200" :max="2000" :step="100" style="width: 100%" />
+          </ElFormItem>
+          <ElFormItem label="停滞轮数阈值">
+            <ElInputNumber v-model="batchConfig.xhs_scroll_stagnant_rounds" :min="1" :max="10" :step="1" style="width: 100%" />
+          </ElFormItem>
+        </div>
+
+        <ElFormItem>
+          <ElButton type="primary" :loading="batchSaving" @click="saveBatchConfig">保存配置</ElButton>
+          <ElButton @click="loadBatchConfig">重置</ElButton>
+        </ElFormItem>
+      </ElForm>
+    </ElCard>
 
     <ElDialog v-model="dialog" :title="editingId ? '编辑定时任务' : '新增定时任务'" width="620">
       <ElForm label-width="100px">
@@ -241,6 +308,9 @@ onMounted(load)
 
 <style scoped>
 .toolbar { margin-bottom: 16px; display: flex; gap: 12px; }
-.group-tab { margin-bottom: 4px; }
 .group-tag { margin: 3px 6px 3px 0; }
+.config-card { margin-top: 16px; }
+.config-hint { font-size: 13px; color: #909399; font-weight: normal; margin-left: 8px; }
+.config-group { margin-bottom: 8px; }
+.config-group-title { font-size: 15px; font-weight: 600; color: #303133; margin: 0 0 12px 0; padding-bottom: 8px; border-bottom: 1px solid #ebeef5; }
 </style>

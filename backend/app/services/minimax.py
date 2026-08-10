@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import httpx
@@ -31,6 +32,29 @@ class MiniMaxClient:
         )
         tools=[{"type":"function","function":{"name":"emit_activities","description":"Return every distinct concrete activity found in the note and OCR images.","parameters":{"type":"object","properties":{"activities":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"start_time":{"type":["string","null"]},"end_time":{"type":["string","null"]},"location":{"type":["string","null"]},"price":{"type":["string","null"]},"type":{"type":["string","null"]},"summary":{"type":["string","null"]},"confidence":{"type":["number","string"]},"source_image_indexes":{"type":"array","items":{"type":"integer"}}},"required":["name","start_time","location","source_image_indexes"]}}},"required":["activities"]}}}]
         return self._request(text, instruction+" You must call emit_activities exactly once.", 16384, tools)
+
+    def extract_many_parallel(
+        self, texts: list[str], reference: datetime | None = None
+    ) -> list[dict[str, Any]]:
+        """批量并行调用 extract_many，按输入顺序返回结果。
+
+        并发数由 settings.minimax_concurrency 控制（默认 1=串行，最高 4）。
+        小范围并行避免 529 限流雪崩；每个线程独立 httpx.Client。
+        """
+        concurrency = getattr(self.settings, "minimax_concurrency", 1)
+        if concurrency <= 1 or len(texts) <= 1:
+            return [self.extract_many(text, reference) for text in texts]
+
+        results: list[dict[str, Any] | None] = [None] * len(texts)
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            future_to_index = {
+                executor.submit(self.extract_many, text, reference): idx
+                for idx, text in enumerate(texts)
+            }
+            for future in as_completed(future_to_index):
+                idx = future_to_index[future]
+                results[idx] = future.result()
+        return [r if r is not None else {"activities": []} for r in results]
 
     def _request(self, text: str, instruction: str, max_tokens: int, tools: list[dict[str,Any]] | None = None) -> dict[str, Any]:
         if not self.settings.minimax_api_key:

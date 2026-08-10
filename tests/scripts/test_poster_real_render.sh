@@ -29,8 +29,13 @@ if ! command -v opencli >/dev/null; then
   exit 1
 fi
 
-TMP_HTML="/tmp/poster-real-render.html"
-DATA_POSTERS_DIR="${DATA_POSTERS_DIR:-$(pwd)/data/posters}"
+# 项目根目录（脚本需从项目根运行，与下方 data/posters 定位约定一致）
+ROOT_DIR="$(pwd)"
+# 临时文件统一放项目内 data/tmp/，避免污染系统 /tmp
+mkdir -p "$ROOT_DIR/data/tmp"
+
+TMP_HTML="$ROOT_DIR/data/tmp/poster-real-render.html"
+DATA_POSTERS_DIR="${DATA_POSTERS_DIR:-$ROOT_DIR/data/posters}"
 TMP_PORT="${TMP_PORT:-8989}"
 
 mkdir -p "$DATA_POSTERS_DIR"

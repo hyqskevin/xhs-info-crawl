@@ -10,17 +10,16 @@ from pathlib import Path
 import pytest
 
 
-REGISTRY = Path("/tmp/xhs_task_registry.json")
-
-
 @pytest.fixture(autouse=True)
-def _clean_registry():
-    """每个测试前后清空 registry 文件。"""
-    if REGISTRY.exists():
-        REGISTRY.unlink()
+def _isolate_registry(tmp_path, monkeypatch):
+    """每个测试隔离 registry 文件到 tmp_path，不污染项目内或 /tmp。"""
+    from app.services import task_registry
+
+    registry = tmp_path / "task_registry.json"
+    monkeypatch.setattr(task_registry, "REGISTRY_PATH", registry)
     yield
-    if REGISTRY.exists():
-        REGISTRY.unlink()
+    if registry.exists():
+        registry.unlink()
 
 
 def test_register_and_get():

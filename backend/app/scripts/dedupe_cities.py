@@ -7,7 +7,6 @@
 - `notes.city_code = canonical.code`
 - `blogger_cities.city_code = canonical.code`
 - `crawl_tasks.params['city'] = canonical.code`（JSON 字段）
-- `keywords.city_code = canonical.code`
 
 幂等：跑第二次不会有任何变更。
 
@@ -28,7 +27,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.database import SessionLocal
 from app.models.blogger_city import BloggerCity
-from app.models.config import City, Keyword
+from app.models.config import City
 from app.models.note import Note
 from app.models.task import CrawlTask
 
@@ -52,13 +51,6 @@ def _migrate_notes(db: Session, from_code: str, to_code: str) -> int:
 def _migrate_blogger_city(db: Session, from_code: str, to_code: str) -> int:
     res = db.execute(
         update(BloggerCity).where(BloggerCity.city_code == from_code).values(city_code=to_code)
-    )
-    return int(res.rowcount or 0)
-
-
-def _migrate_keywords(db: Session, from_code: str, to_code: str) -> int:
-    res = db.execute(
-        update(Keyword).where(Keyword.city_code == from_code).values(city_code=to_code)
     )
     return int(res.rowcount or 0)
 
@@ -89,7 +81,6 @@ def _migrate_one_group(db: Session, dups: list[City]) -> int:
             continue
         total += _migrate_notes(db, dup.code, canonical.code)
         total += _migrate_blogger_city(db, dup.code, canonical.code)
-        total += _migrate_keywords(db, dup.code, canonical.code)
         total += _migrate_crawl_task_params(db, dup.code, canonical.code)
         logger.info(
             "dedupe city name=%r canonical=(id=%s code=%r) removing (id=%s code=%r)",

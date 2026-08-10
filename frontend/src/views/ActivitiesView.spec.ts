@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   approveNotes: vi.fn().mockResolvedValue({ data: { data: { approved_count: 1, approved_ids: [1] } } }),
   updateNote: vi.fn().mockResolvedValue({ data: { data: { id: 1 } } }),
   reviewNote: vi.fn().mockResolvedValue({ data: { data: { id: 1, review_status: 'APPROVED' } } }),
+  reExtractNote: vi.fn().mockResolvedValue({ data: { data: { status: 'PROCESSED', activities: [{ id: 21, name: '新提取活动', location: '浦东', start_time: '2026-08-10T10:00:00Z', end_time: '2026-08-10T18:00:00Z' }], extracted_count: 1 } } }),
+  createNoteActivity: vi.fn().mockResolvedValue({ data: { data: { id: 31, name: '手动添加的活动', location: '徐汇', start_time: '2026-08-15T09:00:00Z', end_time: null, type: '展览', summary: '简介' } } }),
 }))
 vi.mock('@/api/client', () => ({ api: mocks }))
 
@@ -266,6 +268,76 @@ describe('ActivitiesView', () => {
 
     expect(ElMessage.error).toHaveBeenCalledWith('审核失败，请重试')
     expect(mocks.notes).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows activities in the note edit dialog when the note has activities', async () => {
+    const wrapper = mount(ActivitiesView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((item) => item.text().includes('编辑推文'))!.trigger('click')
+    await flushPromises()
+
+    // 弹窗应展示活动表格
+    const dialog = wrapper.find('.el-dialog')
+    expect(dialog.text()).toContain('识别活动')
+    expect(dialog.text()).toContain('活动一')
+    expect(dialog.text()).toContain('活动二')
+    expect(dialog.text()).toContain('手动添加活动')
+  })
+
+  it('shows empty state with re-extract button when note has no activities', async () => {
+    mocks.note.mockResolvedValueOnce({ data: { data: { id: 2, title: '无活动推文', content: '', city_code: 'shanghai', published_at: null, source_url: 'https://xhs/note-2', review_status: 'PENDING', activities: [], images: [] } } })
+    const wrapper = mount(ActivitiesView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((item) => item.text().includes('编辑推文'))!.trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.find('.el-dialog')
+    expect(dialog.text()).toContain('暂无识别活动')
+    expect(dialog.text()).toContain('重新提取')
+  })
+
+  it('re-extracts activities and updates the list on success', async () => {
+    // 无活动的推文，才能看到"重新提取"按钮
+    mocks.note.mockResolvedValueOnce({ data: { data: { id: 3, title: '待提取推文', content: '', city_code: 'shanghai', published_at: null, source_url: 'https://xhs/note-3', review_status: 'PENDING', activities: [], images: [] } } })
+    const wrapper = mount(ActivitiesView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((item) => item.text().includes('编辑推文'))!.trigger('click')
+    await flushPromises()
+
+    const reExtractBtn = wrapper.findAll('button').find((item) => item.text().includes('重新提取'))!
+    await reExtractBtn.trigger('click')
+    await flushPromises()
+
+    expect(mocks.reExtractNote).toHaveBeenCalledWith(3)
+    // 活动列表应更新
+    const dialog = wrapper.find('.el-dialog')
+    expect(dialog.text()).toContain('新提取活动')
+    expect(dialog.text()).not.toContain('暂无识别活动')
+  })
+
+  it('opens add activity form, fills and submits', async () => {
+    const wrapper = mount(ActivitiesView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((item) => item.text().includes('编辑推文'))!.trigger('click')
+    await flushPromises()
+
+    // 点击"手动添加活动"
+    await wrapper.findAll('button').find((item) => item.text().includes('手动添加活动'))!.trigger('click')
+    await flushPromises()
+
+    // 填写表单
+    const nameInput = wrapper.find('input[aria-label="新活动名称"]')
+    await nameInput.setValue('自定义活动')
+    const typeSelect = wrapper.find('.el-select')
+    // 提交
+    await wrapper.findAll('button').find((item) => item.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.createNoteActivity).toHaveBeenCalledWith(1, expect.objectContaining({ name: '自定义活动' }))
   })
 
   it.each([

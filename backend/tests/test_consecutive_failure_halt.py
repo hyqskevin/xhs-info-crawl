@@ -52,7 +52,7 @@ def _pending_task(db_session, blogger, token):
 
 def _fake_adapter_class(note_count):
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def bind_task(self, *_args, **_kwargs):
@@ -74,19 +74,19 @@ def _run(db_session, monkeypatch, task, note_count, process_behaviors, opened=No
     """process_behaviors: list[bool]，True=处理成功，False=抛异常。"""
     calls = []
 
-    def fake_process(db, current_task, _run_token, _city, item, _adapter, _settings):
+    def fake_download_and_ocr(db, current_task, _run_token, _city, item, _adapter, _settings):
         index = len(calls)
         calls.append(item["url"])
         if process_behaviors[index]:
             current_task.extracted_notes += 1
             current_task.success_notes += 1
             db.commit()
-            return True
+            return None  # 模拟处理完成（不进阶段2）
         raise RuntimeError(f"opencli note 失败 #{index}")
 
     monkeypatch.setattr(crawl_task, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(crawl_task, "OpenCLIAdapter", _fake_adapter_class(note_count))
-    monkeypatch.setattr(crawl_task, "process_note", fake_process)
+    monkeypatch.setattr(crawl_task, "download_and_ocr", fake_download_and_ocr)
     if opened is not None:
         monkeypatch.setattr(crawl_task, "open_xhs_login", lambda settings: opened.append(settings.xhs_login_url))
 

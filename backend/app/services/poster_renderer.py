@@ -16,11 +16,12 @@ import html as html_lib
 import re
 import shutil
 import subprocess
-import tempfile
+import uuid
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.note import NoteImage
 from app.models.poster import PosterTask, PosterTemplate
 
@@ -239,8 +240,12 @@ def _opencli_render(html: str, path: str) -> None:
             return s.getsockname()[1]
 
     port = _free_port()
-    tmp_dir = tempfile.mkdtemp(prefix="poster-render-")
-    tmp_html = Path(tmp_dir) / "index.html"
+    # 临时目录放在项目内 data/tmp/ 下，避免污染系统 tempdir
+    tmp_base = get_settings().tmp_dir
+    tmp_base.mkdir(parents=True, exist_ok=True)
+    tmp_dir = tmp_base / f"poster-render-{uuid.uuid4().hex[:8]}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_html = tmp_dir / "index.html"
     tmp_html.write_text(html, encoding="utf-8")
 
     server_proc = None

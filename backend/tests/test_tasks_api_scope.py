@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token
-from app.models.config import City, Keyword
+from app.models.config import City
 
 
 def _auth() -> dict[str, str]:
@@ -27,7 +27,6 @@ def test_crawl_rejects_when_no_keywords_and_no_bloggers(client: TestClient, db_s
 
 def test_crawl_rejects_when_only_blogger_ids_empty(client: TestClient, db_session: Session, celery_dispatches: list[tuple]):
     db_session.add(City(name="上海", code="city-99f1e469", enabled=True))
-    db_session.add(Keyword(word="A", city_code="city-99f1e469", enabled=True))
     db_session.commit()
 
     response = client.post(

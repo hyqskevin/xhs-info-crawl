@@ -72,3 +72,40 @@ def test_explicit_xhs_verification_signals_are_classified(message: str) -> None:
 ])
 def test_unrelated_messages_are_not_verification_signals(message: str) -> None:
     assert is_verification_required(message) is False
+
+
+# ============================================================
+# 非法日期不崩溃（2026-08-10 修复 "day is out of range for month"）
+# ============================================================
+
+
+@pytest.mark.parametrize("text", [
+    "2月30日 上海中心 免费 春日市集",       # 2月无30日
+    "11月31日 徐汇滨江 30元 秋季展览",      # 11月无31日
+    "4月31日 静安公园 免费 樱花节",         # 4月无31日
+    "6月31日 世纪公园 免费 夏夜音乐会",     # 6月无31日
+    "9月31日 陆家嘴 50元 秋季艺术展",       # 9月无31日
+    "2月29日 上海大剧院 80元 舞剧",         # 2025非闰年2月无29日
+    "13月1日 上海中心 免费 异常月份",       # 月份越界
+    "0月15日 上海中心 免费 异常月份",       # 月份越界
+    "1月32日 上海中心 免费 异常日期",       # 日期越界
+    "2026-02-30 上海中心 免费 异常日期",    # ISO 格式非法
+    "2026-13-01 上海中心 免费 异常月份",    # ISO 格式月份越界
+    "2.30 上海中心 免费 短点格式非法",      # 短点格式非法
+])
+def test_extract_activity_fields_tolerates_invalid_date(text: str) -> None:
+    """非法日期不应抛 ValueError，应返回 start_time=None。"""
+    result = extract_activity_fields(text, now=datetime(2025, 7, 1), llm=None)
+    # 非法日期应被容忍：start_time 为 None，但其他字段仍正常提取
+    assert "status" not in result, "不应抛异常"
+    assert result["start_time"] is None, f"非法日期应返回 None，实际：{result['start_time']!r}"
+
+
+def test_extract_activity_fields_still_parses_valid_date() -> None:
+    """修复后合法日期仍应正常解析（无回归）。"""
+    result = extract_activity_fields("7月20日 18:00 上海中心 免费 夏日音乐节", now=datetime(2025, 7, 1), llm=None)
+    assert result["start_time"] is not None
+    assert result["start_time"].startswith("2025-07-20")
+    assert result["location"] == "上海中心"
+    assert result["price"] == "免费"
+    assert result["type"] == "演出"

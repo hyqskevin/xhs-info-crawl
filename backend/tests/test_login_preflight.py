@@ -94,7 +94,7 @@ def test_preflight_auth_failure_pauses_before_discovery(db_session, monkeypatch)
     discovery_calls = []
 
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def bind_task(self, *_args, **_kwargs):
@@ -134,7 +134,7 @@ def test_preflight_success_enters_discovery(db_session, monkeypatch):
     discovery_calls = []
 
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def bind_task(self, *_args, **_kwargs):

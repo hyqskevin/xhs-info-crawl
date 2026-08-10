@@ -1,8 +1,22 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus, { ElMessage, ElMessageBox, ElSelect, ElTimePicker } from 'element-plus'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SchedulesView from './SchedulesView.vue'
+
+const { mockRoute, mockRouter } = vi.hoisted(() => ({
+  mockRoute: {
+    query: {} as Record<string, any>,
+    path: '/schedules',
+    fullPath: '/schedules',
+    meta: { title: '定时任务' },
+  },
+  mockRouter: { push: vi.fn(), replace: vi.fn() },
+}))
+vi.mock('vue-router', () => ({
+  useRoute: () => mockRoute,
+  useRouter: () => mockRouter,
+}))
 
 const mocks = vi.hoisted(() => ({
   settings: vi.fn().mockImplementation((kind: string) => Promise.resolve({ data: { data: kind === 'cities'
@@ -27,16 +41,47 @@ const mocks = vi.hoisted(() => ({
   createSchedule: vi.fn().mockResolvedValue({ data: { data: { id: 33 } } }),
   updateSchedule: vi.fn().mockResolvedValue({ data: { data: { id: 31 } } }),
   deleteSchedule: vi.fn().mockResolvedValue({ data: { data: { deleted_id: 31 } } }),
+  systemConfig: vi.fn().mockResolvedValue({ data: { data: {
+    search_limit: 50, weekly_search_limit: 500, consecutive_note_failure_limit: 3,
+    activity_future_window_days: 60, xhs_search_target_count: 50, xhs_search_scroll_max_rounds: 8,
+    xhs_scroll_pixels: 800, xhs_scroll_stagnant_rounds: 2,
+  } } }),
+  updateSystemConfig: vi.fn().mockResolvedValue({ data: { data: {} } }),
 }))
 vi.mock('@/api/client', () => ({ api: mocks }))
 
 afterEach(() => { document.body.innerHTML = ''; vi.clearAllMocks() })
+beforeEach(() => {
+  mockRoute.query = {}
+  mockRoute.path = '/schedules'
+  mockRoute.fullPath = '/schedules'
+})
 
 function mountView() {
   return mount(SchedulesView, { attachTo: document.body, global: { plugins: [ElementPlus] } })
 }
 
 describe('SchedulesView', () => {
+  it('defaults to schedules tab when no query', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(mocks.schedules).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('每周一早上')
+    expect(wrapper.text()).toContain('新增定时任务')
+  })
+
+  it('reads tab from route query', async () => {
+    mockRoute.query = { tab: 'batch' }
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(mocks.systemConfig).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('抓取批次配置')
+    expect(wrapper.text()).toContain('保存配置')
+    expect(wrapper.text()).not.toContain('新增定时任务')
+  })
+
   it('lists schedules with weekly period, groups and last run status', async () => {
     const wrapper = mountView()
     await flushPromises()
@@ -66,7 +111,6 @@ describe('SchedulesView', () => {
 
     const dialogWrapper = wrapper.findComponent({ name: 'ElDialog' })
     const selects = dialogWrapper.findAllComponents(ElSelect)
-    // 顺序：星期 / 城市 / 关键词组 / 博主组 / 时间范围
     selects[0].vm.$emit('update:modelValue', 5)
     selects[1].vm.$emit('update:modelValue', 'nb')
     selects[2].vm.$emit('update:modelValue', [11])
@@ -125,24 +169,35 @@ describe('SchedulesView', () => {
     expect(mocks.deleteSchedule).toHaveBeenCalledWith(31)
   })
 
-  it('manages keyword groups and blogger groups in the second tab', async () => {
+  it('shows batch config tab with crawl settings', async () => {
+    mockRoute.query = { tab: 'batch' }
     const wrapper = mountView()
     await flushPromises()
-    const groupTab = wrapper.findAll('input[type="radio"]').find((r) => r.attributes('value') === 'groups')!
-    await groupTab.trigger('click')
+
+    expect(mocks.systemConfig).toHaveBeenCalled()
+    const text = document.body.textContent || ''
+    expect(text).toContain('抓取批次配置')
+    expect(text).toContain('抓取数量')
+    expect(text).toContain('小红书滚动策略')
+    expect(text).toContain('单次搜索上限')
+    expect(text).toContain('每周搜索上限')
+    expect(text).toContain('连续失败熔断阈值')
+    expect(text).toContain('保存配置')
+    expect(text).toContain('重置')
+  })
+
+  it('saves batch config and shows success message', async () => {
+    const success = vi.spyOn(ElMessage, 'success')
+    mockRoute.query = { tab: 'batch' }
+    const wrapper = mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('关键词组')
-    expect(wrapper.text()).toContain('博主组')
-    // 默认展示关键词组管理（复用现有组件）
-    expect(wrapper.text()).toContain('展览组')
-    expect(mocks.keywordGroups).toHaveBeenCalled()
-
-    const bloggerSubTab = wrapper.findAll('input[type="radio"]').find((r) => r.attributes('value') === 'blogger')!
-    await bloggerSubTab.trigger('click')
+    const saveButton = Array.from(document.body.querySelectorAll('button')).find((b) => b.textContent?.includes('保存配置'))!
+    saveButton.dispatchEvent(new Event('click'))
     await flushPromises()
-    expect(wrapper.text()).toContain('本地号')
-    expect(wrapper.text()).toContain('活动博主')
-    expect(mocks.bloggerGroups).toHaveBeenCalled()
+
+    expect(mocks.updateSystemConfig).toHaveBeenCalled()
+    expect(success).toHaveBeenCalledWith('抓取批次配置已保存，重启服务后生效')
+    success.mockRestore()
   })
 })

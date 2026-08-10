@@ -14,7 +14,7 @@ from app.core.security import create_access_token
 from app.models.activity import Activity
 from app.models.blogger_city import BloggerCity
 from app.models.blogger_group import BloggerGroup, BloggerGroupMember
-from app.models.config import Blogger, City, Keyword
+from app.models.config import Blogger, City
 from app.models.duplicate import NoteDuplicateCandidate
 from app.models.keyword_group import KeywordGroup, KeywordGroupCity
 from app.models.note import Note
@@ -43,7 +43,8 @@ def _note(db, platform_id: str, title: str = "推文") -> Note:
 # ---------- 7.1 批量审核校验 ----------
 
 
-def test_batch_approve_skips_notes_without_activities(client, db_session):
+def test_batch_approve_allows_notes_without_activities(client, db_session):
+    """推文本身即活动内容，无子活动也应能审核通过（spec: 2026-08-03-allow-review-without-activities-design）。"""
     with_activity = _note(db_session, "a" * 24)
     without_activity = _note(db_session, "b" * 24)
     db_session.add(Activity(note_id=with_activity.id, name="活动", city_code="nb", type="市集"))
@@ -56,15 +57,13 @@ def test_batch_approve_skips_notes_without_activities(client, db_session):
     )
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["approved_ids"] == [with_activity.id]
-    skipped = data["skipped"]
-    assert [item["id"] for item in skipped] == [without_activity.id]
-    assert "无有效子活动" in skipped[0]["reason"]
+    assert sorted(data["approved_ids"]) == sorted([with_activity.id, without_activity.id])
+    assert data["approved_count"] == 2
 
     db_session.refresh(with_activity)
     db_session.refresh(without_activity)
     assert with_activity.review_status == "APPROVED"
-    assert without_activity.review_status != "APPROVED"
+    assert without_activity.review_status == "APPROVED"
 
 
 def test_batch_approve_all_valid_keeps_legacy_response(client, db_session):
@@ -76,7 +75,6 @@ def test_batch_approve_all_valid_keeps_legacy_response(client, db_session):
     data = resp.json()["data"]
     assert data["approved_ids"] == [note.id]
     assert data["approved_count"] == 1
-    assert data["skipped"] == []
 
 
 # ---------- 7.2 merge 幂等 ----------
@@ -112,7 +110,6 @@ def test_delete_city_cascades_associations(client, db_session):
     city = City(name="宁波", code="nb")
     db_session.add(city)
     db_session.flush()
-    db_session.add(Keyword(word="市集", city_code="nb"))
     blogger = Blogger(username="博主甲")
     db_session.add(blogger)
     db_session.flush()
@@ -125,7 +122,6 @@ def test_delete_city_cascades_associations(client, db_session):
 
     resp = client.delete(f"/api/v1/settings/cities/{city.id}", headers=_auth())
     assert resp.status_code == 200
-    assert db_session.scalars(select(Keyword).where(Keyword.city_code == "nb")).all() == []
     assert db_session.scalars(select(BloggerCity).where(BloggerCity.city_code == "nb")).all() == []
     assert db_session.scalars(select(KeywordGroupCity).where(KeywordGroupCity.city_code == "nb")).all() == []
     # 博主与组本身不受影响

@@ -17,32 +17,27 @@ def headers():
     return {"Authorization": f"Bearer {create_access_token({'sub': 'admin', 'role': 'admin'})}"}
 
 
-def test_city_keyword_blogger_crud(client: TestClient, headers):
+def test_city_blogger_crud(client: TestClient, headers):
     city = client.post('/api/v1/settings/cities', json={
         'name': '上海',
-        'keywords': ['周末活动', '亲子活动'],
         'recent_filter': '一周内',
     }, headers=headers)
     assert city.status_code == 201
     created = city.json()['data']
     assert created['code'].startswith('city-')
-    assert created['keywords'] == ['周末活动', '亲子活动']
     assert created['recent_filter'] == '一周内'
 
     updated = client.put(f"/api/v1/settings/cities/{created['id']}", json={
         'name': '上海市',
-        'keywords': ['展览'],
         'recent_filter': '一天内',
         'enabled': False,
     }, headers=headers)
     assert updated.status_code == 200
     assert updated.json()['data']['code'] == created['code']
-    assert updated.json()['data']['keywords'] == ['展览']
     assert updated.json()['data']['recent_filter'] == '一天内'
 
     listed = client.get('/api/v1/settings/cities', headers=headers).json()['data'][0]
     assert listed['name'] == '上海市'
-    assert listed['keywords'] == ['展览']
     assert client.post('/api/v1/settings/bloggers', json={'platform_user_id': 'u1', 'username': '博主', 'profile_url': 'https://example.com/u1', 'city_codes': [created['code']]}, headers=headers).status_code == 201
     assert client.delete(f"/api/v1/settings/cities/{city.json()['data']['id']}", headers=headers).status_code == 200
 
@@ -50,7 +45,6 @@ def test_city_keyword_blogger_crud(client: TestClient, headers):
 def test_city_rejects_unsupported_recent_filter(client: TestClient, headers):
     response = client.post('/api/v1/settings/cities', json={
         'name': '宁波',
-        'keywords': ['周末活动'],
         'recent_filter': '三天内',
     }, headers=headers)
     assert response.status_code == 422
@@ -64,10 +58,10 @@ def test_tasks_list_logs_and_reject_concurrent_trigger(client: TestClient, db_se
 
 
 def test_dashboard_task_uses_configured_city_keywords_time_and_bloggers(client: TestClient, db_session: Session, headers, monkeypatch):
-    city = client.post('/api/v1/settings/cities', json={'name': '上海', 'keywords': ['活动', '展览'], 'recent_filter': '一周内'}, headers=headers).json()['data']
+    city = client.post('/api/v1/settings/cities', json={'name': '上海', 'recent_filter': '一周内'}, headers=headers).json()['data']
     blogger = client.post('/api/v1/settings/bloggers', json={'platform_user_id': 'u1', 'username': '博主', 'profile_url': 'https://example.com/u1', 'city_codes': [city['code']]}, headers=headers).json()['data']
     monkeypatch.setattr('app.tasks.crawl_task.run_crawl.delay', lambda *_: None)
-    invalid = client.post('/api/v1/tasks/crawl', json={'type': 'mixed', 'city': city['code'], 'keywords': ['不存在'], 'recent_filter': '一天内', 'blogger_ids': []}, headers=headers)
+    invalid = client.post('/api/v1/tasks/crawl', json={'type': 'mixed', 'city': city['code'], 'keywords': [], 'recent_filter': '一天内', 'blogger_ids': []}, headers=headers)
     assert invalid.status_code == 422
     response = client.post('/api/v1/tasks/crawl', json={'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一天内', 'blogger_ids': [blogger['id']]}, headers=headers)
     assert response.status_code == 202
@@ -75,7 +69,7 @@ def test_dashboard_task_uses_configured_city_keywords_time_and_bloggers(client: 
 
 
 def test_failed_task_restarts_with_same_id_and_preserves_completed_progress(client: TestClient, db_session: Session, headers, monkeypatch):
-    city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'keywords': ['活动'], 'recent_filter': '一周内'}, headers=headers).json()['data']
+    city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'recent_filter': '一周内'}, headers=headers).json()['data']
     task = CrawlTask(type='mixed', status='FAILED', params={'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一周内', 'blogger_ids': []}, total_notes=113, downloaded_notes=5, ocr_notes=5, extracted_notes=5, success_notes=5, failed_notes=1, error_message='bad date')
     db_session.add(task); db_session.commit(); queued=[]
     monkeypatch.setattr('app.tasks.crawl_task.run_crawl.delay', lambda task_id, run_token: queued.append((task_id, run_token)))
@@ -142,7 +136,7 @@ def test_stopping_paused_verification_task_closes_preserved_session(client: Test
 
 
 def test_stopped_task_can_restart_with_same_id(client: TestClient, db_session: Session, headers, monkeypatch):
-    city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'keywords': ['活动'], 'recent_filter': '一周内'}, headers=headers).json()['data']
+    city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'recent_filter': '一周内'}, headers=headers).json()['data']
     task = CrawlTask(type='mixed', status='STOPPED', params={'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一周内', 'blogger_ids': []}, total_notes=10, extracted_notes=3, success_notes=3)
     db_session.add(task); db_session.commit(); queued = []
     monkeypatch.setattr('app.tasks.crawl_task.run_crawl.delay', lambda task_id, run_token: queued.append((task_id, run_token)))
@@ -156,7 +150,7 @@ def test_stopped_task_can_restart_with_same_id(client: TestClient, db_session: S
 
 
 def test_paused_task_stays_paused_when_login_check_fails(client: TestClient, db_session: Session, headers, monkeypatch):
-    city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'keywords': ['活动'], 'recent_filter': '一周内'}, headers=headers).json()['data']
+    city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'recent_filter': '一周内'}, headers=headers).json()['data']
     task = CrawlTask(type='mixed', status='PAUSED', params={'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一周内', 'blogger_ids': []}, total_notes=100, downloaded_notes=19, ocr_notes=19, extracted_notes=19, success_notes=19, error_message='请登录')
     db_session.add(task); db_session.commit()
 
@@ -175,7 +169,7 @@ def test_paused_task_stays_paused_when_login_check_fails(client: TestClient, db_
 
 
 def test_paused_task_reuses_id_started_at_and_progress_after_login(client: TestClient, db_session: Session, headers, monkeypatch):
-    city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'keywords': ['活动'], 'recent_filter': '一周内'}, headers=headers).json()['data']
+    city = client.post('/api/v1/settings/cities', json={'name': '宁波', 'recent_filter': '一周内'}, headers=headers).json()['data']
     started_at = datetime(2026, 7, 17, 1, tzinfo=timezone.utc)
     task = CrawlTask(type='mixed', status='PAUSED', params={'type': 'mixed', 'city': city['code'], 'keywords': ['活动'], 'recent_filter': '一周内', 'blogger_ids': []}, total_notes=100, downloaded_notes=19, ocr_notes=19, extracted_notes=19, success_notes=19, failed_notes=2, started_at=started_at, error_message='请登录')
     db_session.add(task); db_session.commit(); queued = []

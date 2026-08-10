@@ -2,7 +2,7 @@ from app.services.crawler import AuthenticationRequired, VerificationRequired
 from app.services.pipeline import deduplicate_results, run_stage, title_matches_keywords
 from app.models.activity import Activity
 from app.models.blogger_city import BloggerCity
-from app.models.config import Blogger, City, Keyword
+from app.models.config import Blogger, City
 from app.models.note import Note
 from app.models.task import CrawlTask, TaskLog
 from app.tasks.crawl_task import prepare_existing_note
@@ -52,7 +52,7 @@ def test_one_blogger_discovery_failure_does_not_discard_other_results(db_session
     processed = []
 
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def check_login(self):
@@ -70,16 +70,16 @@ def test_one_blogger_discovery_failure_does_not_discard_other_results(db_session
                 "url": "https://www.xiaohongshu.com/explore/signed-note?xsec_token=secret",
             }]
 
-    def fake_process(db, current_task, _run_token, _city, item, _adapter, _settings):
+    def fake_download_and_ocr(db, current_task, _run_token, _city, item, _adapter, _settings):
         processed.append(item["url"].split("?")[0])
         current_task.extracted_notes += 1
         current_task.success_notes += 1
         db.commit()
-        return True
+        return None  # 模拟处理完成（不进阶段2）
 
     monkeypatch.setattr(crawl_task, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(crawl_task, "OpenCLIAdapter", FakeAdapter)
-    monkeypatch.setattr(crawl_task, "process_note", fake_process)
+    monkeypatch.setattr(crawl_task, "download_and_ocr", fake_download_and_ocr)
 
     crawl_task.run_crawl.run(task.id, "blogger-token")
 
@@ -111,7 +111,7 @@ def test_blogger_authentication_failure_still_pauses_the_batch(db_session, monke
     calls = []
 
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def check_login(self):
@@ -148,7 +148,7 @@ def test_verification_failure_pauses_and_opens_chrome(db_session, monkeypatch):
     opened = []
 
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def check_login(self):
@@ -184,7 +184,7 @@ def test_verification_browser_launch_failure_does_not_override_paused(db_session
     db_session.commit()
 
     class FakeAdapter:
-        def __init__(self, _settings): pass
+        def __init__(self, _settings, session='xhs-crawler'): pass
         def check_login(self): return {"logged_in": True}
         def bind_task(self, *_args, **_kwargs): pass
         def blogger_notes(self, _username, _profile_url):
@@ -413,14 +413,13 @@ def test_one_note_drops_activities_before_published_at_but_keeps_far_future_and_
 
 def test_keyword_search_skips_titles_without_the_corresponding_keyword(db_session, monkeypatch, tmp_path):
     city = City(name="宁波", code="nb", enabled=True, recent_filter="一周内")
-    keyword = Keyword(city_code="nb", word="活动", enabled=True)
     task = CrawlTask(type="mixed", status="PENDING", params={"city": "nb", "keywords": ["活动"], "recent_filter": "一周内", "blogger_ids": []})
-    db_session.add_all([city, keyword, task])
+    db_session.add_all([city, task])
     db_session.commit()
     calls = {"note": [], "download": []}
 
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def check_login(self):
@@ -464,13 +463,12 @@ def test_keyword_search_skips_titles_without_the_corresponding_keyword(db_sessio
 
 def test_worker_finishes_current_note_then_stops_before_the_next(db_session, monkeypatch):
     city = City(name="宁波", code="nb", enabled=True, recent_filter="一周内")
-    keyword = Keyword(city_code="nb", word="活动", enabled=True)
     task = CrawlTask(type="mixed", status="PENDING", params={"city": "nb", "keywords": ["活动"], "recent_filter": "一周内", "blogger_ids": []})
-    db_session.add_all([city, keyword, task]); db_session.commit()
+    db_session.add_all([city, task]); db_session.commit()
     processed = []
 
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def check_login(self):
@@ -482,17 +480,17 @@ def test_worker_finishes_current_note_then_stops_before_the_next(db_session, mon
                 {"title": "宁波活动二", "url": "https://xhs/2"},
             ]
 
-    def fake_process(db, current_task, _run_token, _city, item, _adapter, _settings):
+    def fake_download_and_ocr(db, current_task, _run_token, _city, item, _adapter, _settings):
         processed.append(item["url"])
         current_task.extracted_notes += 1
         current_task.success_notes += 1
         current_task.status = "STOP_REQUESTED"
         db.commit()
-        return True
+        return None  # 模拟处理完成（不进阶段2）
 
     monkeypatch.setattr(crawl_task, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(crawl_task, "OpenCLIAdapter", FakeAdapter)
-    monkeypatch.setattr(crawl_task, "process_note", fake_process)
+    monkeypatch.setattr(crawl_task, "download_and_ocr", fake_download_and_ocr)
 
     crawl_task.run_crawl.run(task.id, task.run_token)
 
@@ -510,7 +508,7 @@ def test_worker_does_not_restart_a_pending_task_that_was_already_stopped(db_sess
     searched = []
 
     class FakeAdapter:
-        def __init__(self, _settings):
+        def __init__(self, _settings, session='xhs-crawler'):
             pass
 
         def check_login(self):

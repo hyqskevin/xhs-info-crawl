@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from collections.abc import Callable
+from dataclasses import dataclass
+from types import SimpleNamespace
 import logging
 import shutil
 import time
@@ -16,6 +18,7 @@ from app.models.config import Blogger, City
 from app.models.note import Note, NoteImage
 from app.models.schedule import ScheduledCrawl
 from app.models.task import CrawlTask, TaskLog
+from app.models.xhs_account import XhsAccount
 from app.services.archive import archive_task_folder, archive_task_result
 from app.services.crawler import AuthenticationRequired, CrawlHalted, VerificationRequired
 from app.services.browser_launcher import open_xhs_login
@@ -65,6 +68,24 @@ class ExecutionSuperseded(Exception):
     pass
 
 
+@dataclass
+class StagedNote:
+    """阶段 1 产出、阶段 2 消费的中间结构。
+
+    - note：已写入 DB 的 Note（状态为 OCR_DONE / DOWNLOADED）
+    - combined_text：标题+正文+OCR 拼接文本，供 MiniMax/规则提取
+    - reference_now：活动日期推断基准（Note.published_at 或 task.started_at）
+    - started_at：任务开始时间，用于归档目录
+    - image_rows：[(image_path, NoteImage)]，归档时复制图片用
+    """
+
+    note: Note
+    combined_text: str
+    reference_now: datetime
+    started_at: datetime
+    image_rows: list[tuple]
+
+
 logger = logging.getLogger(__name__)
 
 _DISPATCH_TZ = ZoneInfo("Asia/Shanghai")
@@ -90,6 +111,18 @@ def _expand_blogger_groups(db, city_code: str, group_ids: list[int]) -> list[int
         .order_by(Blogger.id)
     )
     return list(dict.fromkeys(db.scalars(stmt).all()))
+
+
+def load_xhs_accounts(db) -> list:
+    """加载已启用的 XhsAccount 列表，按 priority 升序、id 升序排列。
+
+    无账号配置时返回空列表，调用方负责回退到默认 session 'xhs-crawler'。
+    """
+    return list(db.scalars(
+        select(XhsAccount)
+        .where(XhsAccount.enabled.is_(True))
+        .order_by(XhsAccount.priority, XhsAccount.id)
+    ).all())
 
 
 @celery_app.task(name="app.tasks.crawl_task.scheduled_dispatch")
@@ -239,18 +272,22 @@ def finish_stop_if_requested(db, task_id: int, run_token: str) -> bool:
     return True
 
 
-def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, adapter: OpenCLIAdapter, settings) -> bool:
+def download_and_ocr(db, task: CrawlTask, run_token: str, city: str, item: dict, adapter: OpenCLIAdapter, settings) -> StagedNote | None:
+    """阶段 1：下载笔记详情 + 图片 + OCR，返回 StagedNote 或 None（跳过/失败）。
+
+    不调用 MiniMax，不写 Activity。保留 assert_execution_active / set_progress 调用。
+    """
     assert_execution_active(db, task.id, run_token)
     note_url = (item.get("url") or "").strip()
     if not note_url:
         log(db, task.id, "WARNING", f"跳过笔记：url 为空 title={item.get('title', '')!r}")
-        return False
+        return None
     if not assert_city_code_exists(db, city):
         log(db, task.id, "ERROR", f"city_code 不在 cities 表：{city!r}，跳过该笔记 url={note_url}")
         task.skipped_activities += 1
-        return False
+        return None
     if prepare_existing_note(db, note_url):
-        return False
+        return None
 
     attempts = settings.pipeline_stage_max_retries
     delay = settings.pipeline_stage_retry_delay_seconds
@@ -295,42 +332,55 @@ def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, ada
     ocr = OCRService(PaddleOCREngine(settings), settings.ocr_min_confidence) if settings.ocr_enabled else None
     ocr_texts: list[str] = []
     image_rows: list[tuple] = []
-    for index, image in enumerate(images, 1):
+    assert_execution_active(db, task.id, run_token)
+    if ocr:
+        # 并行 OCR：process_batch 用 ThreadPoolExecutor 并行处理所有图片，子线程内含重试
+        ocr_results = ocr.process_batch(
+            images,
+            workers=settings.ocr_parallel_workers,
+            attempts=attempts,
+            delay=delay,
+        )
         assert_execution_active(db, task.id, run_token)
-        result = {"status": "disabled", "text": "", "error": ""}
-        if ocr:
-            def recognize():
-                value = ocr.process(image)
-                if value["status"] == "failed":
-                    raise RuntimeError(value["error"] or "OCR failed")
-                return value
-            try:
-                result = run_stage(recognize, attempts, delay)
-            except Exception as exc:
-                result = {"status": "failed", "text": "", "error": str(exc)}
-        assert_execution_active(db, task.id, run_token)
-        image_row = NoteImage(note_id=note.id, storage_key="", ocr_text=result["text"], ocr_status=result["status"], ocr_error=result["error"])
-        db.add(image_row)
-        image_rows.append((image, image_row))
-        if result["text"]:
-            ocr_texts.append(f"[IMAGE {index}]\n{result['text']}")
+        for index, (image, result) in enumerate(zip(images, ocr_results), 1):
+            image_row = NoteImage(note_id=note.id, storage_key="", ocr_text=result["text"], ocr_status=result["status"], ocr_error=result["error"])
+            db.add(image_row)
+            image_rows.append((image, image_row))
+            if result["text"]:
+                ocr_texts.append(f"[IMAGE {index}]\n{result['text']}")
+    else:
+        for index, image in enumerate(images, 1):
+            result = {"status": "disabled", "text": "", "error": ""}
+            image_row = NoteImage(note_id=note.id, storage_key="", ocr_text=result["text"], ocr_status=result["status"], ocr_error=result["error"])
+            db.add(image_row)
+            image_rows.append((image, image_row))
     note.status = "OCR_DONE" if ocr else "DOWNLOADED"
     task.ocr_notes += 1
     db.commit()
 
-    set_progress(db, task, run_token, "EXTRACTING", note.title)
     combined = f"标题：{note.title}\n正文：{note.content}\n" + "\n".join(ocr_texts)
     # now 以 Note.published_at 为基准（如已解析），否则 fallback 到任务开始时间
     reference_now = note.published_at.replace(tzinfo=None) if note.published_at else started_at.replace(tzinfo=None)
-    if settings.minimax_api_key:
-        client = MiniMaxClient(settings)
-        try:
-            extracted = run_stage(lambda: extract_activities(combined, reference_now, lambda text: client.extract_many(text, started_at)), attempts, delay)
-        except Exception as exc:
-            log(db, task.id, "WARNING", f"MiniMax 提取失败，已降级规则提取：{exc}")
-            extracted = extract_activities(combined, reference_now, None)
-    else:
-        extracted = extract_activities(combined, reference_now, None)
+    return StagedNote(
+        note=note,
+        combined_text=combined,
+        reference_now=reference_now,
+        started_at=started_at,
+        image_rows=image_rows,
+    )
+
+
+def extract_and_save(db, task: CrawlTask, run_token: str, staged: StagedNote, extracted, settings) -> bool:
+    """阶段 2：校验活动 + 写 Activity + 归档 + 更新 Note 状态。
+
+    接收已提取的 extracted（list[dict]），不调用 MiniMax。
+    返回 True 表示 PROCESSED，False 表示无活动被过滤。
+    """
+    note = staged.note
+    city = note.city_code
+    started_at = staged.started_at
+    image_rows = staged.image_rows
+    set_progress(db, task, run_token, "EXTRACTING", note.title)
     assert_execution_active(db, task.id, run_token)
 
     from app.services.activity_validator import classify_zero_activity, validate_activities
@@ -339,6 +389,12 @@ def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, ada
     if classification in {"all_before_publish", "no_activity_signals"}:
         note.status = "NO_ACTIVITIES"
         log(db, task.id, "INFO", f"未提取到有效活动 原因={classification} url={note.source_url}")
+        if classification == "all_before_publish" and extracted:
+            preview = "; ".join(
+                f"{a.get('name')!r}@{a.get('start_time')}" for a in extracted[:5]
+            )
+            suffix = "" if len(extracted) <= 5 else f" (共 {len(extracted)} 条)"
+            log(db, task.id, "INFO", f"被拒绝活动预览：{preview}{suffix}")
         task.extracted_notes += 1
         db.commit()
         set_progress(db, task, run_token, "ARCHIVING", note.title)
@@ -388,12 +444,35 @@ def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, ada
     archive_task_result(settings.archive_dir, started_at, task.id, note, image_rows, task_activities, city)
     assert_execution_active(db, task.id, run_token)
     create_note_duplicate_candidates(db, note)
+    folder = archive_task_folder(settings.archive_dir, started_at, task.id, city)
     shutil.rmtree(folder / ".downloads", ignore_errors=True)
     note.status = "PROCESSED"
     task.extracted_notes += 1
     task.success_notes = task.extracted_notes
     db.commit()
     return True
+
+
+def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, adapter: OpenCLIAdapter, settings) -> bool:
+    """向后兼容包装：download_and_ocr + 单篇 MiniMax 提取 + extract_and_save。
+
+    供直接调用 process_note 的旧路径使用；run_crawl 已改为两阶段流水线，不再走这里。
+    """
+    staged = download_and_ocr(db, task, run_token, city, item, adapter, settings)
+    if staged is None:
+        return False
+    attempts = settings.pipeline_stage_max_retries
+    delay = settings.pipeline_stage_retry_delay_seconds
+    if settings.minimax_api_key:
+        client = MiniMaxClient(settings)
+        try:
+            extracted = run_stage(lambda: extract_activities(staged.combined_text, staged.reference_now, lambda text: client.extract_many(text, staged.started_at)), attempts, delay)
+        except Exception as exc:
+            log(db, task.id, "WARNING", f"MiniMax 提取失败，已降级规则提取：{exc}")
+            extracted = extract_activities(staged.combined_text, staged.reference_now, None)
+    else:
+        extracted = extract_activities(staged.combined_text, staged.reference_now, None)
+    return extract_and_save(db, task, run_token, staged, extracted, settings)
 
 
 @celery_app.task(name="app.tasks.crawl_task.run", bind=True)
@@ -430,7 +509,11 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         log(db, task.id, "ERROR", message)
         db.close()
         return
-    adapter = OpenCLIAdapter(settings)
+    accounts = load_xhs_accounts(db)
+    if not accounts:
+        accounts = [SimpleNamespace(name="默认", session_name="xhs-crawler", id=None)]
+    account_index = 0
+    adapter = OpenCLIAdapter(settings, session=accounts[0].session_name)
     # 注册 task_id 到 adapter 让 run() 自动绑定 PID（如果 adapter 支持）
     if hasattr(adapter, "bind_task"):
         adapter.bind_task(
@@ -497,9 +580,23 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
                         task.error_message = f"博主 {username!r} 抓取失败：{exc}"
                         db.commit()
                         log(db, task.id, "ERROR", task.error_message)
+                        # 博主层失败同样计入连续失败熔断：stale page identity /
+                        # 其它 OpenCLIError 表明 CDP session / 浏览器标签页已过期，
+                        # 继续跑其它博主大概率继续失败，必须交还决策权。
+                        consecutive_failures += 1
+                        if consecutive_failures >= settings.consecutive_note_failure_limit:
+                            raise CrawlHalted(
+                                f"已连续 {consecutive_failures} 次抓取失败（最近一次：博主 {username!r}）。"
+                                f"CDP session / 浏览器标签页可能已过期，请在 Chrome 重新打开小红书后"
+                                f"点击「检测登录并继续」，或「结束抓取」。最后一次错误：{exc}"
+                            )
                         continue
+                    consecutive_failures = 0
                     assert_execution_active(db, task.id, run_token)
                     log(db, task.id, "INFO", f"博主 {username!r} 命中 {len(items)} 篇（带 xsec_token 的）")
+                    if blogger.max_notes_per_crawl and blogger.max_notes_per_crawl > 0 and len(items) > blogger.max_notes_per_crawl:
+                        log(db, task.id, "INFO", f"博主 {username!r} 抓取上限 {blogger.max_notes_per_crawl}，截断至 {blogger.max_notes_per_crawl} 篇")
+                        items = items[:blogger.max_notes_per_crawl]
                     results.extend((city.code, item) for item in items)
         else:
             for city_code in requested_cities:
@@ -521,15 +618,6 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         task.total_notes = len(results)
         db.commit()
 
-        def processor(entry: tuple[str, dict]) -> None:
-            matched_keywords = entry[1].get("_matched_keywords")
-            if matched_keywords and not title_matches_keywords(entry[1].get("title", ""), matched_keywords):
-                task.skipped_notes += 1
-                db.commit()
-                log(db, task.id, "INFO", f"标题未包含关键词，已跳过 [{entry[1]['url']}] 标题={entry[1].get('title', '')!r} 关键词={matched_keywords}")
-                return
-            process_note(db, task, run_token, entry[0], entry[1], adapter, settings)
-
         def on_failure(entry: tuple[str, dict], exc: Exception) -> None:
             db.rollback()
             cleanup_incomplete_note(db, entry[1]["url"])
@@ -539,11 +627,24 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
             db.commit()
             log(db, current.id, "ERROR", f"笔记处理失败 [{entry[1]['url']}]：{exc}")
 
+        attempts = settings.pipeline_stage_max_retries
+        delay = settings.pipeline_stage_retry_delay_seconds
+
+        # 阶段 1：逐篇下载 + OCR（串行，opencli 不支持并发），暂存 StagedNote
+        staged_notes: list[StagedNote] = []
         for entry in results:
             if finish_stop_if_requested(db, task.id, run_token):
                 return
             try:
-                processor(entry)
+                matched_keywords = entry[1].get("_matched_keywords")
+                if matched_keywords and not title_matches_keywords(entry[1].get("title", ""), matched_keywords):
+                    task.skipped_notes += 1
+                    db.commit()
+                    log(db, task.id, "INFO", f"标题未包含关键词，已跳过 [{entry[1]['url']}] 标题={entry[1].get('title', '')!r} 关键词={matched_keywords}")
+                    continue
+                staged = download_and_ocr(db, task, run_token, entry[0], entry[1], adapter, settings)
+                if staged is not None:
+                    staged_notes.append(staged)
                 # 正常返回（含标题不匹配/已存在等跳过）说明链路健康，连续失败计数清零
                 consecutive_failures = 0
             except ExecutionStopped:
@@ -554,8 +655,48 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
             except ExecutionSuperseded:
                 db.rollback()
                 return
-            except AuthenticationRequired:
-                raise
+            except (AuthenticationRequired, VerificationRequired) as exc:
+                # 当前账号失效（未登录/扫码超时/风控验证），切换到下一个账号并重试当前笔记一次。
+                # 每篇笔记最多切换一次，避免死循环；retry 再失效则跳过本篇，下一篇继续用新账号。
+                db.rollback()
+                cleanup_incomplete_note(db, entry[1]["url"])
+                account_index += 1
+                if account_index >= len(accounts):
+                    raise CrawlHalted(f"所有账号均已失效，请扫码登录后继续。最近错误：{exc}")
+                old_name = accounts[account_index - 1].name
+                new_name = accounts[account_index].name
+                log(db, task.id, "INFO", f"账号 {old_name!r} 失效（{exc}），切换到 {new_name!r}")
+                adapter = OpenCLIAdapter(settings, session=accounts[account_index].session_name)
+                if hasattr(adapter, "bind_task"):
+                    adapter.bind_task(
+                        task.id,
+                        run_token,
+                        execution_guard=lambda: assert_execution_active(db, task.id, run_token),
+                        warning_sink=lambda message: log(db, task.id, "WARNING", message),
+                    )
+                # 重试当前笔记一次
+                try:
+                    staged = download_and_ocr(db, task, run_token, entry[0], entry[1], adapter, settings)
+                    if staged is not None:
+                        staged_notes.append(staged)
+                    consecutive_failures = 0
+                except (AuthenticationRequired, VerificationRequired) as retry_exc:
+                    # 新账号也失效，跳过本篇，下一篇继续用新账号（account_index 已增）
+                    db.rollback()
+                    cleanup_incomplete_note(db, entry[1]["url"])
+                    log(db, task.id, "WARNING", f"切换到账号 {new_name!r} 后仍失效：{retry_exc}，跳过该笔记")
+                    continue
+                except ExecutionStopped:
+                    db.rollback()
+                    cleanup_incomplete_note(db, entry[1]["url"])
+                    finish_stop_if_requested(db, task.id, run_token)
+                    return
+                except ExecutionSuperseded:
+                    db.rollback()
+                    return
+                except Exception as retry_exc:
+                    on_failure(entry, retry_exc)
+                    continue
             except Exception as exc:
                 consecutive_failures += 1
                 on_failure(entry, exc)
@@ -566,6 +707,51 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
                         f"已连续 {consecutive_failures} 篇笔记处理失败，疑似登录态失效或触发风控。"
                         f"最近一次错误：{exc}。请检查浏览器登录/验证状态后点「检测登录并继续」，或「结束抓取」。"
                     )
+
+        # 阶段 2：批量并行 MiniMax + 写 DB
+        if staged_notes:
+            if settings.minimax_api_key:
+                client = MiniMaxClient(settings)
+                texts = [s.combined_text for s in staged_notes]
+                reference = staged_notes[0].reference_now
+                try:
+                    payloads = run_stage(
+                        lambda: client.extract_many_parallel(texts, reference),
+                        attempts, delay,
+                    )
+                except Exception as exc:
+                    log(db, task.id, "WARNING", f"MiniMax 批量提取失败，降级规则提取：{exc}")
+                    extracted_list = [extract_activities(s.combined_text, s.reference_now, None) for s in staged_notes]
+                else:
+                    # 复用 extract_activities 的 normalize 逻辑：llm callable 直接返回预提取的 payload
+                    extracted_list = [
+                        extract_activities(s.combined_text, s.reference_now, lambda _text, p=payload: p)
+                        for s, payload in zip(staged_notes, payloads)
+                    ]
+            else:
+                extracted_list = [extract_activities(s.combined_text, s.reference_now, None) for s in staged_notes]
+
+            for staged, extracted in zip(staged_notes, extracted_list):
+                if finish_stop_if_requested(db, task.id, run_token):
+                    return
+                try:
+                    extract_and_save(db, task, run_token, staged, extracted, settings)
+                except ExecutionStopped:
+                    db.rollback()
+                    finish_stop_if_requested(db, task.id, run_token)
+                    return
+                except ExecutionSuperseded:
+                    db.rollback()
+                    return
+                except AuthenticationRequired:
+                    raise
+                except Exception as exc:
+                    db.rollback()
+                    current = db.get(CrawlTask, task.id)
+                    current.failed_notes += 1
+                    current.error_message = str(exc)
+                    db.commit()
+                    log(db, task.id, "ERROR", f"笔记保存失败 [{staged.note.source_url}]：{exc}")
         if finish_stop_if_requested(db, task.id, run_token):
             return
         task = db.get(CrawlTask, task.id)
