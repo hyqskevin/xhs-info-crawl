@@ -30,17 +30,25 @@ echo "==> 解压 Python..."
 tar xzf $PYTHON_TGZ -C $BUILD_DIR
 echo "解压后 BUILD_DIR 顶层内容:"
 ls -la $BUILD_DIR/
-# 查找解压后的 python 目录(含 bin/python3),不假设目录名
-# find 输出 .../python/bin/python3,dirname 两次得到 .../python
-# 注意:head -1 关闭管道会让 find 收到 SIGPIPE 返回非零,加 || true 容错
-PYTHON_BIN=$(find $BUILD_DIR -name "python3" -type f 2>/dev/null | head -1 || true)
-if [ -z "$PYTHON_BIN" ]; then
-    echo "错误:解压后未找到 python3 可执行文件"
-    echo "find 结果:"
-    find $BUILD_DIR -name "python3*" 2>/dev/null | head -10 || true
+# 查找解压后的 python 目录
+# python-build-standalone install_only 解压后标准布局是 $BUILD_DIR/python/bin/python3
+# 优先检查标准路径,fallback 用 shell glob 查找
+PYTHON_SRC="$BUILD_DIR/python"
+if [ ! -x "$PYTHON_SRC/bin/python3" ]; then
+    echo "标准路径 $PYTHON_SRC/bin/python3 不存在,用 glob 查找..."
+    for pybin in "$BUILD_DIR"/*/bin/python3; do
+        if [ -x "$pybin" ]; then
+            PYTHON_SRC=$(dirname $(dirname "$pybin"))
+            break
+        fi
+    done
+fi
+if [ ! -x "$PYTHON_SRC/bin/python3" ]; then
+    echo "错误:未找到含 bin/python3 的目录"
+    echo "BUILD_DIR 内容:"
+    ls -la "$BUILD_DIR/"
     exit 1
 fi
-PYTHON_SRC=$(dirname $(dirname "$PYTHON_BIN"))
 echo "找到 Python 目录: $PYTHON_SRC"
 mkdir -p $PKG_DIR/runtime
 mv "$PYTHON_SRC" $PKG_DIR/runtime/python
