@@ -112,16 +112,10 @@ jobs:
           name: windows-zip
           path: artifacts
 
-      - name: Create source zip
-        run: |
-          git archive --format=zip --prefix=xhs-info-crawl/ HEAD \
-            > artifacts/xhs-info-crawl-${{ steps.version.outputs.VERSION }}-src.zip
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/xhs-info-crawl-${{ steps.version.outputs.VERSION }}-macos.zip
             artifacts/xhs-info-crawl-${{ steps.version.outputs.VERSION }}-windows.zip
-            artifacts/xhs-info-crawl-${{ steps.version.outputs.VERSION }}-src.zip
           generate_release_notes: true
