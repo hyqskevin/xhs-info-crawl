@@ -59,10 +59,13 @@ $VenvPip = Join-Path $PkgDir "runtime\venv\Scripts\pip.exe"
 & $VenvPip install -r (Join-Path $RootDir "backend\requirements-runtime.txt")
 & $VenvPip install -r (Join-Path $RootDir "launcher\requirements.txt")
 
-# 3. 复制后端源码
-Write-Host "==> 复制后端源码..."
-New-Item -ItemType Directory -Force -Path (Join-Path $PkgDir "app") | Out-Null
-Copy-Item -Recurse (Join-Path $RootDir "backend") (Join-Path $PkgDir "app\backend")
+# 3. 复制后端源码(排除测试代码)
+Write-Host "==> 复制后端源码(排除 tests)..."
+New-Item -ItemType Directory -Force -Path (Join-Path $PkgDir "app\backend") | Out-Null
+# 用 robocopy 排除 tests 目录(Windows 自带)
+$BackendSrc = Join-Path $RootDir "backend"
+$BackendDst = Join-Path $PkgDir "app\backend"
+robocopy $BackendSrc $BackendDst /E /XD tests __pycache__ .pytest_cache /XF .coverage 2>&1 | Out-Null
 
 # 4. 复制前端构建产物
 Write-Host "==> 复制前端构建产物..."

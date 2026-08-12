@@ -42,3 +42,18 @@ docs/
 
 # 测试脚本不提交
 scripts/test-*.sh
+
+# 非生产文件(设计文档/开发工具,不进仓库)
+SPEC.md
+AGENTS.md
+RELEASE_NOTES.md
+Makefile
+
+# 测试代码不提交(和生产运行无关)
+backend/tests/
+backend/tests/fixtures/
+frontend/src/**/*.spec.ts
+frontend/e2e/
+
+# CI 测试工作流(不跑测试)
+.github/workflows/ci.yml

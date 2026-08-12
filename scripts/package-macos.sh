@@ -61,10 +61,12 @@ $PKG_DIR/runtime/venv/bin/pip install --upgrade pip
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/backend/requirements-runtime.txt
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/launcher/requirements.txt
 
-# 3. 复制后端源码
-echo "==> 复制后端源码..."
-mkdir -p $PKG_DIR/app
-cp -r $ROOT_DIR/backend $PKG_DIR/app/backend
+# 3. 复制后端源码(排除测试代码)
+echo "==> 复制后端源码(排除 tests)..."
+mkdir -p $PKG_DIR/app/backend
+rsync -a --exclude='tests/' --exclude='__pycache__/' --exclude='.pytest_cache/' \
+  --exclude='.coverage' --exclude='htmlcov/' \
+  $ROOT_DIR/backend/ $PKG_DIR/app/backend/
 
 # 4. 复制前端构建产物
 echo "==> 复制前端构建产物..."
