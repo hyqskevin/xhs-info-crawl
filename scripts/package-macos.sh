@@ -25,7 +25,16 @@ mkdir -p $PKG_DIR
 # 1. 下载便携版 Python 3.11.9(python-build-standalone)
 echo "==> 下载便携版 Python..."
 curl -L $PYTHON_URL | tar xz -C $BUILD_DIR
-mv $BUILD_DIR/python $PKG_DIR/runtime/python
+# 查找解压后的 python 目录(含 bin/python3),不假设目录名
+PYTHON_SRC=$(find $BUILD_DIR -maxdepth 2 -name "python3" -path "*/bin/*" -type f -exec dirname {} \; -quit | xargs dirname)
+if [ -z "$PYTHON_SRC" ]; then
+    echo "错误:解压后未找到含 bin/python3 的目录"
+    echo "BUILD_DIR 内容:"
+    ls -la $BUILD_DIR/
+    exit 1
+fi
+mkdir -p $PKG_DIR/runtime
+mv $PYTHON_SRC $PKG_DIR/runtime/python
 
 # 2. 创建 venv 并安装依赖(不含 ocr extra)
 echo "==> 创建 venv 并安装依赖..."
