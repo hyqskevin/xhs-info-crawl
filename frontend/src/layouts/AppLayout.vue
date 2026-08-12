@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  Avatar,
   Calendar,
   Connection,
   DataAnalysis,
@@ -74,6 +75,16 @@ function logout(){localStorage.removeItem('token');userStore.clear();location.hr
           <ElMenuItem index="/settings?tab=blogger-groups">博主组</ElMenuItem>
           <ElMenuItem index="/settings?tab=xhs-accounts">账号配置</ElMenuItem>
           <ElMenuItem index="/settings?tab=system-config">系统配置</ElMenuItem>
+        </ElSubMenu>
+        <ElSubMenu v-if="userStore.isAdmin" index="/system-admin">
+          <template #title>
+            <ElIcon><Avatar /></ElIcon>
+            <span>系统管理</span>
+          </template>
+          <ElMenuItem index="/system-admin?tab=accounts">操作账号</ElMenuItem>
+          <ElMenuItem index="/system-admin?tab=groups">账号分组</ElMenuItem>
+          <ElMenuItem index="/system-admin?tab=permissions">权限配置</ElMenuItem>
+          <ElMenuItem index="/system-admin?tab=audit">操作日志</ElMenuItem>
         </ElSubMenu>
         <!-- 海报制作功能未完备，暂隐藏 -->
         <!-- <ElMenuItem index="/posters">

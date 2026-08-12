@@ -11,6 +11,7 @@ import ReportsView from '@/views/ReportsView.vue'
 import SettingsView from '@/views/SettingsView.vue'
 import PostersListView from '@/views/PostersListView.vue'
 import PosterWizardView from '@/views/PosterWizardView.vue'
+import SystemAdminView from '@/views/SystemAdminView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -30,6 +31,7 @@ const router = createRouter({
         { path: 'settings', component: SettingsView, meta: { title: '配置中心' } },
         { path: 'posters', component: PostersListView, meta: { title: '海报制作' } },
         { path: 'posters/new', component: PosterWizardView, meta: { title: '新建海报' } },
+        { path: 'system-admin', component: SystemAdminView, meta: { title: '系统管理' } },
       ],
     },
   ],
