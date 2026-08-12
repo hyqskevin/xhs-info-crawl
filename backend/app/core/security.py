@@ -33,17 +33,34 @@ def create_access_token(data: dict[str, object], expires_delta: timedelta | None
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
 
 
-def get_current_user(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> dict[str, str]:
+def get_current_user(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> dict[str, object]:
     if credentials is None:
         raise HTTPException(status_code=401, detail="未提供认证凭据")
     try:
         payload = jwt.decode(credentials.credentials, get_settings().secret_key, algorithms=["HS256"])
-        return {"username": str(payload["sub"]), "role": str(payload["role"])}
-    except (jwt.InvalidTokenError, KeyError) as exc:
+    except jwt.InvalidTokenError as exc:
         raise HTTPException(status_code=401, detail="认证凭据无效或已过期") from exc
+    return {
+        "username": str(payload["sub"]),
+        "role": str(payload.get("role", "editor")),
+        "permissions": [str(p) for p in payload.get("permissions", [])],
+    }
 
 
-def require_admin(user: Annotated[dict[str, str], Depends(get_current_user)]) -> dict[str, str]:
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="权限不足")
-    return user
+def require_permission(code: str):
+    """返回 FastAPI Depends，校验当前用户具备指定权限码（* 通配）。"""
+    def _checker(
+        user: Annotated[dict[str, object], Depends(get_current_user)],
+    ) -> dict[str, object]:
+        perms = set(user.get("permissions", []))
+        if "*" in perms or code in perms:
+            return user
+        raise HTTPException(status_code=403, detail=f"需要权限 {code}")
+    return _checker
+
+
+def require_admin(user: Annotated[dict[str, object], Depends(get_current_user)]) -> dict[str, object]:
+    """兼容旧 API：role=admin 或 permissions 含 * 即放行。"""
+    if user["role"] == "admin" or "*" in set(user.get("permissions", [])):
+        return user
+    raise HTTPException(status_code=403, detail="权限不足")
