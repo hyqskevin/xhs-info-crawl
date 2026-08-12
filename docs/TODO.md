@@ -52,6 +52,11 @@
   - 验收：后端 `625 passed, 1 skipped`（+20 新 case：XhsAccount 模型/API/CRUD/check-login/笔记级切换/全部失效 PAUSED/无账号回退），前端 `106 passed`（+17 新 case：账号配置 tab CRUD/检测登录/Dashboard 操作账号下拉），build 通过；spec `docs/superpowers/specs/2026-08-10-multi-xhs-account-design.md`。
   - 部署：**worker 必须重启**（改动 `app/tasks/crawl_task.py` + `app/services/opencli_adapter.py`）；执行 `alembic upgrade head`（migration 0019 建 xhs_accounts 表）；uvicorn `--reload` 自动加载 API 层。
 
+- [ ] 抓取详情空值/风控熔断 + adapter 周期性重置 + token 池刷新（2026-08-12 用户反馈）
+  - 目标：抓取 200+ 笔记后陆续出现 `EMPTY_RESULT_RETRYABLE`（实测 7/107 = 6.5%），根因是 Chrome profile 累积 + 200+ 独立 `page.goto` 触发小红书 web 风控，部分 `xsec_token` 提前失效，opencli 拿到的 `desc` 为空字符串。需要 ①连续空详情 PAUSED 熔断（连续 5 篇空值 → 抛 `CrawlHalted` 类似 进入 PAUSED）；②每抓 N 条（默认 30）调用 `adapter.close_session()` 重建 CDP 连接，强制 Chrome profile 释放；③**token 池自动刷新**（在 streak = 阈值 - 2 时重新跑 search 拿新 xsec_token，按 `platform_note_id` 替换原 entry URL）。
+  - 验收：后端 `download_and_ocr` 暴露 `note.content` 非空计数，连续 5 篇空 → 抛 `CrawlHalted("连续 N 篇笔记详情为空，疑似触发小红书风控...")`；`run_crawl` 主循环在 `staged_notes` 累计 N 条时调 `adapter.close_session()` 重建；streak 达到阈值 - 2（默认 3）时调 `throttled_search` 重新搜索并按 `platform_note_id` 替换 entry URL；`assert_execution_active` 仍可正常停止；新后端测试 8+ 用例（连续空熔断 / 部分空允许 / 周期性重置触发 / 重置后账号不变 / 停止信号仍响应 / token 池刷新 / 配额用尽回退熔断）；后端全量测试 + build 通过；spec `docs/superpowers/specs/2026-08-12-empty-detail-throttling-design.md`。
+  - 部署：改动 `app/tasks/crawl_task.py` + `app/services/opencli_adapter.py` + `app/core/config.py`，**worker 必须重启**（新增 Settings 字段不需 alembic 迁移）。
+
 - [x] 仪表盘连接检测面板（opencli 连通 + 小红书号登录 + 浏览器池）
   - 目标：仪表盘目前只有一个"后端服务"健康卡片，看不到 opencli 二进制是否在 PATH、当前 whoami 登录的是哪个小红书号、Chrome 是否能拉起。用户排障常卡在"opencli 找不到""未登录""Chrome 拉不起来"三件事，需要在仪表盘一发即查。
   - 结果：新文件 `app/services/diagnostics.py`（`probe_opencli/probe_xhs_login/probe_xhs_pool/probe_snapshot`，异常隔离）；新路由 `app/api/v1/diagnostics.py` 注册 4 端点（snapshot + 3 单测）；`DashboardView.vue` 加「连接检测」卡片，三段独立检测按钮 + 失败原因文案 + loading 态；入页自动调 `/snapshot` 一次（不轮询）；`api.client.ts` 加 4 个调用方法；`docs/api-doc.md` 补「连接检测接口」章节。
@@ -140,9 +145,12 @@
   - 验收：7 个测试文件 62 passed（design-tokens 8 + client 11 + App 10 + ServiceStatus 9 + OpenCLIPanel 7 + OcrPanel 11 + LogViewer 6）；`npm run build` 成功产出 dist/；vue-tsc 类型检查通过（修复 @types/node 缺失和未使用导入）。
   - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 4.6 + § 4.3 + § 4.7
   - plan：`docs/superpowers/plans/2026-08-10-p4-launcher-ui.md`
-- [ ] P5 打包脚本 + GitHub Actions
+- [x] P5 打包脚本 + GitHub Actions
   - 目标：实现 `scripts/package-macos.sh`、`scripts/package-windows.ps1`、`scripts/package-ocr-addon.sh`、`.github/workflows/release.yml`、`.github/workflows/release-ocr-addon.yml`。
-  - 验收：macOS/Windows 用户包 zip 产出；OCR 增强包 3 个平台 zip 产出；源码 zip 产出；打包脚本本地验证可执行（dry-run）。
+  - 结果：①`backend/requirements-runtime.txt`(不含 ocr extra);②`launcher/requirements.txt`(pywebview/fastapi/httpx);③`.gitattributes`(git archive 排除 .venv/node_modules/data/.env/dist);④`scripts/package-macos.sh`(python-build-standalone cpython-3.11.9 + venv + .app bundle + zip);⑤`scripts/package-windows.ps1`(对应 macOS 版,start.bat 入口);⑥`scripts/package-ocr-addon.sh`(3 平台 paddleocr wheel + 模型下载 + VERSION);⑦`.github/workflows/release.yml`(v*.*.* tag 触发,build-macos + build-windows + release 三 job,含 src.zip);⑧`.github/workflows/release-ocr-addon.yml`(ocr-addon-* tag 触发,3 平台 build + release)。
+  - 验收：`backend/tests/test_packaging_scripts.py` 72 项结构验证全绿(8 requirements + 5 gitattributes + 15 macos + 13 windows + 13 ocr-addon + 18 workflows);后端 719 passed(P5 无回归,7 个 opencli_bin 环境变量失败为预先存在)。
+  - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 6.1-6.7
+  - plan：`docs/superpowers/plans/2026-08-10-p5-packaging-scripts.md`
 - [ ] P6 端到端验收 + 文档
   - 目标：在干净环境验证打包版完整流程；补齐用户文档和开发者文档。
   - 验收：macOS 解压双击 → 三进程运行 → 装 OpenCLI → 测试通过 → 打开网页；OCR 一键安装流程；端口冲突自动处理；`INSTALL.md`/`docs/deployment.md`/`README-USER.md` 更新；E2E 测试文档 `tests/test-launcher-startup.md` 等 3 个。
