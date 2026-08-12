@@ -31,15 +31,18 @@ tar xzf $PYTHON_TGZ -C $BUILD_DIR
 echo "解压后 BUILD_DIR 顶层内容:"
 ls -la $BUILD_DIR/
 # 查找解压后的 python 目录(含 bin/python3),不假设目录名
-PYTHON_SRC=$(find $BUILD_DIR -maxdepth 3 -name "python3" -path "*/bin/*" -type f 2>/dev/null -exec dirname {} \; -quit | xargs dirname 2>/dev/null)
-if [ -z "$PYTHON_SRC" ]; then
-    echo "错误:解压后未找到含 bin/python3 的目录"
+# find 输出 .../python/bin/python3,dirname 两次得到 .../python
+PYTHON_BIN=$(find $BUILD_DIR -name "python3" -type f 2>/dev/null | head -1)
+if [ -z "$PYTHON_BIN" ]; then
+    echo "错误:解压后未找到 python3 可执行文件"
     echo "find 结果:"
-    find $BUILD_DIR -maxdepth 3 -name "python3*" 2>/dev/null | head -10
+    find $BUILD_DIR -name "python3*" 2>/dev/null | head -10
     exit 1
 fi
+PYTHON_SRC=$(dirname $(dirname "$PYTHON_BIN"))
+echo "找到 Python 目录: $PYTHON_SRC"
 mkdir -p $PKG_DIR/runtime
-mv $PYTHON_SRC $PKG_DIR/runtime/python
+mv "$PYTHON_SRC" $PKG_DIR/runtime/python
 rm -f $PYTHON_TGZ
 
 # 2. 创建 venv 并安装依赖(不含 ocr extra)
