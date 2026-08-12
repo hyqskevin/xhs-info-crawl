@@ -72,7 +72,7 @@ function logout(){localStorage.removeItem('token');userStore.clear();location.hr
           <ElMenuItem index="/settings?tab=bloggers">博主白名单</ElMenuItem>
           <ElMenuItem index="/settings?tab=keyword-groups">关键词组</ElMenuItem>
           <ElMenuItem index="/settings?tab=blogger-groups">博主组</ElMenuItem>
-          <ElMenuItem index="/settings?tab=xhs-accounts">小红书账号配置</ElMenuItem>
+          <ElMenuItem index="/settings?tab=xhs-accounts">账号配置</ElMenuItem>
           <ElMenuItem index="/settings?tab=system-config">系统配置</ElMenuItem>
         </ElSubMenu>
         <!-- 海报制作功能未完备，暂隐藏 -->
