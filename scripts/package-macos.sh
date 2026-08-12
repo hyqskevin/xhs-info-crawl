@@ -10,8 +10,9 @@ VERSION=${1:?"用法: ./scripts/package-macos.sh <version>"}
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 BUILD_DIR=$ROOT_DIR/dist/build
 PKG_DIR=$BUILD_DIR/xhs-info-crawl
+# python-build-standalone 用 triple 命名: aarch64-apple-darwin (不是 darwin-arm64)
 PYTHON_VERSION="cpython-3.11.9+20240415"
-PYTHON_ARCHIVE="$PYTHON_VERSION-darwin-arm64-install_only.tar.gz"
+PYTHON_ARCHIVE="$PYTHON_VERSION-aarch64-apple-darwin-install_only.tar.gz"
 PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20240415/$PYTHON_ARCHIVE"
 
 echo "==> 打包 macOS v$VERSION"

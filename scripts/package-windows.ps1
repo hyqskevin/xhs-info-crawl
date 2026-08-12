@@ -29,7 +29,14 @@ Write-Host "==> 下载便携版 Python..."
 $PythonTgz = Join-Path $BuildDir $PythonArchive
 Invoke-WebRequest -Uri $PythonUrl -OutFile $PythonTgz
 tar xzf $PythonTgz -C $BuildDir
-Move-Item (Join-Path $BuildDir "python") (Join-Path $PkgDir "runtime\python")
+# 查找解压后的 python 目录(含 python.exe),不假设目录名
+$PythonDir = Get-ChildItem $BuildDir -Directory | Where-Object { Test-Path (Join-Path $_.FullName "python.exe") } | Select-Object -First 1
+if (-not $PythonDir) {
+    throw "解压后未找到含 python.exe 的目录,检查 $BuildDir 内容"
+}
+$PythonDest = Join-Path $PkgDir "runtime\python"
+New-Item -ItemType Directory -Force -Path (Split-Path $PythonDest) | Out-Null
+Move-Item $PythonDir.FullName $PythonDest
 
 # 2. 创建 venv 并安装依赖(不含 ocr extra)
 Write-Host "==> 创建 venv 并安装依赖..."
