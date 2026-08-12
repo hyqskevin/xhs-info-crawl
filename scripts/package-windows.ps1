@@ -68,7 +68,7 @@ $BackendSrc = Join-Path $RootDir "backend"
 $BackendDst = Join-Path $PkgDir "app\backend"
 $RobocopyOutput = robocopy $BackendSrc $BackendDst /E /XD tests __pycache__ .pytest_cache /XF .coverage /NFL /NDL /NJH /NJS /NC /NS 2>&1
 if ($LASTEXITCODE -ge 8) {
-    throw "robocopy 失败,退出码 $LASTEXITCODE: $RobocopyOutput"
+    throw "robocopy 失败,退出码 $LASTEXITCODE,输出: ${RobocopyOutput}"
 }
 # 重置退出码,避免 PowerShell $ErrorActionPreference="Stop" 终止
 $global:LASTEXITCODE = 0
