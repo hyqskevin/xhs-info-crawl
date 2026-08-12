@@ -61,6 +61,7 @@ $VenvPip = Join-Path $PkgDir "runtime\venv\Scripts\pip.exe"
 
 # 3. 复制后端源码
 Write-Host "==> 复制后端源码..."
+New-Item -ItemType Directory -Force -Path (Join-Path $PkgDir "app") | Out-Null
 Copy-Item -Recurse (Join-Path $RootDir "backend") (Join-Path $PkgDir "app\backend")
 
 # 4. 复制前端构建产物

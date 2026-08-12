@@ -63,6 +63,7 @@ $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/launcher/requirements.txt
 
 # 3. 复制后端源码
 echo "==> 复制后端源码..."
+mkdir -p $PKG_DIR/app
 cp -r $ROOT_DIR/backend $PKG_DIR/app/backend
 
 # 4. 复制前端构建产物
