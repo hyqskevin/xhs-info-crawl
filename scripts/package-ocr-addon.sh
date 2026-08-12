@@ -61,7 +61,12 @@ echo "==> 下载 paddleocr 依赖 wheel..."
 pip download paddleocr==$VERSION \
   -d $WHEELS_DIR/
 
-# 5. 触发模型下载到指定目录
+# 5. 安装 wheels 到当前 Python 环境(临时,仅为触发模型下载)
+echo "==> 安装 wheels 以触发模型下载..."
+pip install --no-index --find-links=$WHEELS_DIR/ \
+  paddleocr==$VERSION paddlepaddle==3.3.1
+
+# 6. 触发模型下载到指定目录
 echo "==> 下载 OCR 模型文件..."
 PADDLE_PDX_CACHE_HOME=$BUILD_DIR/data/paddlex python -c "
 import os
@@ -77,12 +82,12 @@ ocr = PaddleOCR(
 print('模型下载完成')
 "
 
-# 6. 写 VERSION 文件
+# 7. 写 VERSION 文件
 echo "version: $VERSION" > $BUILD_DIR/VERSION
 echo "built_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $BUILD_DIR/VERSION
 echo "platform: $OS-$ARCH" >> $BUILD_DIR/VERSION
 
-# 7. 压缩
+# 8. 压缩
 echo "==> 压缩产物..."
 cd $ROOT_DIR/dist
 zip -r paddleocr-addon-$VERSION-$OS-$ARCH.zip ocr-addon-build
