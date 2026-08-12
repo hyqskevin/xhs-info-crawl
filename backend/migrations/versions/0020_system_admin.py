@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0021_system_admin"
-down_revision = "0020"
+revision = "0020_system_admin"
+down_revision = "0019"
 branch_labels = None
 depends_on = None
 
