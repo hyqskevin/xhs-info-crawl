@@ -20,3 +20,25 @@ xhs_images/
 __pycache__/
 *.py[cod]
 *.log
+
+# TDD 过程文档(specs/plans/qa 不进仓库,本地保留)
+docs/superpowers/specs/
+docs/superpowers/plans/
+docs/superpowers/qa/
+
+# TDD 过程测试案例文档和脚本(根目录 tests/,非 backend/tests)
+tests/
+
+# 本地脏数据/测试产物
+data/posters/ocr_crops/
+.uploads/
+backend/data/
+
+# 文档截图(临时测试用)
+docs/image*.png
+
+# 整个 docs/ 不提交(本地保留,不进仓库)
+docs/
+
+# 测试脚本不提交
+scripts/test-*.sh
