@@ -63,9 +63,15 @@ $VenvPip = Join-Path $PkgDir "runtime\venv\Scripts\pip.exe"
 Write-Host "==> 复制后端源码(排除 tests)..."
 New-Item -ItemType Directory -Force -Path (Join-Path $PkgDir "app\backend") | Out-Null
 # 用 robocopy 排除 tests 目录(Windows 自带)
+# robocopy 退出码 0-7 都视为成功,8+ 视为失败
 $BackendSrc = Join-Path $RootDir "backend"
 $BackendDst = Join-Path $PkgDir "app\backend"
-robocopy $BackendSrc $BackendDst /E /XD tests __pycache__ .pytest_cache /XF .coverage 2>&1 | Out-Null
+$RobocopyOutput = robocopy $BackendSrc $BackendDst /E /XD tests __pycache__ .pytest_cache /XF .coverage /NFL /NDL /NJH /NJS /NC /NS 2>&1
+if ($LASTEXITCODE -ge 8) {
+    throw "robocopy 失败,退出码 $LASTEXITCODE: $RobocopyOutput"
+}
+# 重置退出码,避免 PowerShell $ErrorActionPreference="Stop" 终止
+$global:LASTEXITCODE = 0
 
 # 4. 复制前端构建产物
 Write-Host "==> 复制前端构建产物..."
