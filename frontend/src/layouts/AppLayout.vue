@@ -13,16 +13,18 @@ import {
 } from '@element-plus/icons-vue'
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
 const isCollapse = ref(localStorage.getItem('sidebar_collapsed') === '1')
+const userStore = useUserStore()
 
 function toggleCollapse() {
   isCollapse.value = !isCollapse.value
   localStorage.setItem('sidebar_collapsed', isCollapse.value ? '1' : '0')
 }
 
-function logout(){localStorage.removeItem('token');location.href='/login'}
+function logout(){localStorage.removeItem('token');userStore.clear();location.href='/login'}
 </script>
 
 <template>
@@ -70,7 +72,7 @@ function logout(){localStorage.removeItem('token');location.href='/login'}
           <ElMenuItem index="/settings?tab=bloggers">博主白名单</ElMenuItem>
           <ElMenuItem index="/settings?tab=keyword-groups">关键词组</ElMenuItem>
           <ElMenuItem index="/settings?tab=blogger-groups">博主组</ElMenuItem>
-          <ElMenuItem index="/settings?tab=xhs-accounts">账号配置</ElMenuItem>
+          <ElMenuItem index="/settings?tab=xhs-accounts">小红书账号配置</ElMenuItem>
           <ElMenuItem index="/settings?tab=system-config">系统配置</ElMenuItem>
         </ElSubMenu>
         <!-- 海报制作功能未完备，暂隐藏 -->
