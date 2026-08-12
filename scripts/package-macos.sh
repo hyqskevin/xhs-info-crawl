@@ -32,11 +32,12 @@ echo "解压后 BUILD_DIR 顶层内容:"
 ls -la $BUILD_DIR/
 # 查找解压后的 python 目录(含 bin/python3),不假设目录名
 # find 输出 .../python/bin/python3,dirname 两次得到 .../python
-PYTHON_BIN=$(find $BUILD_DIR -name "python3" -type f 2>/dev/null | head -1)
+# 注意:head -1 关闭管道会让 find 收到 SIGPIPE 返回非零,加 || true 容错
+PYTHON_BIN=$(find $BUILD_DIR -name "python3" -type f 2>/dev/null | head -1 || true)
 if [ -z "$PYTHON_BIN" ]; then
     echo "错误:解压后未找到 python3 可执行文件"
     echo "find 结果:"
-    find $BUILD_DIR -name "python3*" 2>/dev/null | head -10
+    find $BUILD_DIR -name "python3*" 2>/dev/null | head -10 || true
     exit 1
 fi
 PYTHON_SRC=$(dirname $(dirname "$PYTHON_BIN"))
