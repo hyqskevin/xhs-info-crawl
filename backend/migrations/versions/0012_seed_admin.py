@@ -54,13 +54,14 @@ def upgrade() -> None:
     password_hash = PasswordHash.recommended().hash(password)
     bind.execute(
         sa.text(
-            "INSERT INTO users (username, password_hash, role, created_at) "
-            "VALUES (:username, :password_hash, :role, :created_at)"
+            "INSERT INTO users (username, password_hash, role, display_name, enabled, created_at) "
+            "VALUES (:username, :password_hash, :role, :display_name, 1, :created_at)"
         ),
         {
             "username": _ADMIN_USERNAME,
             "password_hash": password_hash,
             "role": "admin",
+            "display_name": _ADMIN_USERNAME,
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )

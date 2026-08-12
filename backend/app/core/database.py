@@ -22,7 +22,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 
 def init_database(app_settings: Settings | None = None) -> None:
-    from app.models import activity, blogger_city, blogger_group, config, duplicate, keyword_group, note, poster, report, schedule, search_usage, task, user, xhs_account  # noqa: F401
+    from app.models import activity, audit, blogger_city, blogger_group, config, duplicate, group, keyword_group, note, poster, report, schedule, search_usage, task, user, xhs_account  # noqa: F401
 
     selected_settings = app_settings or settings
     selected_settings.ensure_runtime_directories()
