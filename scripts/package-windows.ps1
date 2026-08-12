@@ -9,6 +9,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# 强制 UTF-8 编码,避免 Windows 默认 cp1252 导致 pip 输出 UnicodeDecodeError
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 
 $RootDir = Resolve-Path "$PSScriptRoot\.."
 $BuildDir = Join-Path $RootDir "dist\build"
@@ -43,7 +47,7 @@ Write-Host "==> 创建 venv 并安装依赖..."
 $VenvPython = Join-Path $PkgDir "runtime\python\python.exe"
 & $VenvPython -m venv (Join-Path $PkgDir "runtime\venv")
 $VenvPip = Join-Path $PkgDir "runtime\venv\Scripts\pip.exe"
-& $VenvPip install --upgrade pip
+# 不强制升级 pip,避免 Windows 编码问题;venv 自带 pip 足够
 & $VenvPip install -r (Join-Path $RootDir "backend\requirements-runtime.txt")
 & $VenvPip install -r (Join-Path $RootDir "launcher\requirements.txt")
 
