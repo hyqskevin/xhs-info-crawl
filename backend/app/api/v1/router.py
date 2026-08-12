@@ -14,6 +14,7 @@ from app.api.v1.duplicates import router as duplicates_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.notes import router as notes_router
 from app.api.v1.diagnostics import router as diagnostics_router
+from app.api.v1.users import router as users_router
 
 
 api_router = APIRouter()
@@ -31,3 +32,4 @@ api_router.include_router(duplicates_router)
 api_router.include_router(dashboard_router)
 api_router.include_router(notes_router)
 api_router.include_router(diagnostics_router)
+api_router.include_router(users_router)
