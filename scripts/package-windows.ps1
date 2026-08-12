@@ -32,15 +32,23 @@ New-Item -ItemType Directory -Force -Path $PkgDir | Out-Null
 Write-Host "==> 下载便携版 Python..."
 $PythonTgz = Join-Path $BuildDir $PythonArchive
 Invoke-WebRequest -Uri $PythonUrl -OutFile $PythonTgz
+Write-Host "==> 解压 Python..."
 tar xzf $PythonTgz -C $BuildDir
-# 查找解压后的 python 目录(含 python.exe),不假设目录名
-$PythonDir = Get-ChildItem $BuildDir -Directory | Where-Object { Test-Path (Join-Path $_.FullName "python.exe") } | Select-Object -First 1
-if (-not $PythonDir) {
-    throw "解压后未找到含 python.exe 的目录,检查 $BuildDir 内容"
+Write-Host "解压后 BuildDir 顶层内容:"
+Get-ChildItem $BuildDir | Format-Table Name, Mode, Length
+# 递归查找含 python.exe 的目录(不假设目录名,也不限制深度)
+$PythonExe = Get-ChildItem $BuildDir -Recurse -Filter "python.exe" -File | Select-Object -First 1
+if (-not $PythonExe) {
+    throw "解压后未找到 python.exe,检查 $BuildDir 内容"
 }
+$PythonDir = Split-Path $PythonExe.FullName -Parent
+# 如果是 install_only 布局,python.exe 在 <root>/python/install/python.exe,
+# 我们要的是 <root>/python/install 作为 runtime/python
+# 但如果直接在 <root>/python.exe,那就用 <root>
 $PythonDest = Join-Path $PkgDir "runtime\python"
 New-Item -ItemType Directory -Force -Path (Split-Path $PythonDest) | Out-Null
-Move-Item $PythonDir.FullName $PythonDest
+Move-Item $PythonDir $PythonDest
+Remove-Item $PythonTgz -Force
 
 # 2. 创建 venv 并安装依赖(不含 ocr extra)
 Write-Host "==> 创建 venv 并安装依赖..."
