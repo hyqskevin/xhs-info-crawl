@@ -122,3 +122,44 @@ npm run build
 - `AGENTS.md` — AI agent flow
 - `docs/superpowers/specs/` — design specs
 - `tests/*.md` — E2E specs
+
+## 9. Packaged Build (Non-Developers)
+
+If you are an end user (not a developer), you do not need to install Python, Node.js, or any build toolchain. Use the pre-built packages instead.
+
+### 9.1 Download
+
+1. Go to the [Releases page](https://github.com/hyqskevin/xhs-info-crawl/releases).
+2. Find the latest version.
+3. Download the zip for your platform:
+   - macOS (Apple Silicon): `xhs-info-crawl-<version>-macos.zip`
+   - Windows: `xhs-info-crawl-<version>-windows.zip`
+   - Source code (developers): `xhs-info-crawl-<version>-src.zip`
+
+### 9.2 Install
+
+- **macOS**: Unzip, then right-click `xhs-info-crawl.app` → "Open" → confirm "Open" in the Gatekeeper dialog (first launch only). Subsequent launches: double-click the `.app`.
+- **Windows**: Unzip, then double-click `start.bat` inside the `xhs-info-crawl` folder.
+
+### 9.3 Differences from Developer Install
+
+| Aspect | Developer | Packaged |
+|---|---|---|
+| Python | System install (3.11+) | Bundled `runtime/python/` (cpython-3.11.9) |
+| Node.js | Required (18+) | Not needed (frontend pre-built) |
+| Dependencies | `pip install -e ".[ocr]"` | Pre-installed in `runtime/venv/` |
+| Frontend | `npm run dev` | Served by FastAPI StaticFiles |
+| Launcher | N/A | PyWebView window (separate from web UI) |
+| OCR | Included via `[ocr]` extra | Separate add-on zip (one-click install) |
+
+### 9.4 Upgrade
+
+1. Download the new version zip.
+2. Replace the application files (everything except the `data/` directory).
+3. Keep your existing `data/` directory to preserve all crawled data, settings, and database.
+4. If upgrading across major versions, check the release notes for migration steps.
+
+### 9.5 User Guide
+
+For the full end-user guide (OpenCLI setup, OCR install, daily usage), see [README-USER.md](README-USER.md).
+

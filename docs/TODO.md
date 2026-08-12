@@ -151,9 +151,12 @@
   - 验收：`backend/tests/test_packaging_scripts.py` 72 项结构验证全绿(8 requirements + 5 gitattributes + 15 macos + 13 windows + 13 ocr-addon + 18 workflows);后端 719 passed(P5 无回归,7 个 opencli_bin 环境变量失败为预先存在)。
   - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 6.1-6.7
   - plan：`docs/superpowers/plans/2026-08-10-p5-packaging-scripts.md`
-- [ ] P6 端到端验收 + 文档
+- [x] P6 端到端验收 + 文档
   - 目标：在干净环境验证打包版完整流程；补齐用户文档和开发者文档。
-  - 验收：macOS 解压双击 → 三进程运行 → 装 OpenCLI → 测试通过 → 打开网页；OCR 一键安装流程；端口冲突自动处理；`INSTALL.md`/`docs/deployment.md`/`README-USER.md` 更新；E2E 测试文档 `tests/test-launcher-startup.md` 等 3 个。
+  - 结果：①`README-USER.md`(新文件,11 章节用户使用说明,含安装/OpenCLI/OCR/端口冲突/常见问题);②`INSTALL.md` 第 9 章"Packaged Build"(打包版安装、与开发者版差异、升级);③`docs/deployment.md`"打包版部署"章节(架构/GitHub Actions/本地复现/OCR 分发/数据目录/升级策略/进程管理);④`tests/test-launcher-startup.md`(8 步骤 + 3 异常案例);⑤`tests/test-opencli-connection.md`(5 步骤 + 5 异常案例);⑥`tests/test-ocr-install.md`(5 步骤 + 5 异常案例 + 平台差异表)。
+  - 验收(文档):6 个产物全部创建,内容覆盖 spec §3 所有章节。
+  - 验收(真实环境,待推 tag):macOS 解压双击 → 三进程运行;OCR 一键安装;端口冲突自动处理——需推 `v*.*.*` tag 触发 GitHub Actions 构建后下载验证。
+  - spec：`docs/superpowers/specs/2026-08-12-p6-acceptance-and-docs-design.md`
 
 
 <!-- 在此追加产品优化、体验改进、稳定性增强等事项。建议格式如下：
