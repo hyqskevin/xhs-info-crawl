@@ -60,6 +60,12 @@ def seeded(db_session):
     db_session.add_all([admins, viewers])
     db_session.flush()
 
+    # Task 22 (2026-08-13): Administrators 绑 '*' 通配（等价于全权限）
+    from app.models.group import GroupPermission, Permission
+    star = Permission(code="*", description="管理员通配", is_builtin=True)
+    db_session.add(star)
+    db_session.flush()
+    db_session.add(GroupPermission(group_id=admins.id, permission_id=star.id))
     for p in rows:
         db_session.add(GroupPermission(group_id=admins.id, permission_id=p.id))
     read_p = db_session.query(Permission).filter_by(code="users:read").one()
@@ -119,15 +125,14 @@ def test_existing_admin_only_endpoints_still_200_for_admin(client, seeded):
     assert r.status_code == 200
 
 
-def test_legacy_token_admin_role_can_access_admin_endpoint(client, seeded):
-    """旧 token 没有 permissions 字段但 role=admin，仍可访问既有 admin-only 端点。
+def test_legacy_token_admin_role_cannot_access_admin_endpoint_without_wildcard(client, seeded):
+    """Task 22 (2026-08-13) 语义变更：旧 token 没有 permissions 字段但 role=admin，require_admin 不再放行。
 
-    spec §4.3 高风险：现有 admin token 没有 permissions 字段；require_admin 内部
-    兼容 `role=admin` 与 `*` 通配，必须对旧 token 放行。
+    原因：权限完全来自分组，role 字段仅作展示。require_admin 现在只接受 permissions 含 '*' 的 token。
+    旧 token 没有 permissions 字段 → permissions=[] → require_admin 403。
+    用户重新登录即可拿到带 permissions 的新 token。
 
-    验证用真正的 require_admin 端点（/api/v1/tasks），不挑 /audit-logs 因为它
-    走 require_permission("users:manage") 是 Task 6 新增语义，本测试只覆盖
-    既有 require_admin 端点的兼容路径。
+    关联 spec: docs/superpowers/specs/2026-08-13-permission-only-from-groups-design.md
     """
     import jwt as pyjwt
     from app.core.config import get_settings
@@ -137,10 +142,9 @@ def test_legacy_token_admin_role_can_access_admin_endpoint(client, seeded):
         {"sub": "admin", "role": "admin"},
         settings.secret_key, algorithm="HS256",
     )
-    # 既有 admin-only 端点（GET /api/v1/tasks，纯 require_admin，无副作用）
+    # GET /api/v1/tasks 走 require_admin，旧 token 无 permissions → 403
     r = client.get(
         "/api/v1/tasks",
         headers={"Authorization": f"Bearer {legacy}"},
     )
-    # 旧 token role=admin → require_admin 放行
-    assert r.status_code == 200
+    assert r.status_code == 403
