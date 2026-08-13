@@ -85,6 +85,35 @@ async function submitResetPassword() {
   newPassword.value = ''
 }
 
+// 行内可改：启用 / 分组（admin 行被禁用——保护兜底管理员）
+async function toggleEnabled(u: UserRow, val: boolean) {
+  try {
+    await api.updateUser(u.id, { enabled: val })
+    ElMessage.success(`已${val ? '启用' : '禁用'} ${u.username}`)
+    await load()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message ?? '修改启用状态失败')
+    await load()
+  }
+}
+
+async function changeGroups(u: UserRow, vals: number[]) {
+  try {
+    await api.updateUserGroups(u.id, vals)
+    ElMessage.success(`已更新 ${u.username} 的分组`)
+    await load()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message ?? '更新分组失败')
+    await load()
+  }
+}
+
+// 把行内的 group name 列表反查为 group id 列表（给 ElSelect 多选）
+function selectedGroupIds(u: UserRow): number[] {
+  const nameSet = new Set(u.groups)
+  return groups.value.filter((g) => nameSet.has(g.name)).map((g) => g.id)
+}
+
 onMounted(load)
 </script>
 
@@ -96,16 +125,34 @@ onMounted(load)
     <ElTable :data="users" stripe>
       <ElTableColumn prop="username" label="用户名" />
       <ElTableColumn prop="display_name" label="显示名" />
-      <ElTableColumn label="启用">
+      <ElTableColumn label="启用" width="100">
         <template #default="{ row }">
-          <ElTag :type="row.enabled ? 'success' : 'danger'">
-            {{ row.enabled ? '是' : '否' }}
-          </ElTag>
+          <ElSwitch
+            :model-value="row.enabled"
+            :disabled="row.username === 'admin'"
+            @change="(val: boolean | string | number) => toggleEnabled(row, Boolean(val))"
+          />
         </template>
       </ElTableColumn>
-      <ElTableColumn label="分组">
+      <ElTableColumn label="分组" width="280">
         <template #default="{ row }">
-          <ElTag v-for="g in row.groups" :key="g" size="small" style="margin-right: 4px;">{{ g }}</ElTag>
+          <ElSelect
+            :model-value="selectedGroupIds(row)"
+            multiple
+            clearable
+            collapse-tags
+            collapse-tags-tooltip
+            :disabled="row.username === 'admin'"
+            style="width: 100%;"
+            @change="(vals: number[]) => changeGroups(row, vals)"
+          >
+            <ElOption
+              v-for="g in groups"
+              :key="g.id"
+              :value="g.id"
+              :label="g.name"
+            />
+          </ElSelect>
         </template>
       </ElTableColumn>
       <ElTableColumn label="操作" width="260">
