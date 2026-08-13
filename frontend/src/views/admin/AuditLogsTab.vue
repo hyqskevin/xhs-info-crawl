@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 
 interface AuditLogOut {
@@ -32,7 +33,11 @@ const filter = ref({
 const actions = [
   'login_success', 'login_failed', 'user_created', 'user_updated',
   'user_deleted', 'group_created', 'group_permission_changed', 'user_group_changed',
+  'audit_logs_deleted',
 ]
+
+// 多选
+const selection = ref<AuditLogOut[]>([])
 
 async function load() {
   const r = await api.listAuditLogs({
@@ -47,6 +52,29 @@ async function load() {
   const data = (r as any).data as { total: number; items: AuditLogOut[] }
   items.value = data.items
   total.value = data.total
+  selection.value = []
+}
+
+function onSelectionChange(rows: AuditLogOut[]) {
+  selection.value = rows
+}
+
+async function batchDelete() {
+  if (selection.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除选中的 ${selection.value.length} 条操作日志？此操作不可撤销。`,
+      '批量删除确认',
+      { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  const ids = selection.value.map((row) => row.id)
+  const r = await api.deleteAuditLogs(ids)
+  const deletedCount = ((r as any).data?.deleted_count ?? (r as any).deleted_count) as number
+  ElMessage.success(`已删除 ${deletedCount} 条`)
+  await load()
 }
 
 onMounted(load)
@@ -54,14 +82,27 @@ onMounted(load)
 
 <template>
   <div>
-    <div class="filter" style="margin-bottom: 12px;">
+    <div class="filter" style="margin-bottom: 12px; display: flex; align-items: center;">
       <ElInput v-model="filter.actor_username" placeholder="操作者用户名" clearable style="width: 200px;" @change="load" />
       <ElSelect v-model="filter.action" multiple collapse-tags collapse-tags-tooltip placeholder="动作" style="width: 240px; margin-left: 8px;" @change="load">
         <ElOption v-for="a in actions" :key="a" :value="a" :label="a" />
       </ElSelect>
       <ElButton style="margin-left: 8px;" @click="load">查询</ElButton>
+      <ElButton
+        type="danger"
+        :disabled="selection.length === 0"
+        style="margin-left: auto;"
+        @click="batchDelete"
+      >
+        批量删除 ({{ selection.length }})
+      </ElButton>
     </div>
-    <ElTable :data="items" stripe>
+    <ElTable
+      :data="items"
+      stripe
+      @selection-change="onSelectionChange"
+    >
+      <ElTableColumn type="selection" width="48" />
       <ElTableColumn prop="created_at" label="时间" width="180" />
       <ElTableColumn prop="actor_username" label="操作者" width="140" />
       <ElTableColumn prop="action" label="动作" width="200" />
