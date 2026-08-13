@@ -29,6 +29,11 @@ const form = ref({
   group_ids: [] as number[],
 })
 
+// 重置密码弹窗
+const passwordDialogVisible = ref(false)
+const passwordTarget = ref<UserRow | null>(null)
+const newPassword = ref('')
+
 async function load() {
   const [u, g] = await Promise.all([api.listUsers(), api.listGroups()])
   // 后端 list_users / list_groups 返回裸数组（response_model=list[...])，需要从 axios 响应里取 .data
@@ -61,6 +66,25 @@ async function remove(u: UserRow) {
   await load()
 }
 
+function openResetPassword(u: UserRow) {
+  passwordTarget.value = u
+  newPassword.value = ''
+  passwordDialogVisible.value = true
+}
+
+async function submitResetPassword() {
+  if (!passwordTarget.value) return
+  if (!newPassword.value || newPassword.value.length < 8) {
+    ElMessage.error('密码长度至少 8 位')
+    return
+  }
+  await api.updateUser(passwordTarget.value.id, { password: newPassword.value })
+  ElMessage.success(`账号 ${passwordTarget.value.username} 密码已重置`)
+  passwordDialogVisible.value = false
+  passwordTarget.value = null
+  newPassword.value = ''
+}
+
 onMounted(load)
 </script>
 
@@ -84,8 +108,9 @@ onMounted(load)
           <ElTag v-for="g in row.groups" :key="g" size="small" style="margin-right: 4px;">{{ g }}</ElTag>
         </template>
       </ElTableColumn>
-      <ElTableColumn label="操作" width="180">
+      <ElTableColumn label="操作" width="260">
         <template #default="{ row }">
+          <ElButton v-if="row.username !== 'admin'" size="small" @click="openResetPassword(row)">重置密码</ElButton>
           <ElButton size="small" :disabled="row.username === 'admin'" @click="remove(row)">删除</ElButton>
         </template>
       </ElTableColumn>
@@ -109,6 +134,27 @@ onMounted(load)
       <template #footer>
         <ElButton @click="dialogVisible = false">取消</ElButton>
         <ElButton type="primary" @click="submit">保存</ElButton>
+      </template>
+    </ElDialog>
+
+    <ElDialog
+      v-model="passwordDialogVisible"
+      :title="`重置密码 — ${passwordTarget?.username ?? ''}`"
+      width="420"
+    >
+      <ElForm label-width="100">
+        <ElFormItem label="新密码">
+          <ElInput
+            v-model="newPassword"
+            type="password"
+            show-password
+            placeholder="≥ 8 位，含大小写+数字+符号"
+          />
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="passwordDialogVisible = false">取消</ElButton>
+        <ElButton type="primary" @click="submitResetPassword">保存</ElButton>
       </template>
     </ElDialog>
   </div>
