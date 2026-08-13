@@ -60,7 +60,10 @@ def require_permission(code: str):
 
 
 def require_admin(user: Annotated[dict[str, object], Depends(get_current_user)]) -> dict[str, object]:
-    """兼容旧 API：role=admin 或 permissions 含 * 即放行。"""
-    if user["role"] == "admin" or "*" in set(user.get("permissions", [])):
+    """兼容旧 API：permissions 含 * 即放行（role 字段不再授权，仅展示用）。
+
+    关联 spec: docs/superpowers/specs/2026-08-13-permission-only-from-groups-design.md
+    """
+    if "*" in set(user.get("permissions", [])):
         return user
     raise HTTPException(status_code=403, detail="权限不足")

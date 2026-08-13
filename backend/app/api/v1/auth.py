@@ -28,14 +28,16 @@ def _client_meta(request: Request) -> tuple[str, str | None]:
 
 
 def compute_user_permissions(session: Session, user_id: int) -> list[str]:
-    """返回用户所有所属分组的权限码并集；若 role=admin 额外附加 '*'。"""
-    from app.models.group import GroupPermission, Permission, UserGroup
-    from app.models.user import User
+    """返回用户所有所属分组的权限码并集。
 
-    user = session.get(User, user_id)
+    不再读 role 字段——* 必须由 group 自己 grant（Administrators 组绑定了 10 条具体权限码，
+    在 require_permission 端点上与 * 等价）。role 字段仅作为展示/日志用，不再参与授权。
+
+    关联 spec: docs/superpowers/specs/2026-08-13-permission-only-from-groups-design.md
+    """
+    from app.models.group import GroupPermission, Permission, UserGroup
+
     codes: set[str] = set()
-    if user is not None and user.role == "admin":
-        codes.add("*")
     rows = (
         session.query(Permission.code)
         .join(GroupPermission, GroupPermission.permission_id == Permission.id)
