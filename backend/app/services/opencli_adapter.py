@@ -14,10 +14,26 @@ logger = logging.getLogger(__name__)
 
 
 class OpenCLIAdapter:
-    def __init__(self,settings:Settings,session:str='xhs-crawler') -> None:
-        self.settings=settings
-        self.session=session
-        self._bin=(settings.opencli_bin or 'opencli').strip() or 'opencli'
+    def __init__(
+        self,
+        settings: Settings,
+        session: str = "xhs-crawler",
+        cdp_endpoint: str | None = None,
+    ) -> None:
+        """opencli 子进程适配器。
+
+        Args:
+            settings: 全局配置
+            session: opencli browser session 名（逻辑命名空间）
+            cdp_endpoint: 可选 CDP 端点 URL（如 http://127.0.0.1:9223）。传了后
+                所有子进程通过环境变量 OPENCLI_CDP_ENDPOINT=<endpoint> 路由到对应
+                Chrome 实例，实现账号级 cookie 隔离。
+                None = 用当前 Chrome Browser Bridge 默认 profile（向后兼容）。
+        """
+        self.settings = settings
+        self.session = session
+        self.cdp_endpoint = cdp_endpoint
+        self._bin = (settings.opencli_bin or "opencli").strip() or "opencli"
         self._current_task_id: int | None = None
         self._current_run_token: str | None = None
         self._execution_guard: Callable[[], None] | None = None
@@ -106,12 +122,18 @@ class OpenCLIAdapter:
         effective_run_token = run_token if run_token is not None else self._current_run_token
         self._assert_execution_active(enforce_execution)
         effective_timeout = timeout if timeout is not None else self._command_timeout()
+        # 注入 OPENCLI_CDP_ENDPOINT（如有）让 opencli 路由到指定 Chrome 实例
+        proc_env = None
+        if self.cdp_endpoint:
+            import os as _os
+            proc_env = {**_os.environ, "OPENCLI_CDP_ENDPOINT": self.cdp_endpoint}
         try:
             proc = subprocess.Popen(
                 [self._bin, *args],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=proc_env,
             )
         except FileNotFoundError:
             raise OpenCLIError(
@@ -165,16 +187,22 @@ class OpenCLIAdapter:
             return json.loads(output)
         except json.JSONDecodeError:
             return output
-    def check_login(self):
+    def check_login(self, foreground: bool = False):
         """登录预检：whoami 是轻量只读探测，正常 1~2s 返回。
 
         未扫码登录时 opencli 的 whoami 会在浏览器层阻塞等待扫码（不会以 exit 77
         快速退出），最终被 Python 层超时 kill。这种超时唯一现实诱因就是登录窗口
         等扫码，归类为 AuthenticationRequired，让任务走 PAUSED 流程提示用户扫码，
         而不是被当作普通抓取失败逐个博主/笔记白等 60s。
+
+        foreground=True：拉起前台可见窗口，给用户扫码（管理后台 check-login 用）
+        foreground=False：后台窗口（默认，run_crawl 启动预检用，不打扰用户）
         """
+        cmd = ['xiaohongshu', 'whoami', '-f', 'json']
+        if not foreground:
+            cmd += ['--window', 'background']
         try:
-            return self.run(['xiaohongshu','whoami','-f','json','--window','background'])
+            return self.run(cmd)
         except OpenCLITimeout as exc:
             raise AuthenticationRequired(
                 '小红书登录检查超时：可能未登录或登录窗口正在等待扫码，'
