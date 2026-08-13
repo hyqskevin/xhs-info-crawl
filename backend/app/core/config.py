@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     search_limit: int = 50
     weekly_search_limit: int = 500
     consecutive_note_failure_limit: int = 3
+    # 连续 N 篇 note.content 为空触发 PAUSED；默认 5（防小红书风控静默失败）
+    crawl_empty_detail_threshold: int = 5
+    # 每抓 N 条调一次 adapter.close_session() 重建 CDP 连接；0 表示禁用
+    crawl_session_reset_interval: int = 30
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimaxi.com/v1"
     minimax_model: str = "MiniMax-M3"
@@ -92,6 +96,15 @@ class Settings(BaseSettings):
     )
     # 临时文件目录（如海报渲染的临时 HTML）
     tmp_dir_setting: Path = Field(Path("./data/tmp"), validation_alias="TMP_DIR")
+    # ChromePool 启动的多 Chrome 实例的 user-data-dir 根目录
+    chrome_user_data_dir: Path = Field(
+        Path("./data/chrome-pool"), validation_alias="CHROME_USER_DATA_DIR"
+    )
+    # Chrome 二进制路径（ChromePool 启动用）
+    chrome_bin: str = Field(
+        "google-chrome",
+        validation_alias="CHROME_BIN",
+    )
 
     def resolve_project_path(self, path: Path) -> Path:
         return path if path.is_absolute() else self.project_root / path
