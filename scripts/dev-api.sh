@@ -11,4 +11,17 @@ API_PORT="$(grep -E '^API_PORT=' .env 2>/dev/null | head -1 | cut -d= -f2- || tr
 API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-8000}"
 
-exec uv run --project backend uvicorn app.main:app --app-dir backend --host "$API_HOST" --port "$API_PORT" --reload
+# --reload-exclude 防止 migrations/、scripts/ 等非业务代码修改触发自动重启。
+# 之前因为 backend/migrations/_manual_finish_0020.py 改动让 uvicorn 不断重启最终崩溃。
+exec uv run --project backend uvicorn app.main:app \
+  --app-dir backend \
+  --host "$API_HOST" \
+  --port "$API_PORT" \
+  --reload \
+  --reload-exclude='*.pyc' \
+  --reload-exclude='backend/migrations/*' \
+  --reload-exclude='backend/scripts/*' \
+  --reload-exclude='data/*' \
+  --reload-exclude='frontend/*' \
+  --reload-exclude='docs/*' \
+  --reload-exclude='scripts/*'
