@@ -18,6 +18,14 @@ class Note(Base):
     raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    # 2026-08-13: 推文抓取来源（matched_*） + 互动数（engagement）
+    # 配迁移 0022；与 crawl_task 写入新列落地后必须手动重启 celery worker
+    matched_keywords: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    matched_blogger_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    matched_blogger_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    like_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    collect_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 class NoteImage(Base):
     __tablename__ = "note_images"
