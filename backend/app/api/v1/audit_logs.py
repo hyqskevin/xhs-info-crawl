@@ -1,17 +1,24 @@
-"""操作日志查询 API。
+"""操作日志查询/批量删除 API。
 
-关联 spec: docs/superpowers/specs/2026-08-12-system-admin-design.md §3.3
+关联 spec:
+- docs/superpowers/specs/2026-08-12-system-admin-design.md §3.3 (GET)
+- docs/superpowers/specs/2026-08-13-admin-feature-batch-design.md §2.1 (DELETE)
 """
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.core.database import get_db
 from app.core.security import require_permission
 from app.models.audit import AuditLog
+from app.services.audit import record_audit
+
+
+# 防审计黑洞：5 秒窗口内的日志视为「当前 session 刚产生」，不允许通过本次 DELETE 删除
+_RECENT_SKIP_WINDOW = timedelta(seconds=5)
 
 
 router = APIRouter(prefix="/audit-logs", tags=["audit-logs"])
@@ -82,3 +89,55 @@ def list_audit_logs(
             ) for r in rows
         ],
     )
+
+
+class AuditLogDeleteIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class AuditLogDeleteOut(BaseModel):
+    deleted_count: int
+
+
+@router.delete("", response_model=AuditLogDeleteOut)
+def delete_audit_logs(
+    payload: AuditLogDeleteIn,
+    request: Request,
+    actor: Annotated[dict, Depends(require_permission("users:manage"))],
+    db=Depends(get_db),
+):
+    """批量删除审计日志。
+
+    防审计黑洞：created_at 在 5 秒窗口内的行（视为本次 session 刚产生的记录）不删除；
+    其余 id 即使不存在也静默忽略（仅按真实命中的行数返回 deleted_count）。
+
+    关联 spec: docs/superpowers/specs/2026-08-13-admin-feature-batch-design.md §2.1
+    """
+    cutoff = datetime.now(timezone.utc) - _RECENT_SKIP_WINDOW
+    # 只删 id 命中且 created_at 早于 5s 窗口的行
+    target_ids = set(payload.ids)
+    rows = (
+        db.query(AuditLog)
+        .filter(AuditLog.id.in_(target_ids))
+        .filter(AuditLog.created_at < cutoff)
+        .all()
+    )
+    deleted_ids: list[int] = []
+    for row in rows:
+        deleted_ids.append(row.id)
+        db.delete(row)
+    db.commit()
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    record_audit(
+        actor_user_id=None,
+        actor_username=actor["username"],
+        action="audit_logs_deleted",
+        resource_type="audit_log",
+        target_label=f"batch of {len(deleted_ids)}",
+        method="DELETE",
+        path="/api/v1/audit-logs",
+        status_code=200,
+        client_ip=client_ip,
+        extra={"deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)},
+    )
+    return AuditLogDeleteOut(deleted_count=len(deleted_ids))
