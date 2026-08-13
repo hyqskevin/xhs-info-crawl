@@ -40,6 +40,7 @@ from app.services.search_rate_limit import (
 from app.services.opencli_adapter import OpenCLIAdapter
 from app.services.paddleocr_adapter import PaddleOCREngine
 from app.services.pipeline import deduplicate_results, run_stage, title_matches_keywords
+from app.services.chrome_pool import ChromePool, ChromeLaunchError, get_global_chrome_pool
 from app.tasks.celery_app import celery_app
 
 
@@ -123,6 +124,46 @@ def load_xhs_accounts(db) -> list:
         .where(XhsAccount.enabled.is_(True))
         .order_by(XhsAccount.priority, XhsAccount.id)
     ).all())
+
+
+def _account_cdp_endpoint(account) -> str | None:
+    """从 XhsAccount.cdp_port 推导 CDP 端点（仅基于账号行静态推导，不依赖 pool 实例）；None 表示回退默认 Chrome Browser Bridge。"""
+    port = getattr(account, "cdp_port", None)
+    if port is None:
+        return None
+    return f"http://127.0.0.1:{port}"
+
+
+def _resolve_cdp_endpoint_for_account(account, chrome_pool) -> str | None:
+    """优先用 chrome_pool 中已启动实例的端点（动态端口）；fallback 到账号行的 cdp_port。"""
+    if chrome_pool is not None:
+        instance = chrome_pool.get(account.session_name)
+        if instance is not None:
+            return instance.cdp_endpoint
+    return _account_cdp_endpoint(account)
+
+
+def _make_chrome_pool_for_task(settings, db, accounts) -> ChromePool:
+    """为当前任务启动 ChromePool（每个有 cdp_port 的账号一个实例）。
+
+    使用全局 ChromePool 单例——API 端点（如 check-login）和 crawl_task 共享同一池，
+    避免重复启动 Chrome 实例导致端口冲突。
+    """
+    pool = get_global_chrome_pool()
+    # 同步端口到 DB（持久化，供下次复用）
+    for account in accounts:
+        port = getattr(account, "cdp_port", None)
+        if port is None:
+            continue
+        try:
+            instance = pool.acquire(account.session_name)
+        except ChromeLaunchError:
+            raise
+        # 同步实际分配端口（避免 ChromePool 分配与 cdp_port 不一致）
+        if instance.port != port:
+            account.cdp_port = instance.port
+            db.commit()
+    return pool
 
 
 @celery_app.task(name="app.tasks.crawl_task.scheduled_dispatch")
@@ -253,6 +294,110 @@ def prepare_existing_note(db, source_url: str) -> bool:
         return True
     cleanup_incomplete_note(db, source_url)
     return False
+
+
+def throttled_search(db, settings, task, adapter, query, recent, run_token=None, rate_limiter=None) -> list[dict] | None:
+    """模块级 throttled_search：搜索的频率与周配额闸门；返回 None 表示本周超限。
+
+    注：原位于 run_crawl 闭包内，提取为模块级以便测试 monkeypatch；行为完全等价。
+    rate_limiter 必须由调用方复用同一个实例，否则 monkeypatch 不生效。
+    """
+    week_key = iso_week_key()
+    if weekly_search_count(db, week_key) >= settings.weekly_search_limit:
+        log(db, task.id, "WARNING", f"本周搜索量已达上限（{settings.weekly_search_limit}），跳过 {query!r} 及后续关键词搜索")
+        return None
+    if rate_limiter is None:
+        rate_limiter = SearchRateLimiter(settings.search_interval_min, settings.search_interval_max)
+    delay = rate_limiter.next_delay()
+    if delay and run_token is not None:
+        rate_limit_sleep(delay, guard=lambda: assert_execution_active(db, task.id, run_token))
+    found = adapter.search_recent(query, recent)
+    increment_weekly_search(db, week_key)
+    return found
+
+
+def _collect_crawl_results(
+    db,
+    settings,
+    task: CrawlTask,
+    adapter: OpenCLIAdapter,
+    throttled_search: Callable[[str, str], list[dict] | None],
+    run_token: str,
+) -> tuple[list[tuple[str, dict]], int]:
+    """执行搜索/博主发现阶段，返回 (results, discovery_failures)。
+
+    - results: list of (city_code, item)；item 含 _matched_keywords 字段
+    - discovery_failures: 博主层失败计数（连续失败熔断在调用方处理）
+    - CrawlHalted 由博主层连续失败触发，由调用方捕获
+    """
+    results: list[tuple[str, dict]] = []
+    discovery_failures = 0
+    consecutive_failures = 0
+    requested_cities = [task.params["city"]] if task.params.get("city") else task.params.get("cities", [])
+    city_query = select(City).where(City.enabled.is_(True))
+    if requested_cities:
+        city_query = city_query.where(City.code.in_(requested_cities))
+    cities = list(db.scalars(city_query.order_by(City.id)).all())
+    if cities:
+        for city in cities:
+            scope = resolve_crawl_scope(db, city, task.params)
+            override = "任务参数" if ("keywords" in task.params or "blogger_ids" in task.params) else "配置默认"
+            log(db, task.id, "INFO", f"抓取范围生效：keywords={len(scope.keywords)} bloggers={len(scope.bloggers)} (override={override})")
+            recent_filter = task.params.get("recent_filter") or city.recent_filter
+            for keyword in scope.keywords:
+                found = throttled_search(f"{city.name} {keyword}", recent_filter)
+                if found is None:
+                    break
+                for item in found:
+                    tagged = dict(item)
+                    tagged["_matched_keywords"] = [keyword]
+                    results.append((city.code, tagged))
+                assert_execution_active(db, task.id, run_token)
+            for blogger in scope.bloggers:
+                username = (blogger.username or "").strip()
+                if not username:
+                    log(db, task.id, "WARNING", f"跳过博主：username 为空 id={blogger.id}")
+                    continue
+                try:
+                    items = adapter.blogger_notes(username, blogger.profile_url or "")
+                except (AuthenticationRequired, ExecutionStopped, ExecutionSuperseded):
+                    raise
+                except Exception as exc:
+                    discovery_failures += 1
+                    task.error_message = f"博主 {username!r} 抓取失败：{exc}"
+                    db.commit()
+                    log(db, task.id, "ERROR", task.error_message)
+                    consecutive_failures += 1
+                    if consecutive_failures >= settings.consecutive_note_failure_limit:
+                        raise CrawlHalted(
+                            f"已连续 {consecutive_failures} 次抓取失败（最近一次：博主 {username!r}）。"
+                            f"CDP session / 浏览器标签页可能已过期，请在 Chrome 重新打开小红书后"
+                            f"点击「检测登录并继续」，或「结束抓取」。最后一次错误：{exc}"
+                        )
+                    continue
+                consecutive_failures = 0
+                assert_execution_active(db, task.id, run_token)
+                log(db, task.id, "INFO", f"博主 {username!r} 命中 {len(items)} 篇（带 xsec_token 的）")
+                if blogger.max_notes_per_crawl and blogger.max_notes_per_crawl > 0 and len(items) > blogger.max_notes_per_crawl:
+                    log(db, task.id, "INFO", f"博主 {username!r} 抓取上限 {blogger.max_notes_per_crawl}，截断至 {blogger.max_notes_per_crawl} 篇")
+                    items = items[:blogger.max_notes_per_crawl]
+                results.extend((city.code, item) for item in items)
+    else:
+        for city_code in requested_cities:
+            quota_exceeded = False
+            for keyword in task.params.get("keywords", []):
+                found = throttled_search(f"{city_code} {keyword}", "一周内")
+                if found is None:
+                    quota_exceeded = True
+                    break
+                for item in found:
+                    tagged = dict(item)
+                    tagged["_matched_keywords"] = [keyword]
+                    results.append((city_code, tagged))
+                assert_execution_active(db, task.id, run_token)
+            if quota_exceeded:
+                break
+    return results, discovery_failures
 
 
 def finish_stop_if_requested(db, task_id: int, run_token: str) -> bool:
@@ -512,8 +657,21 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
     accounts = load_xhs_accounts(db)
     if not accounts:
         accounts = [SimpleNamespace(name="默认", session_name="xhs-crawler", id=None)]
+    # 为每个有 cdp_port 的账号启动独立 Chrome 实例（ChromePool）
+    # 缺 cdp_port 的账号回退默认 Chrome Browser Bridge（向后兼容）
+    chrome_pool: ChromePool | None = None
+    if any(getattr(a, "cdp_port", None) is not None for a in accounts):
+        try:
+            chrome_pool = _make_chrome_pool_for_task(settings, db, accounts)
+        except ChromeLaunchError as exc:
+            log(db, task_id, "ERROR", f"Chrome 实例启动失败：{exc}")
+            chrome_pool = None  # 退化为默认 CDP（向原 Chrome Browser Bridge）
     account_index = 0
-    adapter = OpenCLIAdapter(settings, session=accounts[0].session_name)
+    adapter = OpenCLIAdapter(
+        settings,
+        session=accounts[0].session_name,
+        cdp_endpoint=_resolve_cdp_endpoint_for_account(accounts[0], chrome_pool),
+    )
     # 注册 task_id 到 adapter 让 run() 自动绑定 PID（如果 adapter 支持）
     if hasattr(adapter, "bind_task"):
         adapter.bind_task(
@@ -532,87 +690,15 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         results: list[tuple[str, dict]] = []
         discovery_failures = 0
         consecutive_failures = 0
-        rate_limiter = SearchRateLimiter(settings.search_interval_min, settings.search_interval_max)
-        week_key = iso_week_key()
 
-        def throttled_search(query: str, recent: str) -> list[dict] | None:
-            """关键词搜索的频率与周配额闸门；返回 None 表示本周超限，调用方停止后续搜索。"""
-            if weekly_search_count(db, week_key) >= settings.weekly_search_limit:
-                log(db, task.id, "WARNING", f"本周搜索量已达上限（{settings.weekly_search_limit}），跳过 {query!r} 及后续关键词搜索")
-                return None
-            delay = rate_limiter.next_delay()
-            if delay:
-                rate_limit_sleep(delay, guard=lambda: assert_execution_active(db, task.id, run_token))
-            found = adapter.search_recent(query, recent)
-            increment_weekly_search(db, week_key)
-            return found
-        requested_cities = [task.params["city"]] if task.params.get("city") else task.params.get("cities", [])
-        city_query = select(City).where(City.enabled.is_(True))
-        if requested_cities:
-            city_query = city_query.where(City.code.in_(requested_cities))
-        cities = list(db.scalars(city_query.order_by(City.id)).all())
-        if cities:
-            for city in cities:
-                scope = resolve_crawl_scope(db, city, task.params)
-                override = "任务参数" if ("keywords" in task.params or "blogger_ids" in task.params) else "配置默认"
-                log(db, task.id, "INFO", f"抓取范围生效：keywords={len(scope.keywords)} bloggers={len(scope.bloggers)} (override={override})")
-                recent_filter = task.params.get("recent_filter") or city.recent_filter
-                for keyword in scope.keywords:
-                    found = throttled_search(f"{city.name} {keyword}", recent_filter)
-                    if found is None:
-                        break
-                    for item in found:
-                        tagged = dict(item)
-                        tagged["_matched_keywords"] = [keyword]
-                        results.append((city.code, tagged))
-                    assert_execution_active(db, task.id, run_token)
-                for blogger in scope.bloggers:
-                    username = (blogger.username or "").strip()
-                    if not username:
-                        log(db, task.id, "WARNING", f"跳过博主：username 为空 id={blogger.id}")
-                        continue
-                    try:
-                        items = adapter.blogger_notes(username, blogger.profile_url or "")
-                    except (AuthenticationRequired, ExecutionStopped, ExecutionSuperseded):
-                        raise
-                    except Exception as exc:
-                        discovery_failures += 1
-                        task.error_message = f"博主 {username!r} 抓取失败：{exc}"
-                        db.commit()
-                        log(db, task.id, "ERROR", task.error_message)
-                        # 博主层失败同样计入连续失败熔断：stale page identity /
-                        # 其它 OpenCLIError 表明 CDP session / 浏览器标签页已过期，
-                        # 继续跑其它博主大概率继续失败，必须交还决策权。
-                        consecutive_failures += 1
-                        if consecutive_failures >= settings.consecutive_note_failure_limit:
-                            raise CrawlHalted(
-                                f"已连续 {consecutive_failures} 次抓取失败（最近一次：博主 {username!r}）。"
-                                f"CDP session / 浏览器标签页可能已过期，请在 Chrome 重新打开小红书后"
-                                f"点击「检测登录并继续」，或「结束抓取」。最后一次错误：{exc}"
-                            )
-                        continue
-                    consecutive_failures = 0
-                    assert_execution_active(db, task.id, run_token)
-                    log(db, task.id, "INFO", f"博主 {username!r} 命中 {len(items)} 篇（带 xsec_token 的）")
-                    if blogger.max_notes_per_crawl and blogger.max_notes_per_crawl > 0 and len(items) > blogger.max_notes_per_crawl:
-                        log(db, task.id, "INFO", f"博主 {username!r} 抓取上限 {blogger.max_notes_per_crawl}，截断至 {blogger.max_notes_per_crawl} 篇")
-                        items = items[:blogger.max_notes_per_crawl]
-                    results.extend((city.code, item) for item in items)
-        else:
-            for city_code in requested_cities:
-                quota_exceeded = False
-                for keyword in task.params.get("keywords", []):
-                    found = throttled_search(f"{city_code} {keyword}", "一周内")
-                    if found is None:
-                        quota_exceeded = True
-                        break
-                    for item in found:
-                        tagged = dict(item)
-                        tagged["_matched_keywords"] = [keyword]
-                        results.append((city_code, tagged))
-                    assert_execution_active(db, task.id, run_token)
-                if quota_exceeded:
-                    break
+        rate_limiter = SearchRateLimiter(settings.search_interval_min, settings.search_interval_max)
+
+        def _run_throttled_search(query: str, recent: str) -> list[dict] | None:
+            return throttled_search(db, settings, task, adapter, query, recent, run_token, rate_limiter)
+
+        results, discovery_failures = _collect_crawl_results(
+            db, settings, task, adapter, _run_throttled_search, run_token,
+        )
 
         results = deduplicate_results(results)
         task.total_notes = len(results)
@@ -627,11 +713,55 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
             db.commit()
             log(db, current.id, "ERROR", f"笔记处理失败 [{entry[1]['url']}]：{exc}")
 
+        def reset_adapter_session(current_adapter: OpenCLIAdapter, reason: str) -> OpenCLIAdapter:
+            """强制重建 CDP 连接，释放 Chrome profile 状态。失败仅 WARNING，不中断任务。"""
+            try:
+                current_adapter.close_session()
+            except Exception as exc:
+                log(db, task.id, "WARNING", f"adapter.close_session 失败（{reason}，忽略继续）：{exc}")
+            new_adapter = OpenCLIAdapter(
+                settings,
+                session=accounts[account_index].session_name,
+                cdp_endpoint=_resolve_cdp_endpoint_for_account(accounts[account_index], chrome_pool),
+            )
+            if hasattr(new_adapter, "bind_task"):
+                new_adapter.bind_task(
+                    task.id,
+                    run_token,
+                    execution_guard=lambda: assert_execution_active(db, task.id, run_token),
+                    warning_sink=lambda message: log(db, task.id, "WARNING", message),
+                )
+            return new_adapter
+
+        def refresh_token_pool(entry: tuple[str, dict]) -> None:
+            """token 池刷新：用 entry 的 _matched_keywords 重新跑 throttled_search，按 platform_note_id 匹配替换 URL。"""
+            matched_keywords = entry[1].get("_matched_keywords") or []
+            if not matched_keywords:
+                return
+            query = f"{entry[0]} {matched_keywords[0]}"
+            log(db, task.id, "INFO", f"触发 token 池刷新：重新搜索 {query!r}")
+            new_items = throttled_search(db, settings, task, adapter, query, "")
+            if not new_items:
+                log(db, task.id, "WARNING", "token 池刷新失败：throttled_search 返回空，跳过替换")
+                return
+            current_note_id = extract_platform_note_id(entry[1].get("url", ""))
+            if not current_note_id:
+                return
+            for new_item in new_items:
+                new_note_id = extract_platform_note_id(new_item.get("url", ""))
+                if new_note_id == current_note_id:
+                    entry[1]["url"] = new_item["url"]
+                    log(db, task.id, "INFO", f"token 池刷新成功：note_id={current_note_id[:8]}... 替换为新 URL")
+                    return
+
         attempts = settings.pipeline_stage_max_retries
         delay = settings.pipeline_stage_retry_delay_seconds
 
         # 阶段 1：逐篇下载 + OCR（串行，opencli 不支持并发），暂存 StagedNote
         staged_notes: list[StagedNote] = []
+        empty_streak = 0  # 连续空详情熔断计数器
+        empty_threshold = max(1, settings.crawl_empty_detail_threshold)  # 防 0/负数
+        reset_interval = max(0, settings.crawl_session_reset_interval)  # 0 表示禁用
         for entry in results:
             if finish_stop_if_requested(db, task.id, run_token):
                 return
@@ -644,7 +774,43 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
                     continue
                 staged = download_and_ocr(db, task, run_token, entry[0], entry[1], adapter, settings)
                 if staged is not None:
+                    # 连续空详情熔断：note.content 视为空触发风控熔断
+                    if not staged.note.content or not staged.note.content.strip():
+                        empty_streak += 1
+                        log(db, task.id, "WARNING", f"详情为空 {empty_streak}/{empty_threshold} url={entry[1]['url']}")
+                        # 阈值 - 2 时尝试 token 池刷新（默认 5 - 2 = 3），早介入避免浪费剩余缓冲
+                        # 仅当 entry 带 _matched_keywords（搜索结果）才刷新；博主条目无关键词，无刷新意义
+                        if empty_streak == empty_threshold - 2 and entry[1].get("_matched_keywords"):
+                            old_url = entry[1]["url"]
+                            refresh_token_pool(entry)
+                            if entry[1]["url"] != old_url:
+                                # 刷新成功：用新 URL 重抓当前 entry
+                                db.rollback()
+                                cleanup_incomplete_note(db, old_url)
+                                retry_staged = download_and_ocr(db, task, run_token, entry[0], entry[1], adapter, settings)
+                                if retry_staged is not None:
+                                    if retry_staged.note.content and retry_staged.note.content.strip():
+                                        log(db, task.id, "INFO", f"token 池刷新后重抓成功 url={entry[1]['url']}")
+                                        empty_streak = 0
+                                        staged_notes.append(retry_staged)
+                                        continue
+                                    else:
+                                        # 重抓仍空，按空详情继续累计
+                                        staged = retry_staged
+                                        empty_streak += 1
+                                        log(db, task.id, "WARNING", f"token 池刷新后重抓仍为空 {empty_streak}/{empty_threshold} url={entry[1]['url']}")
+                        if empty_streak >= empty_threshold:
+                            raise CrawlHalted(
+                                f"连续 {empty_streak} 篇笔记详情为空，疑似触发小红书风控。"
+                                "请在 Chrome 重新打开小红书后点击「继续抓取」"
+                            )
+                    else:
+                        empty_streak = 0
                     staged_notes.append(staged)
+                    # 周期性重置 adapter 释放 Chrome profile 累积
+                    if reset_interval and len(staged_notes) % reset_interval == 0:
+                        log(db, task.id, "INFO", f"已处理 {len(staged_notes)} 篇，重置 adapter 释放 Chrome profile")
+                        adapter = reset_adapter_session(adapter, f"周期性 reset @ {len(staged_notes)} 篇")
                 # 正常返回（含标题不匹配/已存在等跳过）说明链路健康，连续失败计数清零
                 consecutive_failures = 0
             except ExecutionStopped:
@@ -655,6 +821,10 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
             except ExecutionSuperseded:
                 db.rollback()
                 return
+            except CrawlHalted:
+                # 详情空值熔断等 CrawlHalted 由 for 循环抛出；阶段 1 不吞咽，重新向上传播
+                # 让 run_crawl 顶部 except (CrawlHalted) 处理（写 PAUSED + error_message）
+                raise
             except (AuthenticationRequired, VerificationRequired) as exc:
                 # 当前账号失效（未登录/扫码超时/风控验证），切换到下一个账号并重试当前笔记一次。
                 # 每篇笔记最多切换一次，避免死循环；retry 再失效则跳过本篇，下一篇继续用新账号。
@@ -666,7 +836,11 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
                 old_name = accounts[account_index - 1].name
                 new_name = accounts[account_index].name
                 log(db, task.id, "INFO", f"账号 {old_name!r} 失效（{exc}），切换到 {new_name!r}")
-                adapter = OpenCLIAdapter(settings, session=accounts[account_index].session_name)
+                adapter = OpenCLIAdapter(
+                    settings,
+                    session=accounts[account_index].session_name,
+                    cdp_endpoint=_resolve_cdp_endpoint_for_account(accounts[account_index], chrome_pool),
+                )
                 if hasattr(adapter, "bind_task"):
                     adapter.bind_task(
                         task.id,
@@ -789,4 +963,6 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         db.commit()
         log(db, task.id, "ERROR", str(exc))
     finally:
+        # 不释放 chrome_pool——它是全局单例，由 atexit 在后端退出时统一 release
+        # 这样账号已启动的 Chrome 实例可在任务间持续运行（用户已登录的 cookie 保持有效）
         db.close()
