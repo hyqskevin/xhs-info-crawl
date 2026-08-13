@@ -6,14 +6,16 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import bindparam, delete, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.activity import Activity
+from app.models.blogger_group import BloggerGroup, BloggerGroupMember
 from app.models.config import Blogger, City
+from app.models.keyword_group import KeywordGroup, KeywordGroupWord
 from app.models.note import Note, NoteImage
 from app.schemas.activity import ActivityRead
 from app.services.extraction import extract_activities
@@ -131,10 +133,18 @@ def list_notes(
     start_date: date | None = None,
     end_date: date | None = None,
     keyword: str | None = None,
+    keyword_group_ids: Annotated[list[int] | None, Query()] = None,
     blogger_id: int | None = None,
+    blogger_group_ids: Annotated[list[int] | None, Query()] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
+    # 互斥校验
+    if keyword and keyword_group_ids:
+        raise HTTPException(status_code=422, detail="参数冲突：keyword 与 keyword_group_ids 不能同时传")
+    if blogger_id is not None and blogger_group_ids:
+        raise HTTPException(status_code=422, detail="参数冲突：blogger_id 与 blogger_group_ids 不能同时传")
+
     filters = [Note.review_status.notin_(["DELETED", "MERGED"])]
     if city:
         filters.append(Note.city_code == city)
@@ -145,6 +155,45 @@ def list_notes(
         filters.append(Note.published_at >= datetime.combine(start_date, time.min))
     if end_date:
         filters.append(Note.published_at <= datetime.combine(end_date, time.max))
+
+    # 关键词组筛选：取所有选中 enabled 组的 words 并集
+    if keyword_group_ids:
+        words_stmt = (
+            select(KeywordGroupWord.word)
+            .join(KeywordGroup, KeywordGroup.id == KeywordGroupWord.keyword_group_id)
+            .where(
+                KeywordGroup.id.in_(keyword_group_ids),
+                KeywordGroup.enabled.is_(True),
+                KeywordGroupWord.enabled.is_(True),
+            )
+            .distinct()
+        )
+        word_set = [w for w in db.scalars(words_stmt).all() if w]
+        if not word_set:
+            return {"code": 200, "message": "success", "data": {"items": []}, "pagination": {"page": page, "page_size": page_size, "total": 0}}
+        # 展开绑定参数：IN :word_set 自动渲染为 IN (?, ?, ...) 而非单参数
+        # SQLAlchemy 1.2+ 行为：expanding=True 把 sequence 渲染为多个 `?`
+        stmt = text(
+            "EXISTS (SELECT 1 FROM json_each(notes.matched_keywords) WHERE json_each.value IN :word_set)"
+        ).bindparams(bindparam("word_set", expanding=True))
+        filters.append(stmt.bindparams(word_set=tuple(word_set)))
+
+    # 博主组筛选：取所有选中 enabled 组的成员 blogger id 并集
+    if blogger_group_ids:
+        blogger_ids_stmt = (
+            select(BloggerGroupMember.blogger_id)
+            .join(BloggerGroup, BloggerGroup.id == BloggerGroupMember.group_id)
+            .where(
+                BloggerGroup.id.in_(blogger_group_ids),
+                BloggerGroup.enabled.is_(True),
+            )
+            .distinct()
+        )
+        blogger_id_set = list(db.scalars(blogger_ids_stmt).all())
+        if not blogger_id_set:
+            return {"code": 200, "message": "success", "data": {"items": []}, "pagination": {"page": page, "page_size": page_size, "total": 0}}
+        filters.append(Note.matched_blogger_id.in_(blogger_id_set))
+
     if keyword:
         stripped = keyword.strip()
         if stripped:
