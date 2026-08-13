@@ -91,21 +91,27 @@ def create_user(
 ):
     if db.query(User).filter_by(username=payload.username).first():
         raise HTTPException(409, "用户名已存在")
+    # 按 group_ids（含 Administrators）+ is_admin 决定 role
+    admin_gid = db.query(Group).filter_by(name="Administrators").one().id
+    is_admin_member = payload.is_admin or admin_gid in payload.group_ids
+    role = "admin" if is_admin_member else "editor"
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
         display_name=payload.display_name or payload.username,
         enabled=True,
-        role="admin" if payload.is_admin else "editor",
+        role=role,
     )
     db.add(user)
     db.flush()
-    if payload.is_admin:
-        admin_gid = db.query(Group).filter_by(name="Administrators").one().id
-        db.add(UserGroup(user_id=user.id, group_id=admin_gid))
+    # 关联分组：is_admin 自动入 Administrators；否则按 payload.group_ids；
+    # 若 group_ids 包含 Administrators（且 is_admin=False）也带过去
+    if is_admin_member:
+        final_group_ids = sorted(set(payload.group_ids + [admin_gid]))
     else:
-        for gid in payload.group_ids:
-            db.add(UserGroup(user_id=user.id, group_id=gid))
+        final_group_ids = list(payload.group_ids)
+    for gid in final_group_ids:
+        db.add(UserGroup(user_id=user.id, group_id=gid))
     db.commit()
     record_audit(
         actor_user_id=None,
@@ -115,7 +121,7 @@ def create_user(
         target_label=user.username,
         method="POST", path="/api/v1/users", status_code=201,
         client_ip=_client_ip(request),
-        extra={"is_admin": payload.is_admin, "group_ids": payload.group_ids},
+        extra={"is_admin": payload.is_admin, "group_ids": payload.group_ids, "role": role},
     )
     return _user_to_out(db, user)
 
@@ -201,6 +207,10 @@ def update_user_groups(
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(404, "用户不存在")
+    admin_gid = db.query(Group).filter_by(name="Administrators").one().id
+    # builtin admin 保护：永远保留在 Administrators 组
+    if user.username == "admin" and admin_gid not in payload.group_ids:
+        raise HTTPException(400, "内置 admin 用户必须保留在 Administrators 组")
     old_names = [
         n for (n,) in db.query(Group.name)
         .join(UserGroup, UserGroup.group_id == Group.id)
@@ -212,6 +222,10 @@ def update_user_groups(
         if g is None:
             raise HTTPException(422, f"分组 {gid} 不存在")
         db.add(UserGroup(user_id=user_id, group_id=gid))
+    # 同步 role：进 Administrators → admin；离开 Administrators → editor
+    new_role = "admin" if admin_gid in payload.group_ids else "editor"
+    if user.role != new_role:
+        user.role = new_role
     db.commit()
     record_audit(
         actor_user_id=None,
@@ -221,6 +235,6 @@ def update_user_groups(
         target_label=user.username,
         method="PUT", path=f"/api/v1/users/{user_id}/groups", status_code=200,
         client_ip=_client_ip(request),
-        extra={"before_groups": old_names, "after_group_ids": payload.group_ids},
+        extra={"before_groups": old_names, "after_group_ids": payload.group_ids, "new_role": new_role},
     )
     return _user_to_out(db, user)
