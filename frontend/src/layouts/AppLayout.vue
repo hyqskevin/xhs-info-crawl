@@ -12,13 +12,47 @@ import {
   SwitchButton,
   Timer,
 } from '@element-plus/icons-vue'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useUserStore } from '@/stores/user'
+import { NAV_ITEMS, type SubItem, type TopItem } from '@/config/navPermissions'
 
 const route = useRoute()
 const isCollapse = ref(localStorage.getItem('sidebar_collapsed') === '1')
 const userStore = useUserStore()
+
+/** 顶级菜单是否可见：
+ *  - hasChildren=false 且 topLevelPermission 为空：所有已登录用户可见
+ *  - hasChildren=true 且 topLevelPermission 非空：该权限码可见
+ *  - hasChildren=true 且 topLevelPermission 为空：只要有一个子项可见
+ */
+function isTopVisible(item: TopItem): boolean {
+  if (!item.hasChildren) {
+    return item.topLevelPermission === null || userStore.hasPermission(item.topLevelPermission)
+  }
+  if (item.topLevelPermission !== null && item.topLevelPermission !== undefined) {
+    return userStore.hasPermission(item.topLevelPermission)
+  }
+  return (item.children || []).some(isSubVisible)
+}
+
+function isSubVisible(sub: SubItem): boolean {
+  return sub.permission === null || userStore.hasPermission(sub.permission)
+}
+
+const visibleNavItems = computed(() => NAV_ITEMS.filter(isTopVisible))
+
+/** 顶级菜单图标映射；新增顶级菜单时同步在这里登记 */
+const ICON_MAP: Record<string, unknown> = {
+  '/dashboard': DataAnalysis,
+  '/activities': Calendar,
+  '/duplicates': List,
+  '/tasks': Connection,
+  '/schedules': Timer,
+  '/reports': Document,
+  '/settings': Setting,
+  '/system-admin': Avatar,
+}
 
 function toggleCollapse() {
   isCollapse.value = !isCollapse.value
@@ -36,56 +70,23 @@ function logout(){localStorage.removeItem('token');userStore.clear();location.hr
         <span v-if="!isCollapse">活动采集系统</span>
       </div>
       <ElMenu router :default-active="route.fullPath" :collapse="isCollapse" :collapse-transition="false" class="app-menu">
-        <ElMenuItem index="/dashboard">
-          <ElIcon><DataAnalysis /></ElIcon>
-          <span>仪表盘</span>
-        </ElMenuItem>
-        <ElMenuItem index="/activities">
-          <ElIcon><Calendar /></ElIcon>
-          <span>活动管理</span>
-        </ElMenuItem>
-        <ElMenuItem index="/duplicates">
-          <ElIcon><List /></ElIcon>
-          <span>去重审核</span>
-        </ElMenuItem>
-        <ElMenuItem index="/tasks">
-          <ElIcon><Connection /></ElIcon>
-          <span>任务日志</span>
-        </ElMenuItem>
-        <ElSubMenu index="/schedules">
-          <template #title>
-            <ElIcon><Timer /></ElIcon>
-            <span>定时任务</span>
-          </template>
-          <ElMenuItem index="/schedules?tab=schedules">定时任务列表</ElMenuItem>
-          <ElMenuItem index="/schedules?tab=batch">抓取批次配置</ElMenuItem>
-        </ElSubMenu>
-        <ElMenuItem index="/reports">
-          <ElIcon><Document /></ElIcon>
-          <span>周报管理</span>
-        </ElMenuItem>
-        <ElSubMenu index="/settings">
-          <template #title>
-            <ElIcon><Setting /></ElIcon>
-            <span>配置中心</span>
-          </template>
-          <ElMenuItem index="/settings?tab=cities">城市抓取配置</ElMenuItem>
-          <ElMenuItem index="/settings?tab=bloggers">博主白名单</ElMenuItem>
-          <ElMenuItem index="/settings?tab=keyword-groups">关键词组</ElMenuItem>
-          <ElMenuItem index="/settings?tab=blogger-groups">博主组</ElMenuItem>
-          <ElMenuItem index="/settings?tab=xhs-accounts">账号配置</ElMenuItem>
-          <ElMenuItem index="/settings?tab=system-config">系统配置</ElMenuItem>
-        </ElSubMenu>
-        <ElSubMenu v-if="userStore.isAdmin" index="/system-admin">
-          <template #title>
-            <ElIcon><Avatar /></ElIcon>
-            <span>系统管理</span>
-          </template>
-          <ElMenuItem index="/system-admin?tab=accounts">操作账号</ElMenuItem>
-          <ElMenuItem index="/system-admin?tab=groups">账号分组</ElMenuItem>
-          <ElMenuItem index="/system-admin?tab=permissions">权限配置</ElMenuItem>
-          <ElMenuItem index="/system-admin?tab=audit">操作日志</ElMenuItem>
-        </ElSubMenu>
+        <template v-for="item in visibleNavItems" :key="item.index">
+          <!-- 叶子菜单 -->
+          <ElMenuItem v-if="!item.hasChildren" :index="item.index">
+            <ElIcon><component :is="ICON_MAP[item.index]" /></ElIcon>
+            <span>{{ item.label }}</span>
+          </ElMenuItem>
+          <!-- 顶级子菜单 -->
+          <ElSubMenu v-else :index="item.index">
+            <template #title>
+              <ElIcon><component :is="ICON_MAP[item.index]" /></ElIcon>
+              <span>{{ item.label }}</span>
+            </template>
+            <ElMenuItem v-for="sub in (item.children || []).filter(isSubVisible)" :key="sub.index" :index="sub.index">
+              {{ sub.label }}
+            </ElMenuItem>
+          </ElSubMenu>
+        </template>
         <!-- 海报制作功能未完备，暂隐藏 -->
         <!-- <ElMenuItem index="/posters">
           <ElIcon><Film /></ElIcon>
