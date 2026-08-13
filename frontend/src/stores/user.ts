@@ -17,14 +17,29 @@ function parseJwtPayload(token: string): JwtPayload | null {
   }
 }
 
+function readRoleFromStorage(): 'admin' | 'editor' | null {
+  const token = localStorage.getItem('token')
+  if (!token) return null
+  const payload = parseJwtPayload(token)
+  const r = payload?.role
+  return r === 'admin' || r === 'editor' ? r : null
+}
+
 export const useUserStore = defineStore('user', {
   state: () => ({
     token: null as string | null,
     role: null as 'admin' | 'editor' | null,
   }),
   getters: {
-    isAdmin: (state) => state.role === 'admin',
-    isAuthenticated: (state) => state.token !== null,
+    /** 优先用 store 状态；page refresh 后 store 未初始化时退到 localStorage 解析 token */
+    isAdmin(): boolean {
+      if (this.role === 'admin') return true
+      return readRoleFromStorage() === 'admin'
+    },
+    isAuthenticated(): boolean {
+      if (this.token !== null) return true
+      return !!localStorage.getItem('token')
+    },
   },
   actions: {
     setToken(token: string) {
@@ -40,6 +55,7 @@ export const useUserStore = defineStore('user', {
     clear() {
       this.token = null
       this.role = null
+      localStorage.removeItem('token')
     },
   },
 })
