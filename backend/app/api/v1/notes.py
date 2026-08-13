@@ -108,6 +108,9 @@ def _summary(note: Note, activity_count: int, ocr_texts: list[str] | None = None
         "source_url": note.source_url,
         "summary": text,
         "summary_truncated": truncated,
+        "like_count": note.like_count,
+        "collect_count": note.collect_count,
+        "comment_count": note.comment_count,
     }
 
 
