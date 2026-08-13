@@ -35,14 +35,16 @@ const actions = [
 ]
 
 async function load() {
-  const data = await api.listAuditLogs({
+  const r = await api.listAuditLogs({
     actor_username: filter.value.actor_username || undefined,
     action: filter.value.action.length ? filter.value.action : undefined,
     date_from: filter.value.date_from || undefined,
     date_to: filter.value.date_to || undefined,
     page: page.value,
     size: size.value,
-  }) as { total: number; items: AuditLogOut[] }
+  })
+  // 后端 list_audit_logs 返回 {total, items} 裸对象（response_model=AuditLogPage），从 axios 响应里取 .data
+  const data = (r as any).data as { total: number; items: AuditLogOut[] }
   items.value = data.items
   total.value = data.total
 }

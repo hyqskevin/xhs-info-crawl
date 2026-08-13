@@ -31,8 +31,9 @@ const form = ref({
 
 async function load() {
   const [u, g] = await Promise.all([api.listUsers(), api.listGroups()])
-  users.value = u as UserRow[]
-  groups.value = g as GroupRow[]
+  // 后端 list_users / list_groups 返回裸数组（response_model=list[...])，需要从 axios 响应里取 .data
+  users.value = (u as any).data as UserRow[]
+  groups.value = (g as any).data as GroupRow[]
 }
 
 async function submit() {

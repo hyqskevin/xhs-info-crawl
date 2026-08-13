@@ -12,7 +12,9 @@ interface PermissionOut {
 const permissions = ref<PermissionOut[]>([])
 
 onMounted(async () => {
-  permissions.value = await api.listPermissions() as PermissionOut[]
+  // 后端 list_permissions 返回裸数组，从 axios 响应里取 .data
+  const r = await api.listPermissions()
+  permissions.value = (r as any).data as PermissionOut[]
 })
 </script>
 

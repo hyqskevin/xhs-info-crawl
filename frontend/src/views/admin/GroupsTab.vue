@@ -27,8 +27,9 @@ const selectedGroup = computed(() => groups.value.find((g) => g.id === selectedI
 
 async function load() {
   const [g, p] = await Promise.all([api.listGroups(), api.listPermissions()])
-  groups.value = g as GroupOut[]
-  permissions.value = p as PermissionOut[]
+  // 后端 list_groups / list_permissions 返回裸数组，从 axios 响应里取 .data
+  groups.value = (g as any).data as GroupOut[]
+  permissions.value = (p as any).data as PermissionOut[]
   if (!selectedId.value && groups.value.length) {
     selectedId.value = groups.value[0].id
     selectedCodes.value = [...groups.value[0].permission_codes]
