@@ -7,6 +7,8 @@ import { api } from '@/api/client'
 const rows = ref<any[]>([])
 const cities = ref<any[]>([])
 const bloggers = ref<any[]>([])
+const keywordGroups = ref<any[]>([])
+const bloggerGroups = ref<any[]>([])
 const total = ref(0)
 const drawer = ref(false)
 const editDialog = ref(false)
@@ -27,7 +29,19 @@ const imagesLoading = ref(false)
 const selectedRows = ref<any[]>([])
 const batchDeleting = ref(false)
 const batchApproving = ref(false)
-const filters = reactive({ city: '', review_status: '', keyword: '', blogger_id: null as number | null, dates: [] as string[], page: 1, page_size: 20 })
+const filters = reactive({
+  city: '',
+  review_status: '',
+  keyword_mode: 'custom' as 'custom' | 'groups',
+  keyword: '',
+  keyword_group_ids: [] as number[],
+  blogger_mode: 'list' as 'list' | 'groups',
+  blogger_id: null as number | null,
+  blogger_group_ids: [] as number[],
+  dates: [] as string[],
+  page: 1,
+  page_size: 20,
+})
 const statusLabels: Record<string, string> = { PENDING: '待审核', APPROVED: '已通过', REJECTED: '未通过', RAW: '待审核', NEEDS_REVIEW: '待完善' }
 const statusTypes: Record<string, string> = { PENDING: 'primary', APPROVED: 'success', REJECTED: 'danger', RAW: 'primary', NEEDS_REVIEW: 'warning' }
 const cityNames = computed(() => Object.fromEntries(cities.value.map((city) => [city.code, city.name])))
@@ -38,15 +52,67 @@ const bloggerFilteredByCity = computed(() => {
 const detailDrawerSize = computed(() => window.innerWidth < 768 ? '95%' : '70%')
 
 function queryParams() {
-  const params: any = { city: filters.city || undefined, review_status: filters.review_status || undefined, start_date: filters.dates?.[0] || undefined, end_date: filters.dates?.[1] || undefined, blogger_id: filters.blogger_id || undefined, page: filters.page, page_size: filters.page_size }
-  const kw = filters.keyword?.trim()
-  if (kw) params.keyword = kw
+  const params: any = { city: filters.city || undefined, review_status: filters.review_status || undefined, start_date: filters.dates?.[0] || undefined, end_date: filters.dates?.[1] || undefined, page: filters.page, page_size: filters.page_size }
+  if (filters.keyword_mode === 'custom') {
+    const kw = filters.keyword?.trim()
+    if (kw) params.keyword = kw
+  } else {
+    if (filters.keyword_group_ids.length) {
+      params.keyword_group_ids = [...filters.keyword_group_ids]
+    }
+  }
+  if (filters.blogger_mode === 'list') {
+    if (filters.blogger_id != null) params.blogger_id = filters.blogger_id
+  } else {
+    if (filters.blogger_group_ids.length) {
+      params.blogger_group_ids = [...filters.blogger_group_ids]
+    }
+  }
   return params
 }
+function setKeywordMode(mode: 'custom' | 'groups') {
+  filters.keyword_mode = mode
+  if (mode === 'custom') filters.keyword_group_ids = []
+  else filters.keyword = ''
+}
+function setBloggerMode(mode: 'list' | 'groups') {
+  filters.blogger_mode = mode
+  if (mode === 'list') filters.blogger_group_ids = []
+  else filters.blogger_id = null
+}
 async function load() { const response = await api.notes(queryParams()); rows.value = response.data.data.items; total.value = response.data.pagination.total }
-async function initialize() { try { const [cityResp, bloggerResp] = await Promise.all([api.settings('cities'), api.settings('bloggers')]); cities.value = cityResp.data.data || []; bloggers.value = bloggerResp.data.data || [] } catch { cities.value = []; bloggers.value = [] } await load() }
+async function initialize() {
+  try {
+    const [cityResp, bloggerResp, kgResp, bgResp] = await Promise.all([
+      api.settings('cities'),
+      api.settings('bloggers'),
+      api.keywordGroups(),
+      api.bloggerGroups(),
+    ])
+    cities.value = cityResp.data.data || []
+    bloggers.value = bloggerResp.data.data || []
+    keywordGroups.value = (kgResp.data.data?.items || []).filter((g: any) => g.enabled)
+    bloggerGroups.value = (bgResp.data.data?.items || []).filter((g: any) => g.enabled)
+  } catch { cities.value = []; bloggers.value = []; keywordGroups.value = []; bloggerGroups.value = [] }
+  await load()
+}
 function applyFilters() { filters.page = 1; load() }
-function resetFilters() { Object.assign(filters, { city: '', review_status: '', keyword: '', blogger_id: null, dates: [], page: 1, page_size: 20 }); load() }
+function resetFilters() {
+  Object.assign(filters, {
+    city: '',
+    review_status: '',
+    keyword_mode: 'custom',
+    keyword: '',
+    keyword_group_ids: [],
+    blogger_mode: 'list',
+    blogger_id: null,
+    blogger_group_ids: [],
+    dates: [],
+    page: 1,
+    page_size: 20,
+  })
+  load()
+}
 function formatTime(value: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '待确认' }
 function formatDate(value: string | null) { return value ? new Date(value).toISOString().slice(0, 10) : '待确认' }
 
@@ -164,8 +230,18 @@ onUnmounted(releaseImages)
   <ElCard shadow="never" class="page-card">
     <div class="toolbar filters-toolbar">
       <ElSelect v-model="filters.city" placeholder="城市" clearable class="filter-item"><ElOption v-for="city in cities" :key="city.code" :label="city.name" :value="city.code" /></ElSelect>
-      <ElSelect v-model="filters.blogger_id" placeholder="博主" clearable filterable class="filter-item" @change="applyFilters"><ElOption v-for="blogger in bloggerFilteredByCity" :key="blogger.id" :label="blogger.username" :value="blogger.id" /></ElSelect>
-      <ElInput v-model="filters.keyword" placeholder="搜索推文标题或正文" clearable class="filter-item" aria-label="关键字" @keyup.enter="applyFilters" />
+      <ElRadioGroup :model-value="filters.keyword_mode" @change="(v: any) => setKeywordMode(v)" class="filter-mode">
+        <ElRadioButton value="custom">自定义关键词</ElRadioButton>
+        <ElRadioButton value="groups">关键词组</ElRadioButton>
+      </ElRadioGroup>
+      <ElInput v-if="filters.keyword_mode === 'custom'" v-model="filters.keyword" placeholder="搜索推文标题或正文" clearable class="filter-item" aria-label="关键字" @keyup.enter="applyFilters" />
+      <ElSelect v-else v-model="filters.keyword_group_ids" multiple collapse-tags collapse-tags-tooltip placeholder="选择 1 个或多个关键词组" class="filter-item" @change="applyFilters"><ElOption v-for="g in keywordGroups" :key="g.id" :label="g.name" :value="g.id" /></ElSelect>
+      <ElRadioGroup :model-value="filters.blogger_mode" @change="(v: any) => setBloggerMode(v)" class="filter-mode">
+        <ElRadioButton value="list">博主列表</ElRadioButton>
+        <ElRadioButton value="groups">博主组</ElRadioButton>
+      </ElRadioGroup>
+      <ElSelect v-if="filters.blogger_mode === 'list'" v-model="filters.blogger_id" placeholder="博主" clearable filterable class="filter-item" @change="applyFilters"><ElOption v-for="blogger in bloggerFilteredByCity" :key="blogger.id" :label="blogger.username" :value="blogger.id" /></ElSelect>
+      <ElSelect v-else v-model="filters.blogger_group_ids" multiple collapse-tags collapse-tags-tooltip placeholder="选择 1 个或多个博主组" class="filter-item" @change="applyFilters"><ElOption v-for="g in bloggerGroups" :key="g.id" :label="g.name" :value="g.id" /></ElSelect>
       <ElDatePicker v-model="filters.dates" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="推文开始日期" end-placeholder="推文结束日期" aria-label="发布时间" />
       <ElSelect v-model="filters.review_status" placeholder="审核状态" clearable class="filter-item"><ElOption label="待审核" value="PENDING" /><ElOption label="已通过" value="APPROVED" /><ElOption label="已驳回" value="REJECTED" /></ElSelect>
       <ElButton :icon="Search" @click="applyFilters">筛选</ElButton><ElButton :icon="Refresh" @click="resetFilters">重置</ElButton>
@@ -177,6 +253,9 @@ onUnmounted(releaseImages)
       <ElTableColumn label="城市" width="110"><template #default="scope">{{ cityNames[scope.row.city_code] || scope.row.city_code }}</template></ElTableColumn>
       <ElTableColumn label="发布时间" width="190"><template #default="scope">{{ formatDate(scope.row.published_at) }}</template></ElTableColumn>
       <ElTableColumn prop="activity_count" label="识别活动" width="110" />
+      <ElTableColumn label="点赞" width="90"><template #default="scope">{{ scope.row.like_count != null ? scope.row.like_count.toLocaleString() : '—' }}</template></ElTableColumn>
+      <ElTableColumn label="收藏" width="90"><template #default="scope">{{ scope.row.collect_count != null ? scope.row.collect_count.toLocaleString() : '—' }}</template></ElTableColumn>
+      <ElTableColumn label="评论" width="90"><template #default="scope">{{ scope.row.comment_count != null ? scope.row.comment_count.toLocaleString() : '—' }}</template></ElTableColumn>
       <ElTableColumn label="审核状态" width="110"><template #default="scope"><ElTag :type="statusTypes[scope.row.review_status] as any">{{ statusLabels[scope.row.review_status] || scope.row.review_status }}</ElTag></template></ElTableColumn>
       <ElTableColumn label="操作" min-width="330"><template #default="scope"><div class="row-actions"><ElButton text :icon="View" @click="show(scope.row.id)">详情</ElButton><ElButton text :icon="Edit" @click="openNoteEdit(scope.row)">编辑推文</ElButton><ElButton v-if="scope.row.review_status !== 'APPROVED'" text type="success" :icon="CircleCheck" @click="reviewNote(scope.row, 'APPROVED')">通过</ElButton><ElButton v-if="scope.row.review_status !== 'REJECTED'" text type="danger" :icon="CircleClose" @click="reviewNote(scope.row, 'REJECTED')">驳回</ElButton></div></template></ElTableColumn>
     </ElTable>
@@ -233,5 +312,5 @@ onUnmounted(releaseImages)
 </template>
 
 <style scoped>
-.filters-toolbar{flex-wrap:wrap}.filter-item{width:180px}.row-actions{display:flex;align-items:center;white-space:nowrap}.detail-actions{display:flex;justify-content:flex-end;gap:8px;margin-bottom:16px}.source-images{margin-top:24px}.source-image-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px}.source-image-grid :deep(.el-image){width:100%;height:220px;border-radius:var(--el-border-radius-base);background:var(--el-fill-color-light)}
+.filters-toolbar{flex-wrap:wrap}.filter-item{width:180px}.filter-mode{margin-right:0}.row-actions{display:flex;align-items:center;white-space:nowrap}.detail-actions{display:flex;justify-content:flex-end;gap:8px;margin-bottom:16px}.source-images{margin-top:24px}.source-image-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px}.source-image-grid :deep(.el-image){width:100%;height:220px;border-radius:var(--el-border-radius-base);background:var(--el-fill-color-light)}
 </style>
