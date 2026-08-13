@@ -15,6 +15,7 @@ from app.models.activity import Activity
 from app.models.blogger_city import BloggerCity
 from app.models.blogger_group import BloggerGroup, BloggerGroupMember
 from app.models.config import Blogger, City
+from app.models.keyword_group import KeywordGroupCity
 from app.models.note import Note, NoteImage
 from app.models.schedule import ScheduledCrawl
 from app.models.task import CrawlTask, TaskLog
@@ -47,6 +48,28 @@ from app.tasks.celery_app import celery_app
 def find_opencli(bin_name: str) -> str | None:
     """解析 opencli 可执行文件路径（shutil.which 的薄封装，测试可 patch）。"""
     return shutil.which(bin_name)
+
+
+def _extract_engagement(detail: dict, field: str) -> int | None:
+    """从 opencli note 详情中提取互动数。
+
+    字段名映射：opencli 实际返回可能是 liked_count / collected_count 等。
+    实施时若已确认实际字段名，替换候选列表。
+    """
+    if not isinstance(detail, dict):
+        return None
+    candidates = {
+        "like_count": ("like_count", "liked_count", "likes"),
+        "collect_count": ("collect_count", "collected_count", "collects"),
+        "comment_count": ("comment_count", "comments"),
+    }.get(field, (field,))
+    for key in candidates:
+        if key in detail and detail[key] is not None:
+            try:
+                return int(detail[key])
+            except (TypeError, ValueError):
+                return None
+    return None
 
 
 def rate_limit_sleep(seconds: float, guard: Callable[[], None] | None = None) -> None:
@@ -93,24 +116,77 @@ _DISPATCH_TZ = ZoneInfo("Asia/Shanghai")
 _BUSY_STATUSES = ("PENDING", "RUNNING", "STOP_REQUESTED")
 
 
-def _expand_blogger_groups(db, city_code: str, group_ids: list[int]) -> list[int]:
-    """博主组展开：组内 enabled 博主 ∩ 该城市 blogger_cities.enabled 博主。"""
+def _collect_cities_from_groups(db, task_params: dict) -> list[str]:
+    """不限城市（city 为空）时，从博主组/关键词组挂的城市合并出抓取城市列表。
+
+    - 博主组 → 从 BloggerCity 取组内博主挂的城市（去重保留顺序）
+    - 关键词组 → 从 KeywordGroupCity 取组挂的城市
+    """
+    city_codes: list[str] = []
+    seen: set[str] = set()
+
+    # 博主组：组内所有博主挂的城市
+    blogger_group_ids = task_params.get("blogger_group_ids") or []
+    if blogger_group_ids:
+        stmt = (
+            select(BloggerCity.city_code)
+            .join(BloggerGroupMember, BloggerGroupMember.blogger_id == BloggerCity.blogger_id)
+            .where(
+                BloggerGroupMember.group_id.in_(blogger_group_ids),
+                BloggerCity.enabled.is_(True),
+            )
+            .distinct()
+        )
+        for code in db.scalars(stmt).all():
+            if code not in seen:
+                seen.add(code)
+                city_codes.append(code)
+
+    # 关键词组：组挂的城市
+    keyword_group_ids = task_params.get("keyword_group_ids") or []
+    if keyword_group_ids:
+        stmt = (
+            select(KeywordGroupCity.city_code)
+            .where(
+                KeywordGroupCity.keyword_group_id.in_(keyword_group_ids),
+                KeywordGroupCity.enabled.is_(True),
+            )
+            .distinct()
+        )
+        for code in db.scalars(stmt).all():
+            if code not in seen:
+                seen.add(code)
+                city_codes.append(code)
+
+    return city_codes
+
+
+def _expand_blogger_groups(db, city_code: str | None, group_ids: list[int]) -> list[int]:
+    """博主组展开。
+
+    - city_code 给出：组内 enabled 博主 ∩ 该城市 blogger_cities.enabled 博主
+    - city_code=None：组内 enabled 博主（不限城市）
+    """
     if not group_ids:
         return []
     stmt = (
         select(Blogger.id)
-        .join(BloggerCity, BloggerCity.blogger_id == Blogger.id)
         .join(BloggerGroupMember, BloggerGroupMember.blogger_id == Blogger.id)
         .join(BloggerGroup, BloggerGroup.id == BloggerGroupMember.group_id)
         .where(
             BloggerGroupMember.group_id.in_(group_ids),
             BloggerGroup.enabled.is_(True),
-            BloggerCity.city_code == city_code,
-            BloggerCity.enabled.is_(True),
             Blogger.enabled.is_(True),
         )
-        .order_by(Blogger.id)
     )
+    if city_code:
+        stmt = stmt.join(
+            BloggerCity, BloggerCity.blogger_id == Blogger.id
+        ).where(
+            BloggerCity.city_code == city_code,
+            BloggerCity.enabled.is_(True),
+        )
+    stmt = stmt.order_by(Blogger.id)
     return list(dict.fromkeys(db.scalars(stmt).all()))
 
 
@@ -333,7 +409,17 @@ def _collect_crawl_results(
     results: list[tuple[str, dict]] = []
     discovery_failures = 0
     consecutive_failures = 0
-    requested_cities = [task.params["city"]] if task.params.get("city") else task.params.get("cities", [])
+    # city/cities 优先级：city 优先；若 city 为 ''（不限城市）→ 视为未指定，按 keyword_group_ids/blogger_group_ids 各自挂的城市展开
+    requested_cities: list[str] = []
+    if task.params.get("city"):
+        requested_cities = [task.params["city"]]
+    elif task.params.get("cities"):
+        requested_cities = task.params["cities"]
+    else:
+        # city='' 或未设置：从博主组挂的城市 / 关键词组挂的城市合并
+        group_cities = _collect_cities_from_groups(db, task.params)
+        if group_cities:
+            requested_cities = group_cities
     city_query = select(City).where(City.enabled.is_(True))
     if requested_cities:
         city_query = city_query.where(City.code.in_(requested_cities))
@@ -381,7 +467,11 @@ def _collect_crawl_results(
                 if blogger.max_notes_per_crawl and blogger.max_notes_per_crawl > 0 and len(items) > blogger.max_notes_per_crawl:
                     log(db, task.id, "INFO", f"博主 {username!r} 抓取上限 {blogger.max_notes_per_crawl}，截断至 {blogger.max_notes_per_crawl} 篇")
                     items = items[:blogger.max_notes_per_crawl]
-                results.extend((city.code, item) for item in items)
+                for item in items:
+                    tagged = dict(item)
+                    tagged["_matched_blogger_id"] = blogger.id
+                    tagged["_matched_blogger_username"] = blogger.username
+                    results.append((city.code, tagged))
     else:
         for city_code in requested_cities:
             quota_exceeded = False
@@ -463,6 +553,12 @@ def download_and_ocr(db, task: CrawlTask, run_token: str, city: str, item: dict,
         status="DOWNLOADED",
         published_at=published_at,
         raw_data=detail,
+        matched_keywords=item.get("_matched_keywords") or [],
+        matched_blogger_id=item.get("_matched_blogger_id"),
+        matched_blogger_username=item.get("_matched_blogger_username"),
+        like_count=_extract_engagement(detail, "like_count"),
+        collect_count=_extract_engagement(detail, "collect_count"),
+        comment_count=_extract_engagement(detail, "comment_count"),
     )
     db.add(note)
     db.flush()
@@ -811,6 +907,37 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
                     if reset_interval and len(staged_notes) % reset_interval == 0:
                         log(db, task.id, "INFO", f"已处理 {len(staged_notes)} 篇，重置 adapter 释放 Chrome profile")
                         adapter = reset_adapter_session(adapter, f"周期性 reset @ {len(staged_notes)} 篇")
+                    # 多账号轮询：每抓 N 篇主动切到下一个账号（避免触发频率限制）
+                    # 仅当 ≥2 个账号时切；单账号 / 默认 session 时跳过
+                    rotation_n = getattr(settings, "account_rotation_notes", 25) or 0
+                    if (
+                        rotation_n > 0
+                        and len(accounts) >= 2
+                        and all(getattr(a, "cdp_port", None) is not None for a in accounts)
+                        and len(staged_notes) % rotation_n == 0
+                    ):
+                        next_idx = (account_index + 1) % len(accounts)
+                        old_name = accounts[account_index].name
+                        new_name = accounts[next_idx].name
+                        log(
+                            db,
+                            task.id,
+                            "INFO",
+                            f"账号轮询：每 {rotation_n} 篇切换一次，{old_name!r} → {new_name!r}（已抓 {len(staged_notes)} 篇）",
+                        )
+                        account_index = next_idx
+                        adapter = OpenCLIAdapter(
+                            settings,
+                            session=accounts[account_index].session_name,
+                            cdp_endpoint=_resolve_cdp_endpoint_for_account(accounts[account_index], chrome_pool),
+                        )
+                        if hasattr(adapter, "bind_task"):
+                            adapter.bind_task(
+                                task.id,
+                                run_token,
+                                execution_guard=lambda: assert_execution_active(db, task.id, run_token),
+                                warning_sink=lambda message: log(db, task.id, "WARNING", message),
+                            )
                 # 正常返回（含标题不匹配/已存在等跳过）说明链路健康，连续失败计数清零
                 consecutive_failures = 0
             except ExecutionStopped:
