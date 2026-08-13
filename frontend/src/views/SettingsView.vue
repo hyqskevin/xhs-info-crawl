@@ -76,7 +76,7 @@ async function load() {
 function resetForm() {
   Object.keys(form).forEach((key) => delete form[key])
   if (tab.value === 'cities') Object.assign(form, { name: '', recent_filter: '一周内', enabled: true })
-  else if (tab.value === 'xhs-accounts') Object.assign(form, { name: '', remark: '', session_name: '', enabled: true, priority: 0 })
+  else if (tab.value === 'xhs-accounts') Object.assign(form, { name: '', remark: '', platform_user_id: '', enabled: true, priority: 0 })
   else Object.assign(form, { platform_user_id: '', username: '', profile_url: '', city_codes: [], enabled: true, max_notes_per_crawl: 0 })
 }
 
@@ -251,6 +251,12 @@ onMounted(load)
 
     <ElTable v-else-if="tab === 'xhs-accounts'" :data="rows">
       <ElTableColumn prop="name" label="账号名称" min-width="140" />
+      <ElTableColumn prop="platform_user_id" label="小红书账号 ID" min-width="180" show-overflow-tooltip>
+        <template #default="scope">
+          <span v-if="scope.row.platform_user_id">{{ scope.row.platform_user_id }}</span>
+          <span v-else style="color: #909399">扫码后自动读取</span>
+        </template>
+      </ElTableColumn>
       <ElTableColumn prop="remark" label="备注" min-width="120" show-overflow-tooltip />
       <ElTableColumn prop="session_name" label="Session 名" min-width="140" />
       <ElTableColumn label="登录状态" width="120">
@@ -394,11 +400,23 @@ onMounted(load)
         <ElFormItem label="启用"><ElSwitch v-model="form.enabled" /></ElFormItem>
       </template>
       <template v-else-if="tab === 'xhs-accounts'">
-        <ElFormItem label="账号名称"><ElInput v-model="form.name" placeholder="例如：主账号" /></ElFormItem>
+        <ElFormItem label="小红书账号名称">
+          <ElInput v-model="form.name" placeholder="例如：主账号 / hanamaki（用来标识账号的友好名）" />
+        </ElFormItem>
+        <ElFormItem label="小红书账号 ID">
+          <ElInput v-model="form.platform_user_id" placeholder="可选；小红书用户 ID，留空可后续扫码时自动读取" />
+        </ElFormItem>
         <ElFormItem label="备注"><ElInput v-model="form.remark" placeholder="可选；用于区分账号用途" /></ElFormItem>
-        <ElFormItem label="Session 名"><ElInput v-model="form.session_name" placeholder="opencli --session 参数值" /></ElFormItem>
         <ElFormItem label="启用"><ElSwitch v-model="form.enabled" /></ElFormItem>
         <ElFormItem label="优先级"><ElInputNumber v-model="form.priority" :min="0" :step="1" style="width: 100%" /></ElFormItem>
+        <ElAlert
+          v-if="!editingId"
+          type="info"
+          show-icon
+          :closable="false"
+          title="新增后请点击该行的「检查登录」拉起浏览器扫码登录"
+          description="系统会自动按账号名称生成唯一的 Session 名（xhs-<账号名>，重名追加 -2/-3），无需手动填写。"
+        />
       </template>
       <template v-else>
         <ElFormItem label="小红书用户 ID"><ElInput v-model="form.platform_user_id" placeholder="可选；留空后续可补" /></ElFormItem>
