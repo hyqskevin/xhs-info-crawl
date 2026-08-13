@@ -45,7 +45,7 @@
 
 ### 3.2 迁移
 
-新建 `backend/migrations/versions/0016_note_match_and_engagement.py`：
+新建 `backend/migrations/versions/0022_note_match_and_engagement.py`：
 
 - 全部加列 nullable=True
 - 不做历史回填（成本太高；筛选 OR 匹配时自然忽略 null）
@@ -203,7 +203,7 @@ notes(params: {
 
 ## 5. 验收
 
-- [ ] 0016 迁移文件可 `alembic upgrade head` 成功
+- [ ] 0022 迁移文件可 `alembic upgrade head` 成功
 - [ ] 重启 celery worker 后 worker 进程无 `no such column` 报错
 - [ ] 推文入库后 `notes.matched_keywords` / `matched_blogger_*` / `like_count` / `collect_count` / `comment_count` 列有值
 - [ ] `GET /api/v1/notes?keyword_group_ids=1&page=1` 按组命中推文
