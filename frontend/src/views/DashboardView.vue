@@ -69,7 +69,8 @@ const scheduleStatusMeta: Record<string, { type: string; label: string }> = {
 const weekdayLabels: Record<number, string> = { 1: '一', 2: '二', 3: '三', 4: '四', 5: '五', 6: '六', 7: '日' }
 const pad2 = (n: number) => String(n).padStart(2, '0')
 const scheduleStatusOf = (task: any) => scheduleStatusMeta[task?.status] || { type: 'info', label: task?.status || '' }
-let pollTimer: ReturnType<typeof setInterval> | undefined
+let pollLastTaskTimer: ReturnType<typeof setInterval> | undefined
+let pollStatsTimer: ReturnType<typeof setInterval> | undefined
 const form = reactive({
   city: '',
   keyword_source: 'custom' as 'custom' | 'groups',
@@ -163,8 +164,12 @@ async function initialize() {
     status.value = 'error'
   }
   loadDiagnosticsSnapshot()
-  loadLatestTask()
-  pollTimer = setInterval(loadLatestTask, 3000)
+  await Promise.all([loadLatestTask(), pollAnalytics()])
+  pollLastTaskTimer = setInterval(pollLastTask, 3000)
+  pollStatsTimer = setInterval(async () => {
+    await pollSummaryStats()
+    await pollAnalytics()
+  }, 60_000)
 }
 
 async function loadDiagnosticsSnapshot() {
@@ -195,10 +200,32 @@ async function probe(section: 'opencli' | 'xhs_login' | 'xhs_pool') {
 async function loadLatestTask() {
   try {
     const data = (await api.dashboard()).data.data
+    lastTask.value = data.last_task
     summary.value = { weekly_notes_count: 0, weekly_activities_count: 0, pending_duplicates: 0, recent_logs: [], ...data }
+  } catch { /* health card reports service errors */ }
+}
+
+/** 仅刷新最近抓取任务进度（高频，3 秒一次）。*/
+async function pollLastTask() {
+  try {
+    const data = (await api.dashboard()).data.data
     lastTask.value = data.last_task
   } catch { /* health card reports service errors */ }
-  try { analytics.value = (await api.dashboardAnalytics()).data.data } catch { /* 图表数据加载失败不阻塞主流程 */ }
+}
+
+/** 仅刷新 last_task 之外的 summary 字段（顶部 3 个卡片 + 最近日志）。*/
+async function pollSummaryStats() {
+  try {
+    const data = (await api.dashboard()).data.data
+    summary.value = { weekly_notes_count: 0, weekly_activities_count: 0, pending_duplicates: 0, recent_logs: [], ...data }
+  } catch { /* health card reports service errors */ }
+}
+
+/** 刷新 analytics（趋势图/成功率饼/定时任务表）。*/
+async function pollAnalytics() {
+  try {
+    analytics.value = (await api.dashboardAnalytics()).data.data
+  } catch { /* 图表数据加载失败不阻塞主流程 */ }
 }
 
 async function start() {
@@ -294,7 +321,10 @@ async function finish() {
 }
 
 onMounted(initialize)
-onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
+onUnmounted(() => {
+  if (pollLastTaskTimer) clearInterval(pollLastTaskTimer)
+  if (pollStatsTimer) clearInterval(pollStatsTimer)
+})
 </script>
 
 <template>
