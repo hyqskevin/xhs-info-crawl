@@ -14,6 +14,7 @@ from app.models.blogger_city import BloggerCity
 from app.models.blogger_group import BloggerGroup, BloggerGroupMember
 from app.models.config import Blogger, City
 from app.models.keyword_group import KeywordGroup, KeywordGroupCity, KeywordGroupWord
+from app.services.audit import record_audit
 from app.services.opencli_adapter import OpenCLIAdapter
 from app.services.browser_launcher import BrowserLaunchError, open_xhs_login
 from app.services.blogger_import import BloggerImportError, generate_blogger_template, import_bloggers
@@ -22,6 +23,19 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 Admin = Annotated[dict[str, str], Depends(require_admin)]
 DB = Annotated[Session, Depends(get_db)]
 RecentFilter = Literal["不限", "一天内", "一周内", "半年内"]
+
+
+# ── 批量删除（5 个配置资源共用 schema） ──────────────────────────────────
+
+
+class BatchDeleteIdsIn(BaseModel):
+    """5 个批量删除端点共用的请求体：1–500 个资源 id。"""
+
+    ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class BatchDeleteOut(BaseModel):
+    deleted_count: int
 
 
 class CityIn(BaseModel):
@@ -53,11 +67,15 @@ class KeywordGroupCitiesIn(BaseModel):
 
 
 def _dump_keyword_group(db: Session, kg: KeywordGroup) -> dict:
-    city_codes = sorted(
-        row.city_code for row in db.scalars(
-            select(KeywordGroupCity).where(KeywordGroupCity.keyword_group_id == kg.id)
-        ).all()
-    )
+    # outer join City 取 name；City 不存在时 name=None 兜底为 code
+    city_rows = db.execute(
+        select(KeywordGroupCity.city_code, City.name)
+        .outerjoin(City, City.code == KeywordGroupCity.city_code)
+        .where(KeywordGroupCity.keyword_group_id == kg.id)
+        .order_by(KeywordGroupCity.city_code)
+    ).all()
+    cities = [{"code": code, "name": name or code} for code, name in city_rows]
+    city_codes = [c["code"] for c in cities]
     words = sorted(
         row.word for row in db.scalars(
             select(KeywordGroupWord).where(KeywordGroupWord.keyword_group_id == kg.id)
@@ -69,6 +87,7 @@ def _dump_keyword_group(db: Session, kg: KeywordGroup) -> dict:
         "description": kg.description,
         "enabled": kg.enabled,
         "city_codes": city_codes,
+        "cities": cities,
         "words": words,
         "created_at": kg.created_at,
     }
@@ -159,6 +178,46 @@ def delete_keyword_group(kg_id: int, _: Admin, db: DB) -> dict:
     db.delete(kg)
     db.commit()
     return {"code": 200, "message": "success", "data": {"deleted_id": kg_id}}
+
+
+@router.post("/keyword-groups/batch-delete", response_model=BatchDeleteOut)
+def batch_delete_keyword_groups(
+    payload: BatchDeleteIdsIn,
+    request: Request,
+    actor: Admin,
+    db: DB,
+):
+    """批量删除关键词组。
+
+    关联清理：先 delete KeywordGroupWord / KeywordGroupCity where keyword_group_id IN (...)，
+    再 delete KeywordGroup where id IN (...)。
+
+    部分 id 不存在 → 404 整体回滚（一致性优先）。
+
+    关联 spec: docs/superpowers/specs/2026-08-13-settings-batch-delete-design.md §2.1
+    """
+    rows = db.scalars(select(KeywordGroup).where(KeywordGroup.id.in_(payload.ids))).all()
+    if len(rows) != len(set(payload.ids)):
+        raise HTTPException(404, "部分关键词组不存在，已取消")
+    deleted_ids = [r.id for r in rows]
+    db.execute(delete(KeywordGroupWord).where(KeywordGroupWord.keyword_group_id.in_(deleted_ids)))
+    db.execute(delete(KeywordGroupCity).where(KeywordGroupCity.keyword_group_id.in_(deleted_ids)))
+    for r in rows:
+        db.delete(r)
+    db.commit()
+    record_audit(
+        actor_user_id=None,
+        actor_username=actor["username"],
+        action="keyword_groups_batch_deleted",
+        resource_type="keyword_group",
+        target_label=f"batch of {len(deleted_ids)}",
+        method="POST",
+        path="/api/v1/settings/keyword-groups/batch-delete",
+        status_code=200,
+        client_ip=request.client.host if request.client else "127.0.0.1",
+        extra={"deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)},
+    )
+    return BatchDeleteOut(deleted_count=len(rows))
 
 
 @router.patch("/keyword-groups/{kg_id}")
@@ -276,6 +335,45 @@ def delete_blogger_group(group_id: int, _: Admin, db: DB) -> dict:
     return {"code": 200, "message": "success", "data": {"deleted_id": group_id}}
 
 
+@router.post("/blogger-groups/batch-delete", response_model=BatchDeleteOut)
+def batch_delete_blogger_groups(
+    payload: BatchDeleteIdsIn,
+    request: Request,
+    actor: Admin,
+    db: DB,
+):
+    """批量删除博主组。
+
+    关联清理：先 delete BloggerGroupMember where group_id IN (...)，
+    再 delete BloggerGroup where id IN (...)。
+
+    部分 id 不存在 → 404 整体回滚（一致性优先）。
+
+    关联 spec: docs/superpowers/specs/2026-08-13-settings-batch-delete-design.md §2.1
+    """
+    rows = db.scalars(select(BloggerGroup).where(BloggerGroup.id.in_(payload.ids))).all()
+    if len(rows) != len(set(payload.ids)):
+        raise HTTPException(404, "部分博主组不存在，已取消")
+    deleted_ids = [r.id for r in rows]
+    db.execute(delete(BloggerGroupMember).where(BloggerGroupMember.group_id.in_(deleted_ids)))
+    for r in rows:
+        db.delete(r)
+    db.commit()
+    record_audit(
+        actor_user_id=None,
+        actor_username=actor["username"],
+        action="blogger_groups_batch_deleted",
+        resource_type="blogger_group",
+        target_label=f"batch of {len(deleted_ids)}",
+        method="POST",
+        path="/api/v1/settings/blogger-groups/batch-delete",
+        status_code=200,
+        client_ip=request.client.host if request.client else "127.0.0.1",
+        extra={"deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)},
+    )
+    return BatchDeleteOut(deleted_count=len(rows))
+
+
 class BloggerIn(BaseModel):
     platform_user_id: str | None = None
     username: str
@@ -344,6 +442,50 @@ def delete_city(item_id: int, _: Admin, db: DB):
         db.delete(city)
         db.commit()
     return {"code": 200, "message": "success", "data": {"id": item_id}}
+
+
+# ── 批量删除（5 个配置资源） ──────────────────────────────────────────────
+
+
+@router.post("/cities/batch-delete", response_model=BatchDeleteOut)
+def batch_delete_cities(
+    payload: BatchDeleteIdsIn,
+    request: Request,
+    actor: Admin,
+    db: DB,
+):
+    """批量删除城市配置。
+
+    关联清理：先 delete BloggerCity / KeywordGroupCity where city_code IN (...)，
+    再 delete City where id IN (...)。
+
+    部分 id 不存在 → 404 整体回滚（一致性优先）。
+
+    关联 spec: docs/superpowers/specs/2026-08-13-settings-batch-delete-design.md §2.1
+    """
+    rows = db.scalars(select(City).where(City.id.in_(payload.ids))).all()
+    if len(rows) != len(set(payload.ids)):
+        raise HTTPException(404, "部分城市不存在，已取消")
+    city_codes = [c.code for c in rows]
+    deleted_ids = [c.id for c in rows]
+    db.execute(delete(BloggerCity).where(BloggerCity.city_code.in_(city_codes)))
+    db.execute(delete(KeywordGroupCity).where(KeywordGroupCity.city_code.in_(city_codes)))
+    for c in rows:
+        db.delete(c)
+    db.commit()
+    record_audit(
+        actor_user_id=None,
+        actor_username=actor["username"],
+        action="cities_batch_deleted",
+        resource_type="city",
+        target_label=f"batch of {len(deleted_ids)}",
+        method="POST",
+        path="/api/v1/settings/cities/batch-delete",
+        status_code=200,
+        client_ip=request.client.host if request.client else "127.0.0.1",
+        extra={"deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)},
+    )
+    return BatchDeleteOut(deleted_count=len(rows))
 
 
 @router.get("/opencli/config")
@@ -435,6 +577,9 @@ _ENV_KEY_MAP: dict[str, str] = {
     "weekly_search_limit": "WEEKLY_SEARCH_LIMIT",
     "consecutive_note_failure_limit": "CONSECUTIVE_NOTE_FAILURE_LIMIT",
     "activity_future_window_days": "ACTIVITY_FUTURE_WINDOW_DAYS",
+    "account_rotation_notes": "ACCOUNT_ROTATION_NOTES",
+    "chrome_bin": "CHROME_BIN",
+    "chrome_user_data_dir": "CHROME_USER_DATA_DIR",
     "opencli_bin": "OPENCLI_BIN",
 }
 
@@ -460,6 +605,9 @@ class SystemConfigIn(BaseModel):
     weekly_search_limit: int | None = None
     consecutive_note_failure_limit: int | None = None
     activity_future_window_days: int | None = None
+    account_rotation_notes: int | None = None
+    chrome_bin: str | None = None
+    chrome_user_data_dir: str | None = None
     opencli_bin: str | None = None
 
 
@@ -639,3 +787,43 @@ def delete_setting(kind: Literal["bloggers"], item_id: int, _: Admin, db: DB):
         db.delete(item)
         db.commit()
     return {"code": 200, "message": "success", "data": {"id": item_id}}
+
+
+@router.post("/bloggers/batch-delete", response_model=BatchDeleteOut)
+def batch_delete_bloggers(
+    payload: BatchDeleteIdsIn,
+    request: Request,
+    actor: Admin,
+    db: DB,
+):
+    """批量删除博主白名单。
+
+    关联清理：先 delete BloggerCity / BloggerGroupMember where blogger_id IN (...)，
+    再 delete Blogger where id IN (...)。
+
+    部分 id 不存在 → 404 整体回滚（一致性优先）。
+
+    关联 spec: docs/superpowers/specs/2026-08-13-settings-batch-delete-design.md §2.1
+    """
+    rows = db.scalars(select(Blogger).where(Blogger.id.in_(payload.ids))).all()
+    if len(rows) != len(set(payload.ids)):
+        raise HTTPException(404, "部分博主不存在，已取消")
+    deleted_ids = [r.id for r in rows]
+    db.execute(delete(BloggerCity).where(BloggerCity.blogger_id.in_(deleted_ids)))
+    db.execute(delete(BloggerGroupMember).where(BloggerGroupMember.blogger_id.in_(deleted_ids)))
+    for r in rows:
+        db.delete(r)
+    db.commit()
+    record_audit(
+        actor_user_id=None,
+        actor_username=actor["username"],
+        action="bloggers_batch_deleted",
+        resource_type="blogger",
+        target_label=f"batch of {len(deleted_ids)}",
+        method="POST",
+        path="/api/v1/settings/bloggers/batch-delete",
+        status_code=200,
+        client_ip=request.client.host if request.client else "127.0.0.1",
+        extra={"deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)},
+    )
+    return BatchDeleteOut(deleted_count=len(rows))
