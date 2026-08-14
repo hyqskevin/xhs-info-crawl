@@ -523,13 +523,16 @@ def _sync_blogger_cities(db: Session, blogger_id: int, city_codes: list[str]) ->
 
 def _dump_blogger_with_cities(blogger: Blogger, db: Session) -> dict:
     data = dump(blogger)
-    data["city_codes"] = list(
-        db.scalars(
-            select(BloggerCity.city_code)
-            .where(BloggerCity.blogger_id == blogger.id)
-            .order_by(BloggerCity.id)
-        ).all()
-    )
+    # outer join City 取 name；City 不存在时 name=None 兜底为 code
+    city_rows = db.execute(
+        select(BloggerCity.city_code, City.name)
+        .outerjoin(City, City.code == BloggerCity.city_code)
+        .where(BloggerCity.blogger_id == blogger.id)
+        .order_by(BloggerCity.city_code)
+    ).all()
+    cities = [{"code": code, "name": name or code} for code, name in city_rows]
+    data["city_codes"] = [c["code"] for c in cities]
+    data["cities"] = cities
     return data
 
 
