@@ -115,6 +115,11 @@ function resetFilters() {
 }
 function formatTime(value: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '待确认' }
 function formatDate(value: string | null) { return value ? new Date(value).toISOString().slice(0, 10) : '待确认' }
+/** 点赞/收藏/评论；任一字段缺失显示 "—"；全部缺失显示 "—" */
+function formatEngagement(row: any) {
+  const fmt = (v: any) => (v == null ? '—' : Number(v).toLocaleString())
+  return [fmt(row.like_count), fmt(row.collect_count), fmt(row.comment_count)].join(' / ')
+}
 
 async function batchRemove() {
   if (!selectedRows.value.length) return
@@ -253,9 +258,7 @@ onUnmounted(releaseImages)
       <ElTableColumn label="城市" width="110"><template #default="scope">{{ cityNames[scope.row.city_code] || scope.row.city_code }}</template></ElTableColumn>
       <ElTableColumn label="发布时间" width="190"><template #default="scope">{{ formatDate(scope.row.published_at) }}</template></ElTableColumn>
       <ElTableColumn prop="activity_count" label="识别活动" width="110" />
-      <ElTableColumn label="点赞" width="90"><template #default="scope">{{ scope.row.like_count != null ? scope.row.like_count.toLocaleString() : '—' }}</template></ElTableColumn>
-      <ElTableColumn label="收藏" width="90"><template #default="scope">{{ scope.row.collect_count != null ? scope.row.collect_count.toLocaleString() : '—' }}</template></ElTableColumn>
-      <ElTableColumn label="评论" width="90"><template #default="scope">{{ scope.row.comment_count != null ? scope.row.comment_count.toLocaleString() : '—' }}</template></ElTableColumn>
+      <ElTableColumn label="点赞/收藏/评论" width="170"><template #default="scope">{{ formatEngagement(scope.row) }}</template></ElTableColumn>
       <ElTableColumn label="审核状态" width="110"><template #default="scope"><ElTag :type="statusTypes[scope.row.review_status] as any">{{ statusLabels[scope.row.review_status] || scope.row.review_status }}</ElTag></template></ElTableColumn>
       <ElTableColumn label="操作" min-width="330"><template #default="scope"><div class="row-actions"><ElButton text :icon="View" @click="show(scope.row.id)">详情</ElButton><ElButton text :icon="Edit" @click="openNoteEdit(scope.row)">编辑推文</ElButton><ElButton v-if="scope.row.review_status !== 'APPROVED'" text type="success" :icon="CircleCheck" @click="reviewNote(scope.row, 'APPROVED')">通过</ElButton><ElButton v-if="scope.row.review_status !== 'REJECTED'" text type="danger" :icon="CircleClose" @click="reviewNote(scope.row, 'REJECTED')">驳回</ElButton></div></template></ElTableColumn>
     </ElTable>
