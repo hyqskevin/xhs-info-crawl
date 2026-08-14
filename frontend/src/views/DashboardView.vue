@@ -70,11 +70,27 @@ const weekdayLabels: Record<number, string> = { 1: '一', 2: '二', 3: '三', 4:
 const pad2 = (n: number) => String(n).padStart(2, '0')
 const scheduleStatusOf = (task: any) => scheduleStatusMeta[task?.status] || { type: 'info', label: task?.status || '' }
 let pollTimer: ReturnType<typeof setInterval> | undefined
-const form = reactive({ city: '', keyword_group_ids: [] as number[], recent_filter: '一周内', blogger_ids: [] as number[], xhs_account_id: null as number | null })
+const form = reactive({
+  city: '',
+  keyword_source: 'custom' as 'custom' | 'groups',
+  keyword_group_ids: [] as number[],
+  custom_keywords: [] as string[],
+  blogger_source: 'list' as 'list' | 'groups',
+  blogger_ids: [] as number[],
+  blogger_group_ids: [] as number[],
+  recent_filter: '一周内',
+  xhs_account_id: null as number | null,
+})
+const newCustomKeyword = ref('')
 const recentFilters = ['不限', '一天内', '一周内', '半年内']
 const cityKeywordGroups = ref<any[]>([])
+const allEnabledKeywordGroups = ref<any[]>([])
+const allEnabledBloggerGroups = ref<any[]>([])
 const selectedCity = computed(() => cities.value.find((city) => city.code === form.city))
-const cityBloggers = computed(() => bloggers.value.filter((blogger: any) => (blogger.city_codes || []).includes(form.city) && blogger.enabled))
+const cityBloggers = computed(() => {
+  if (!form.city) return bloggers.value.filter((b: any) => b.enabled)
+  return bloggers.value.filter((b: any) => (b.city_codes || []).includes(form.city) && b.enabled)
+})
 const incompleteBloggers = computed(() => form.blogger_ids.filter((id: number) => {
   const b = bloggers.value.find((x: any) => x.id === id)
   return b && !b.profile_url
@@ -89,6 +105,7 @@ const shouldShowLastTaskError = computed(() =>
 watch(() => form.city, async () => {
   form.keyword_group_ids = []
   form.blogger_ids = []
+  form.blogger_group_ids = []
   form.recent_filter = selectedCity.value?.recent_filter || '一周内'
   if (form.city) {
     try {
@@ -98,19 +115,39 @@ watch(() => form.city, async () => {
       cityKeywordGroups.value = []
     }
   } else {
-    cityKeywordGroups.value = []
+    // 不限城市：保留全部已启用关键词组供选择
+    cityKeywordGroups.value = [...allEnabledKeywordGroups.value]
   }
 })
+
+function addCustomKeyword() {
+  const w = newCustomKeyword.value.trim()
+  if (!w) return
+  if (!form.custom_keywords.includes(w)) form.custom_keywords.push(w)
+  newCustomKeyword.value = ''
+}
+
+function removeCustomKeyword(word: string) {
+  form.custom_keywords = form.custom_keywords.filter((w) => w !== word)
+}
 
 async function initialize() {
   try {
     const [cityResponse, bloggerResponse] = await Promise.all([api.settings('cities'), api.settings('bloggers')])
     cities.value = (cityResponse.data.data || []).filter((city: any) => city.enabled)
     bloggers.value = bloggerResponse.data.data || []
-    if (cities.value.length) form.city = cities.value[0].code
+    // 城市默认空 = 不限城市
   } catch {
     cities.value = []
     bloggers.value = []
+  }
+  try {
+    const [kgResp, bgResp] = await Promise.all([api.keywordGroups(), api.bloggerGroups()])
+    allEnabledKeywordGroups.value = (kgResp.data.data?.items || []).filter((g: any) => g.enabled)
+    allEnabledBloggerGroups.value = (bgResp.data.data?.items || []).filter((g: any) => g.enabled)
+  } catch {
+    allEnabledKeywordGroups.value = []
+    allEnabledBloggerGroups.value = []
   }
   try {
     const accountResponse = await api.xhsAccounts()
@@ -165,15 +202,38 @@ async function loadLatestTask() {
 }
 
 async function start() {
-  if (!form.city) { ElMessage.warning('请选择城市'); return }
-  if (!form.keyword_group_ids.length && !form.blogger_ids.length) { ElMessage.warning('请至少选择一个关键词组或博主'); return }
+  // 校验：自定义关键词 / 关键词组 / 博主列表 / 博主组 至少选其一
+  const hasKeyword = form.keyword_source === 'custom'
+    ? form.custom_keywords.length > 0
+    : form.keyword_group_ids.length > 0
+  const hasBlogger = form.blogger_source === 'list'
+    ? form.blogger_ids.length > 0
+    : form.blogger_group_ids.length > 0
+  if (!hasKeyword && !hasBlogger) {
+    ElMessage.warning('请至少输入关键词或选择一个关键词组/博主组/博主')
+    return
+  }
   if (incompleteBloggers.value.length) {
     ElMessage.warning(`所选博主信息不完整（${incompleteBloggers.value.length} 个），请到配置中心点"补充博主信息"后再发起抓取`)
     return
   }
   submitting.value = true
   try {
-    const payload: Record<string, any> = { type: 'mixed', city: form.city, keyword_group_ids: form.keyword_group_ids, recent_filter: form.recent_filter, blogger_ids: form.blogger_ids }
+    const payload: Record<string, any> = {
+      type: 'mixed',
+      city: form.city,  // 空字符串 = 不限城市
+      recent_filter: form.recent_filter,
+    }
+    if (form.keyword_source === 'custom') {
+      payload.keywords = [...form.custom_keywords]
+    } else {
+      payload.keyword_group_ids = [...form.keyword_group_ids]
+    }
+    if (form.blogger_source === 'list') {
+      payload.blogger_ids = [...form.blogger_ids]
+    } else {
+      payload.blogger_group_ids = [...form.blogger_group_ids]
+    }
     if (form.xhs_account_id != null) payload.xhs_account_id = form.xhs_account_id
     await api.createTask(payload)
     ElMessage.success('抓取任务已提交，可到任务日志查看进度')
@@ -280,22 +340,71 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
       <template #header><div class="card-title"><ElIcon><VideoPlay /></ElIcon><strong>发起抓取</strong></div></template>
       <ElForm label-position="top">
         <div class="crawl-grid">
-          <ElFormItem label="城市"><ElSelect v-model="form.city" placeholder="选择城市"><ElOption v-for="city in cities" :key="city.code" :label="city.name" :value="city.code" /></ElSelect></ElFormItem>
-          <ElFormItem label="关键词组"><ElSelect v-model="form.keyword_group_ids" multiple collapse-tags collapse-tags-tooltip placeholder="选择一个或多个关键词组"><ElOption v-for="group in cityKeywordGroups" :key="group.id" :label="group.name" :value="group.id" /></ElSelect></ElFormItem>
-          <ElFormItem label="时间范围"><ElSelect v-model="form.recent_filter"><ElOption v-for="item in recentFilters" :key="item" :label="item" :value="item" /></ElSelect></ElFormItem>
-          <ElFormItem label="博主">
-          <ElSelect v-model="form.blogger_ids" multiple collapse-tags collapse-tags-tooltip placeholder="选择一个或多个博主">
-            <ElOption v-for="blogger in cityBloggers" :key="blogger.id" :value="blogger.id">
-              <span style="float:left">{{ blogger.username }}</span>
-              <span v-if="!blogger.profile_url" style="float:right;color:var(--el-color-warning);font-size:12px">待补充</span>
-            </ElOption>
-          </ElSelect>
-        </ElFormItem>
-        <ElFormItem label="操作账号">
-          <ElSelect v-model="form.xhs_account_id" clearable placeholder="不选则自动按优先级">
-            <ElOption v-for="account in xhsAccounts" :key="account.id" :label="account.name" :value="account.id" />
-          </ElSelect>
-        </ElFormItem>
+          <!-- Row 1: 城市 + 时间范围 -->
+          <ElFormItem label="城市" class="grid-row-1">
+            <ElSelect v-model="form.city" clearable placeholder="不限城市">
+              <ElOption v-for="city in cities" :key="city.code" :label="city.name" :value="city.code" />
+            </ElSelect>
+          </ElFormItem>
+          <ElFormItem label="时间范围" class="grid-row-1">
+            <ElSelect v-model="form.recent_filter">
+              <ElOption v-for="item in recentFilters" :key="item" :label="item" :value="item" />
+            </ElSelect>
+          </ElFormItem>
+
+          <!-- Row 2: 关键词模式 + 关键词/关键词组 -->
+          <ElFormItem label="关键词模式" class="grid-row-2">
+            <ElRadioGroup v-model="form.keyword_source">
+              <ElRadioButton value="custom">自定义关键词</ElRadioButton>
+              <ElRadioButton value="groups">关键词组</ElRadioButton>
+            </ElRadioGroup>
+          </ElFormItem>
+          <ElFormItem v-if="form.keyword_source === 'custom'" label="关键词" class="grid-row-2">
+            <div class="custom-keywords-row">
+              <ElInput
+                v-model="newCustomKeyword"
+                placeholder="回车添加关键词"
+                style="width: 220px"
+                @keyup.enter="addCustomKeyword"
+              />
+              <div v-if="form.custom_keywords.length" class="custom-keywords-tags">
+                <ElTag v-for="word in form.custom_keywords" :key="word" closable @close="removeCustomKeyword(word)">{{ word }}</ElTag>
+              </div>
+            </div>
+          </ElFormItem>
+          <ElFormItem v-else label="关键词组" class="grid-row-2">
+            <ElSelect v-model="form.keyword_group_ids" multiple collapse-tags collapse-tags-tooltip placeholder="选择一个或多个关键词组">
+              <ElOption v-for="group in cityKeywordGroups" :key="group.id" :label="group.name" :value="group.id" />
+            </ElSelect>
+          </ElFormItem>
+
+          <!-- Row 3: 博主模式 + 博主/博主组 -->
+          <ElFormItem label="博主模式" class="grid-row-3">
+            <ElRadioGroup v-model="form.blogger_source">
+              <ElRadioButton value="list">博主列表</ElRadioButton>
+              <ElRadioButton value="groups">博主组</ElRadioButton>
+            </ElRadioGroup>
+          </ElFormItem>
+          <ElFormItem v-if="form.blogger_source === 'list'" label="博主" class="grid-row-3">
+            <ElSelect v-model="form.blogger_ids" multiple collapse-tags collapse-tags-tooltip placeholder="选择一个或多个博主">
+              <ElOption v-for="blogger in cityBloggers" :key="blogger.id" :value="blogger.id">
+                <span style="float:left">{{ blogger.username }}</span>
+                <span v-if="!blogger.profile_url" style="float:right;color:var(--el-color-warning);font-size:12px">待补充</span>
+              </ElOption>
+            </ElSelect>
+          </ElFormItem>
+          <ElFormItem v-else label="博主组" class="grid-row-3">
+            <ElSelect v-model="form.blogger_group_ids" multiple collapse-tags collapse-tags-tooltip placeholder="选择一个或多个博主组">
+              <ElOption v-for="group in allEnabledBloggerGroups" :key="group.id" :label="group.name" :value="group.id" />
+            </ElSelect>
+          </ElFormItem>
+
+          <!-- Row 4: 操作账号（占满整行） -->
+          <ElFormItem label="操作账号" class="grid-row-4">
+            <ElSelect v-model="form.xhs_account_id" clearable placeholder="不选则自动按优先级">
+              <ElOption v-for="account in xhsAccounts" :key="account.id" :label="account.name" :value="account.id" />
+            </ElSelect>
+          </ElFormItem>
         </div>
         <div class="crawl-actions"><ElButton type="primary" :icon="VideoPlay" :loading="submitting" @click="start">开始抓取</ElButton><span>任务启动前会检查 Chrome 小红书登录状态</span></div>
       </ElForm>
@@ -391,10 +500,15 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 .progress-summary span { color: var(--el-text-color-secondary); }
 .progress-card .el-alert,.progress-card .el-button { margin-top: 14px; }
 .card-title { display: flex; align-items: center; gap: 8px; }
-.crawl-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 0 20px; }
+.crawl-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 20px; }
 .crawl-grid :deep(.el-select) { width: 100%; }
+.grid-row-1, .grid-row-2, .grid-row-3 { grid-column: span 1; }
+.grid-row-4 { grid-column: 1 / -1; }
 .crawl-actions { display: flex; align-items: center; gap: 16px; color: var(--el-text-color-secondary); }
-@media (max-width: 800px) { .crawl-grid { grid-template-columns: 1fr; } }
+@media (max-width: 800px) {
+  .crawl-grid { grid-template-columns: 1fr; }
+  .grid-row-1, .grid-row-2, .grid-row-3, .grid-row-4 { grid-column: 1; }
+}
 .system-status-card { margin-bottom: 20px; }
 .system-status-grid { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 16px; }
 @media (max-width: 1000px) { .system-status-grid { grid-template-columns: repeat(2, 1fr); } }
