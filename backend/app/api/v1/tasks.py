@@ -16,11 +16,13 @@ from app.services.opencli_adapter import OpenCLIAdapter
 router=APIRouter(prefix='/tasks',tags=['tasks']); Admin=Annotated[dict,Depends(require_admin)]; DB=Annotated[Session,Depends(get_db)]
 class CrawlIn(BaseModel):
     type: str = 'mixed'
-    city: str
+    # city 可选；空字符串/缺省 = 不限城市
+    city: str = ''
     keywords: list[str] = []
     keyword_group_ids: list[int] = []
     recent_filter: Literal['不限','一天内','一周内','半年内']
     blogger_ids: list[int] = []
+    blogger_group_ids: list[int] = []
 
 
 class BatchDeleteIn(BaseModel):
@@ -42,25 +44,73 @@ def crawl(payload:CrawlIn,_:Admin,db:DB):
             running.status='STOP_REQUESTED';running.current_stage=None;running.current_note=None
         db.add(TaskLog(task_id=running.id,level='INFO',message=f'被新任务顶替停止（子进程已 kill={pid_killed}）',created_at=datetime.now(timezone.utc)))
         db.commit()
-    city=db.scalar(select(City).where(City.code==payload.city,City.enabled.is_(True)))
-    if not city: raise HTTPException(422,'请选择已启用的城市')
+
+    # city 可选：未传 / 空字符串 = 不限城市
+    city = None
+    if payload.city:
+        city = db.scalar(select(City).where(City.code == payload.city, City.enabled.is_(True)))
+        if not city:
+            raise HTTPException(422, '请选择已启用的城市')
+
+    # 关键词组校验：有 city 时必须挂在该城市且都 enabled；不限城市时只校验组自身 enabled
     if payload.keyword_group_ids:
         from app.models.keyword_group import KeywordGroup, KeywordGroupCity
-        group_rows = db.execute(
-            select(KeywordGroup.id, KeywordGroup.enabled, KeywordGroupCity.enabled.label("city_link_enabled"))
-            .join(KeywordGroupCity, KeywordGroupCity.keyword_group_id == KeywordGroup.id)
-            .where(KeywordGroup.id.in_(payload.keyword_group_ids), KeywordGroupCity.city_code == city.code)
-        ).all()
-        valid_ids = {row.id for row in group_rows if row.enabled and row.city_link_enabled}
-        if any(group_id not in valid_ids for group_id in payload.keyword_group_ids): raise HTTPException(422,'关键词组不属于所选城市或已停用')
-    configured_bloggers=set(db.scalars(select(BloggerCity.blogger_id).where(BloggerCity.city_code==city.code,BloggerCity.enabled.is_(True))).all())
-    if any(blogger_id not in configured_bloggers for blogger_id in payload.blogger_ids): raise HTTPException(422,'博主不属于所选城市')
-    if not payload.keywords and not payload.keyword_group_ids and not payload.blogger_ids: raise HTTPException(422,'请至少启用一个关键词或博主')
-    # 校验 effective 范围：显式覆盖时 keywords/blogger_ids 已确定；未传时回退到城市 enabled 配置
+        if city is not None:
+            group_rows = db.execute(
+                select(
+                    KeywordGroup.id,
+                    KeywordGroup.enabled,
+                    KeywordGroupCity.enabled.label("city_link_enabled"),
+                )
+                .join(KeywordGroupCity, KeywordGroupCity.keyword_group_id == KeywordGroup.id)
+                .where(
+                    KeywordGroup.id.in_(payload.keyword_group_ids),
+                    KeywordGroupCity.city_code == city.code,
+                )
+            ).all()
+            valid_ids = {row.id for row in group_rows if row.enabled and row.city_link_enabled}
+            if any(gid not in valid_ids for gid in payload.keyword_group_ids):
+                raise HTTPException(422, '关键词组不属于所选城市或已停用')
+        else:
+            enabled_ids = set(db.scalars(
+                select(KeywordGroup.id).where(
+                    KeywordGroup.id.in_(payload.keyword_group_ids),
+                    KeywordGroup.enabled.is_(True),
+                )
+            ).all())
+            if any(gid not in enabled_ids for gid in payload.keyword_group_ids):
+                raise HTTPException(422, '关键词组不存在或已停用')
+
+    # 博主 ID 校验：有 city 时必须在该城市 blogger_cities.enabled；不限城市时只校验 blogger.enabled
+    if payload.blogger_ids:
+        if city is not None:
+            configured_bloggers = set(db.scalars(
+                select(BloggerCity.blogger_id).where(
+                    BloggerCity.city_code == city.code,
+                    BloggerCity.enabled.is_(True),
+                )
+            ).all())
+            if any(bid not in configured_bloggers for bid in payload.blogger_ids):
+                raise HTTPException(422, '博主不属于所选城市')
+        else:
+            enabled_bloggers = set(db.scalars(
+                select(Blogger.id).where(
+                    Blogger.id.in_(payload.blogger_ids),
+                    Blogger.enabled.is_(True),
+                )
+            ).all())
+            if any(bid not in enabled_bloggers for bid in payload.blogger_ids):
+                raise HTTPException(422, '博主不存在或已停用')
+
+    # 至少一个有效输入源
+    if not payload.keywords and not payload.keyword_group_ids and not payload.blogger_ids and not payload.blogger_group_ids:
+        raise HTTPException(422, '请至少启用一个关键词或博主')
+
+    # 校验 effective 范围：keywords ∪ 关键词组 ∪ 博主 ∪ 博主组
     from app.services.crawl_scope import resolve_crawl_scope
     scope = resolve_crawl_scope(db, city, payload.model_dump())
     if not scope.keywords and not scope.bloggers:
-        raise HTTPException(422,'请至少启用一个关键词或博主')
+        raise HTTPException(422, '所选关键词组/博主组均无启用项，请检查配置')
     task=CrawlTask(type=payload.type,status='PENDING',run_token=str(uuid4()),params=payload.model_dump()); db.add(task); db.commit(); db.refresh(task)
     from app.tasks.crawl_task import run_crawl
     run_crawl.delay(task.id,task.run_token)
