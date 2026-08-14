@@ -117,9 +117,9 @@ onMounted(load)
       <ElTableColumn prop="description" label="说明" min-width="220" show-overflow-tooltip />
       <ElTableColumn label="挂载城市" min-width="200">
         <template #default="scope">
-          <template v-if="(scope.row.city_codes || []).length">
-            <ElTag v-for="code in scope.row.city_codes" :key="code" type="primary" class="keyword-tag">
-              {{ props.cities.find((c: any) => c.code === code)?.name || code }}
+          <template v-if="(scope.row.cities || []).length">
+            <ElTag v-for="city in scope.row.cities" :key="city.code" type="primary" class="keyword-tag">
+              {{ city.name }}
             </ElTag>
           </template>
           <span v-else>未挂载</span>
