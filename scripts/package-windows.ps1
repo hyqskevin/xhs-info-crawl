@@ -59,6 +59,19 @@ $VenvPip = Join-Path $PkgDir "runtime\venv\Scripts\pip.exe"
 & $VenvPip install -r (Join-Path $RootDir "backend\requirements-runtime.txt")
 & $VenvPip install -r (Join-Path $RootDir "launcher\requirements.txt")
 
+# 修复 venv 可能缺少 python3XY.dll 问题:
+# python-build-standalone 创建 venv 后,venv 目录下可能缺 dll,导致 python.exe 启动失败。
+# 解决:把 base python 的 dll 复制到 venv 根目录(Windows 通常不需要,但保险起见)
+Write-Host "==> 修复 venv dll..."
+$VenvDir = Join-Path $PkgDir "runtime\venv"
+$PythonBaseDir = Join-Path $PkgDir "runtime\python"
+Get-ChildItem $PythonBaseDir -Filter "python3*.dll" | ForEach-Object {
+    Copy-Item $_.FullName -Destination $VenvDir -Force
+}
+Get-ChildItem $PythonBaseDir -Filter "python3*.dll" | Where-Object { $_.Name -like "vcruntime*" -or $_.Name -like "api-ms-*" } | ForEach-Object {
+    Copy-Item $_.FullName -Destination $VenvDir -Force
+}
+
 # 3. 复制后端源码(排除测试代码)
 Write-Host "==> 复制后端源码(排除 tests)..."
 New-Item -ItemType Directory -Force -Path (Join-Path $PkgDir "app\backend") | Out-Null
@@ -104,8 +117,13 @@ New-Item -ItemType Directory -Force -Path (Join-Path $PkgDir "data\huggingface")
 Write-Host "==> 创建 start.bat..."
 $startBatContent = @"
 @echo off
+setlocal
 set DIR=%~dp0
 cd /d "%DIR%"
+rem python-build-standalone Windows 也可能需要 PYTHONHOME 指向 base python
+set PYTHONHOME=%DIR%runtime\python
+set PYTHONPATH=%DIR%;%PYTHONPATH%
+cd /d "%DIR%launcher"
 "%DIR%runtime\venv\Scripts\python.exe" "%DIR%launcher\main.py"
 "@
 Set-Content -Path (Join-Path $PkgDir "start.bat") -Value $startBatContent -Encoding UTF8

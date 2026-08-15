@@ -61,6 +61,13 @@ $PKG_DIR/runtime/venv/bin/pip install --upgrade pip
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/backend/requirements-runtime.txt
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/launcher/requirements.txt
 
+# 修复 venv 缺少 libpython3.11.dylib 问题:
+# python-build-standalone 解压后创建的 venv/lib 下没有 libpython,
+# venv/bin/python 启动时报 Library not loaded 错误。
+# 解决:把 base python 的 libpython 复制到 venv/lib/
+echo "==> 修复 venv libpython..."
+cp $PKG_DIR/runtime/python/lib/libpython3.11.dylib $PKG_DIR/runtime/venv/lib/libpython3.11.dylib 2>&1
+
 # 3. 复制后端源码(排除测试代码)
 echo "==> 复制后端源码(排除 tests)..."
 mkdir -p $PKG_DIR/app/backend
@@ -113,7 +120,17 @@ EOF
 cat > $BUILD_DIR/xhs-info-crawl.app/Contents/MacOS/start.sh <<'EOF'
 #!/bin/bash
 # .app 启动入口:调用 launcher/main.py
-DIR="$(dirname "$(dirname "$(dirname "$0")")")"
+# DIR 是 .app 所在的同级目录(含 xhs-info-crawl/ 子目录)
+DIR="$(dirname "$(dirname "$(dirname "$0")")")/.."
+DIR="$(cd "$DIR" && pwd)"
+# python-build-standalone 的 Python 二进制硬编码 /install 作为 base prefix,
+# 需要设 PYTHONHOME 指向 runtime/python,并把 runtime/python/lib 加到 DYLD_LIBRARY_PATH
+# 同时把 libpython 复制到 venv/lib/(避免 venv/bin/python 启动时找不到 libpython)
+export PYTHONHOME="$DIR/xhs-info-crawl/runtime/python"
+export DYLD_LIBRARY_PATH="$DIR/xhs-info-crawl/runtime/python/lib:${DYLD_LIBRARY_PATH}"
+# 把父目录加入 PYTHONPATH,让 launcher 模块可导入
+export PYTHONPATH="$DIR/xhs-info-crawl:$PYTHONPATH"
+cd "$DIR/xhs-info-crawl/launcher"
 exec "$DIR/xhs-info-crawl/runtime/venv/bin/python" "$DIR/xhs-info-crawl/launcher/main.py"
 EOF
 chmod +x $BUILD_DIR/xhs-info-crawl.app/Contents/MacOS/start.sh
