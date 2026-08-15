@@ -129,9 +129,12 @@ EOF
 cat > $BUILD_DIR/xhs-info-crawl.app/Contents/MacOS/start.sh <<'EOF'
 #!/bin/bash
 # .app 启动入口:调用 launcher/main.py
-# DIR 是 .app 所在的同级目录(含 xhs-info-crawl/ 子目录)
-DIR="$(dirname "$(dirname "$(dirname "$0")")")/.."
-DIR="$(cd "$DIR" && pwd)"
+# 用 realpath 找脚本真实位置,不依赖 cwd(macOS GUI 双击 .app 时 cwd 是 /)
+SCRIPT="$(realpath "$0")"
+# start.sh 在 .app/Contents/MacOS/start.sh,
+# .app 旁边同级是 xhs-info-crawl/ 子目录
+APP_DIR="$(dirname "$(dirname "$(dirname "$SCRIPT")")")"
+DIR="$(dirname "$APP_DIR")"
 # python-build-standalone 的 Python 二进制硬编码 /install 作为 base prefix,
 # 需要设 PYTHONHOME 指向 runtime/python,并把 runtime/python/lib 加到 DYLD_LIBRARY_PATH
 # 同时把 libpython 复制到 venv/lib/(避免 venv/bin/python 启动时找不到 libpython)
