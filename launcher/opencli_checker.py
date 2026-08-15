@@ -89,8 +89,21 @@ def check_opencli(timeout: float = 10.0) -> OpenCLIResult:
         )
 
     output = (proc.stdout or "") + (proc.stderr or "")
-    if proc.returncode == 0 and ("daemon: ok" in output or "extension: connected" in output):
-        version_match = re.search(r"version[:\s]+([\d.]+)", output, re.IGNORECASE)
+    # 兼容两种 opencli doctor 输出格式:
+    # 老版本: "daemon: ok" / "extension: connected"
+    # 新版本(>=1.8.5): "[OK] Daemon: running on port ..." / "[OK] Extension: connected"
+    daemon_ok = (
+        "daemon: ok" in output.lower()
+        or "[ok] daemon" in output.lower()
+        or "everything looks good" in output.lower()
+    )
+    extension_ok = (
+        "extension: connected" in output.lower()
+        or "[ok] extension" in output.lower()
+    )
+    if proc.returncode == 0 and (daemon_ok or extension_ok):
+        # 从 opencli v1.8.5 doctor (node v24.16.0) 提取版本
+        version_match = re.search(r"opencli\s+v?([\d.]+)", output, re.IGNORECASE)
         version = version_match.group(1) if version_match else ""
         return OpenCLIResult(ok=True, version=version, message="连接正常")
 
