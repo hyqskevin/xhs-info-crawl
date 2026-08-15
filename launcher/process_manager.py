@@ -31,11 +31,31 @@ class ProcessManager:
         """构建默认的服务启动命令。"""
         python = str(self.venv_python)
         backend_dir = self.project_root / "app" / "backend"
+        # 从 .env 读 API_PORT(launcher.bootstrap_env 会写入),
+        # 默认 8000 防止 .env 不存在时崩
+        api_port = self._read_api_port(default=8000)
         return {
-            "api": [python, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
+            "api": [python, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(api_port)],
             "worker": [python, "-m", "celery", "-A", "app.tasks.crawl_task", "worker", "--loglevel=info"],
             "beat": [python, "-m", "celery", "-A", "app.tasks.crawl_task", "beat", "--loglevel=info"],
         }
+
+    def _read_api_port(self, default: int = 8000) -> int:
+        """从 .env 读 API_PORT,找不到则用 default。"""
+        env_path = self.project_root / ".env"
+        if not env_path.exists():
+            return default
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            if key.strip() == "API_PORT":
+                try:
+                    return int(value.strip())
+                except ValueError:
+                    return default
+        return default
 
     def start_service(self, name: str) -> bool:
         """启动指定服务。"""
