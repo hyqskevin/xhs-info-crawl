@@ -4,6 +4,7 @@ import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute } from 'vue-router'
 import { api } from '@/api/client'
+import { usePagination } from '@/composables/usePagination'
 import KeywordGroupSettings from '@/components/KeywordGroupSettings.vue'
 import BloggerGroupSettings from '@/components/BloggerGroupSettings.vue'
 
@@ -22,11 +23,26 @@ const systemConfigLoading = ref(false)
 const systemConfigSaving = ref(false)
 const rows = ref<any[]>([])
 const cities = ref<any[]>([])
+// 配置中心各表格前端分页（admin/audit-logs 走后端真分页）
+const {
+  page: rowsPage,
+  size: rowsSize,
+  sizeOptions: rowsSizeOptions,
+  total: rowsTotal,
+  pagedRows,
+  onSizeChange: onRowsSizeChange,
+  onPageChange: onRowsPageChange,
+} = usePagination(() => rows.value, { defaultSize: 20 })
 const dialog = ref(false)
 const editingId = ref<number | null>(null)
 const enrichingId = ref<number | null>(null)
 const importingBloggers = ref(false)
 const checkingLoginId = ref<number | null>(null)
+const openingLoginId = ref<number | null>(null)
+// 5 个 tab 各自独立的 selection；切换 tab 时不会残留。
+const citiesSelectedIds = ref<number[]>([])
+const bloggersSelectedIds = ref<number[]>([])
+const xhsAccountsSelectedIds = ref<number[]>([])
 const form = reactive<any>({})
 const recentFilters = ['不限', '一天内', '一周内', '半年内']
 
@@ -122,6 +138,35 @@ async function remove(row: any) {
   await load()
 }
 
+async function batchRemove() {
+  // 根据当前 tab 选择对应的 selectedIds 与 API
+  const ids =
+    tab.value === 'cities' ? citiesSelectedIds.value :
+    tab.value === 'bloggers' ? bloggersSelectedIds.value :
+    tab.value === 'xhs-accounts' ? xhsAccountsSelectedIds.value :
+    []
+  if (ids.length === 0) return
+  await ElMessageBox.confirm(
+    `确认批量删除选中的 ${ids.length} 项？此操作不可撤销。`,
+    '批量删除',
+    { type: 'warning' },
+  )
+  try {
+    if (tab.value === 'cities') await api.batchDeleteCities(ids)
+    else if (tab.value === 'bloggers') await api.batchDeleteBloggers(ids)
+    else if (tab.value === 'xhs-accounts') await api.batchDeleteXhsAccounts(ids)
+    ElMessage.success(`已批量删除 ${ids.length} 项`)
+    // 清空 selection + reload
+    if (tab.value === 'cities') citiesSelectedIds.value = []
+    else if (tab.value === 'bloggers') bloggersSelectedIds.value = []
+    else if (tab.value === 'xhs-accounts') xhsAccountsSelectedIds.value = []
+    await load()
+  } catch (error: any) {
+    const reason = error.response?.data?.message || error.response?.data?.detail || '批量删除失败'
+    ElMessage.error(reason)
+  }
+}
+
 async function checkLogin(row: any) {
   checkingLoginId.value = row.id
   try {
@@ -138,6 +183,30 @@ async function checkLogin(row: any) {
     ElMessage.error(reason)
   } finally {
     checkingLoginId.value = null
+  }
+}
+
+async function openLogin(row: any) {
+  // 打开该账号的独立 Chrome 实例到前台，让你扫码登录。
+  // cookie 写入该账号的 user-data-dir，下次抓取直接复用，不会串号。
+  openingLoginId.value = row.id
+  try {
+    await api.openXhsAccountLogin(row.id)
+    ElMessage.success(
+      `「${row.name}」Chrome 已打开，请在该窗口完成扫码登录`,
+    )
+    // 提示用户：登录完成后点"检测登录"刷新状态
+    setTimeout(() => {
+      void load()
+    }, 500)
+  } catch (error: any) {
+    const reason =
+      error.response?.data?.message ||
+      error.response?.data?.detail ||
+      '打开登录页失败'
+    ElMessage.error(reason)
+  } finally {
+    openingLoginId.value = null
   }
 }
 
@@ -217,21 +286,45 @@ onMounted(load)
       <ElUpload v-if="tab === 'bloggers'" :show-file-list="false" :auto-upload="false" accept=".xlsx,.csv" :on-change="importFile">
         <ElButton :icon="UploadFilled" :loading="importingBloggers">批量导入</ElButton>
       </ElUpload>
+      <ElButton
+        v-if="tab === 'cities' || tab === 'bloggers' || tab === 'xhs-accounts'"
+        type="danger"
+        :disabled="(tab === 'cities' ? citiesSelectedIds : tab === 'bloggers' ? bloggersSelectedIds : xhsAccountsSelectedIds).length === 0"
+        @click="batchRemove"
+      >
+        批量删除 ({{ tab === 'cities' ? citiesSelectedIds.length : tab === 'bloggers' ? bloggersSelectedIds.length : xhsAccountsSelectedIds.length }})
+      </ElButton>
     </div>
 
-    <ElTable v-if="tab === 'cities'" :data="rows">
-      <ElTableColumn prop="name" label="城市" min-width="140" />
-      <ElTableColumn prop="recent_filter" label="抓取时间范围" width="150" />
-      <ElTableColumn label="状态" width="100"><template #default="scope"><ElTag :type="scope.row.enabled ? 'success' : 'info'">{{ scope.row.enabled ? '已启用' : '已停用' }}</ElTag></template></ElTableColumn>
-      <ElTableColumn label="操作" min-width="200" class-name="action-column">
-        <template #default="scope">
-          <ElButton text type="primary" :icon="Edit" @click="open(scope.row)">编辑</ElButton>
-          <ElButton text type="danger" :icon="Delete" @click="remove(scope.row)">删除</ElButton>
-        </template>
-      </ElTableColumn>
-    </ElTable>
+    <ElCard v-if="tab === 'cities'" shadow="never" class="config-card">
+      <template #header>城市配置 <span class="config-hint">配置抓取目标城市与时间范围</span></template>
+      <ElTable :data="pagedRows" @selection-change="(rows: any[]) => (citiesSelectedIds = rows.map((r: any) => r.id))">
+        <ElTableColumn type="selection" width="50" />
+        <ElTableColumn prop="name" label="城市" min-width="140" />
+        <ElTableColumn prop="recent_filter" label="抓取时间范围" width="150" />
+        <ElTableColumn label="状态" width="100"><template #default="scope"><ElTag :type="scope.row.enabled ? 'success' : 'info'">{{ scope.row.enabled ? '已启用' : '已停用' }}</ElTag></template></ElTableColumn>
+        <ElTableColumn label="操作" min-width="200" class-name="action-column">
+          <template #default="scope">
+            <ElButton text type="primary" :icon="Edit" @click="open(scope.row)">编辑</ElButton>
+            <ElButton text type="danger" :icon="Delete" @click="remove(scope.row)">删除</ElButton>
+          </template>
+        </ElTableColumn>
+      </ElTable>
+      <ElPagination
+        v-if="rowsTotal > 0"
+        class="pagination-bar"
+        :page-size="rowsSize"
+        :current-page="rowsPage"
+        :page-sizes="rowsSizeOptions"
+        :total="rowsTotal"
+        layout="total, sizes, prev, pager, next, jumper"
+        @size-change="onRowsSizeChange"
+        @current-change="onRowsPageChange"
+      />
+    </ElCard>
 
-    <ElTable v-else-if="tab === 'bloggers'" :data="rows">
+    <ElTable v-else-if="tab === 'bloggers'" :data="pagedRows" @selection-change="(rows: any[]) => (bloggersSelectedIds = rows.map((r: any) => r.id))">
+      <ElTableColumn type="selection" width="50" />
       <ElTableColumn prop="username" label="博主" />
       <ElTableColumn prop="profile_url" label="主页" min-width="280" show-overflow-tooltip />
       <ElTableColumn label="城市" min-width="200"><template #default="scope">
@@ -248,36 +341,63 @@ onMounted(load)
         <ElButton text type="danger" :icon="Delete" @click="remove(scope.row)">删除</ElButton>
       </template></ElTableColumn>
     </ElTable>
+    <ElPagination
+      v-if="tab === 'bloggers' && rowsTotal > 0"
+      class="pagination-bar"
+      :page-size="rowsSize"
+      :current-page="rowsPage"
+      :page-sizes="rowsSizeOptions"
+      :total="rowsTotal"
+      layout="total, sizes, prev, pager, next, jumper"
+      @size-change="onRowsSizeChange"
+      @current-change="onRowsPageChange"
+    />
 
-    <ElTable v-else-if="tab === 'xhs-accounts'" :data="rows">
-      <ElTableColumn prop="name" label="账号名称" min-width="140" />
-      <ElTableColumn prop="platform_user_id" label="小红书账号 ID" min-width="180" show-overflow-tooltip>
-        <template #default="scope">
-          <span v-if="scope.row.platform_user_id">{{ scope.row.platform_user_id }}</span>
-          <span v-else style="color: #909399">扫码后自动读取</span>
-        </template>
-      </ElTableColumn>
-      <ElTableColumn prop="remark" label="备注" min-width="120" show-overflow-tooltip />
-      <ElTableColumn prop="session_name" label="Session 名" min-width="140" />
-      <ElTableColumn label="登录状态" width="120">
-        <template #default="scope">
-          <ElTag :type="loginStatusOf(scope.row.login_status).type as any">{{ loginStatusOf(scope.row.login_status).label }}</ElTag>
-        </template>
-      </ElTableColumn>
+    <ElCard v-if="tab === 'xhs-accounts'" shadow="never" class="config-card">
+      <template #header>小红书账号配置 <span class="config-hint">每个账号独立 Chrome 实例 + 独立 Cookie</span></template>
+      <ElTable :data="pagedRows" @selection-change="(rows: any[]) => (xhsAccountsSelectedIds = rows.map((r: any) => r.id))">
+        <ElTableColumn type="selection" width="50" />
+        <ElTableColumn prop="name" label="账号名称" min-width="140" />
+        <ElTableColumn prop="platform_user_id" label="小红书账号 ID" min-width="180" show-overflow-tooltip>
+          <template #default="scope">
+            <span v-if="scope.row.platform_user_id">{{ scope.row.platform_user_id }}</span>
+            <span v-else style="color: #909399">扫码后自动读取</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn prop="remark" label="备注" min-width="120" show-overflow-tooltip />
+        <ElTableColumn prop="session_name" label="Session 名" min-width="140" />
+        <ElTableColumn label="登录状态" width="120">
+          <template #default="scope">
+            <ElTag :type="loginStatusOf(scope.row.login_status).type as any">{{ loginStatusOf(scope.row.login_status).label }}</ElTag>
+          </template>
+        </ElTableColumn>
       <ElTableColumn label="启用" width="90">
         <template #default="scope">
           <ElTag :type="scope.row.enabled ? 'success' : 'info'">{{ scope.row.enabled ? '已启用' : '已停用' }}</ElTag>
         </template>
       </ElTableColumn>
       <ElTableColumn prop="priority" label="优先级" width="90" />
-      <ElTableColumn label="操作" min-width="280" class-name="action-column">
+      <ElTableColumn label="操作" min-width="360" class-name="action-column">
         <template #default="scope">
+          <ElButton text type="primary" :loading="openingLoginId === scope.row.id" @click="openLogin(scope.row)">扫码登录</ElButton>
           <ElButton text type="primary" :loading="checkingLoginId === scope.row.id" @click="checkLogin(scope.row)">检测登录</ElButton>
           <ElButton text type="primary" :icon="Edit" @click="open(scope.row)">编辑</ElButton>
           <ElButton text type="danger" :icon="Delete" @click="remove(scope.row)">删除</ElButton>
         </template>
       </ElTableColumn>
-    </ElTable>
+      </ElTable>
+      <ElPagination
+        v-if="rowsTotal > 0"
+        class="pagination-bar"
+        :page-size="rowsSize"
+        :current-page="rowsPage"
+        :page-sizes="rowsSizeOptions"
+        :total="rowsTotal"
+        layout="total, sizes, prev, pager, next, jumper"
+        @size-change="onRowsSizeChange"
+        @current-change="onRowsPageChange"
+      />
+    </ElCard>
 
     <KeywordGroupSettings v-if="tab === 'keyword-groups'" :cities="cities" />
 
@@ -365,6 +485,26 @@ onMounted(load)
                 </ElTooltip>
               </template>
             </ElInput>
+          </ElFormItem>
+          <ElFormItem label="Chrome 路径">
+            <ElInput v-model="systemConfig.chrome_bin" placeholder="google-chrome / /Applications/Google Chrome.app/.../Google Chrome" />
+          </ElFormItem>
+          <ElFormItem label="Chrome user-data 目录">
+            <ElInput v-model="systemConfig.chrome_user_data_dir" placeholder="./data/chrome-pool" />
+          </ElFormItem>
+        </div>
+
+        <div class="config-group">
+          <h4 class="config-group-title">多账号轮询</h4>
+          <ElFormItem label="每 N 篇切账号">
+            <ElInputNumber
+              v-model="systemConfig.account_rotation_notes"
+              :min="0"
+              :max="1000"
+              :step="5"
+              style="width: 100%"
+            />
+            <span class="form-hint">每个账号连续抓 N 篇后主动切换到下一个账号（避免触发频率限制）。0 = 关闭主动轮询，仅失败切换。仅当 ≥2 个账号都配置了 CDP 时生效。</span>
           </ElFormItem>
         </div>
 

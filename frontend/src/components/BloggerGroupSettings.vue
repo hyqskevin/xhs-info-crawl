@@ -3,8 +3,19 @@ import { Delete, Edit } from '@element-plus/icons-vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
+import { usePagination } from '@/composables/usePagination'
 
 const rows = ref<any[]>([])
+const selectedIds = ref<number[]>([])
+const {
+  page: rowsPage,
+  size: rowsSize,
+  sizeOptions: rowsSizeOptions,
+  total: rowsTotal,
+  pagedRows,
+  onSizeChange: onRowsSizeChange,
+  onPageChange: onRowsPageChange,
+} = usePagination(() => rows.value, { defaultSize: 20 })
 const bloggers = ref<any[]>([])
 const dialog = ref(false)
 const editingId = ref<number | null>(null)
@@ -67,6 +78,24 @@ async function remove(row: any) {
   await load()
 }
 
+async function batchRemove() {
+  if (selectedIds.value.length === 0) return
+  await ElMessageBox.confirm(
+    `确认批量删除选中的 ${selectedIds.value.length} 个博主组？此操作不可撤销。`,
+    '批量删除',
+    { type: 'warning' },
+  )
+  try {
+    await api.batchDeleteBloggerGroups(selectedIds.value)
+    ElMessage.success(`已批量删除 ${selectedIds.value.length} 个博主组`)
+    selectedIds.value = []
+    await load()
+  } catch (error: any) {
+    const reason = error.response?.data?.message || error.response?.data?.detail || '批量删除失败'
+    ElMessage.error(reason)
+  }
+}
+
 function bloggerName(id: number) {
   return bloggers.value.find((b: any) => b.id === id)?.username || `#${id}`
 }
@@ -78,9 +107,11 @@ onMounted(load)
   <div class="blogger-group-settings">
     <div class="toolbar">
       <ElButton type="primary" :icon="Edit" @click="openCreate">新增博主组</ElButton>
+      <ElButton type="danger" :disabled="selectedIds.length === 0" @click="batchRemove">批量删除 ({{ selectedIds.length }})</ElButton>
     </div>
 
-    <ElTable :data="rows">
+    <ElTable :data="pagedRows" @selection-change="(rows: any[]) => (selectedIds = rows.map((r: any) => r.id))">
+      <ElTableColumn type="selection" width="50" />
       <ElTableColumn prop="name" label="名称" min-width="160" />
       <ElTableColumn prop="description" label="说明" min-width="220" show-overflow-tooltip />
       <ElTableColumn label="成员博主" min-width="240">
@@ -103,6 +134,17 @@ onMounted(load)
         </template>
       </ElTableColumn>
     </ElTable>
+    <ElPagination
+      v-if="rowsTotal > 0"
+      class="pagination-bar"
+      :page-size="rowsSize"
+      :current-page="rowsPage"
+      :page-sizes="rowsSizeOptions"
+      :total="rowsTotal"
+      layout="total, sizes, prev, pager, next, jumper"
+      @size-change="onRowsSizeChange"
+      @current-change="onRowsPageChange"
+    />
 
     <ElDialog v-model="dialog" :title="editingId ? '编辑博主组' : '新增博主组'" width="640">
       <ElForm label-width="90px">

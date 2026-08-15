@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     pipeline_stage_max_retries: int = 2
     pipeline_stage_retry_delay_seconds: float = 2
     activity_future_window_days: int = 60
+    # 多账号轮询：每个账号连续抓 N 篇后主动切换到下一个账号（避免触发频率限制）
+    # 仅当配置了 ≥2 个已启用账号时生效；=1 时不切换
+    account_rotation_notes: int = 25
     data_dir_setting: Path = Field(Path("./data"), validation_alias="DATA_DIR")
     image_dir_setting: Path = Field(Path("./data/images"), validation_alias="IMAGE_DIR")
     export_dir_setting: Path = Field(Path("./data/exports"), validation_alias="EXPORT_DIR")

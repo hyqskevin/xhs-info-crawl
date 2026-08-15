@@ -2,6 +2,8 @@
 .env
 .venv/
 .trae/
+.vite/
+node_modules/
 backend/.venv/
 backend/.pytest_cache/
 backend/.coverage

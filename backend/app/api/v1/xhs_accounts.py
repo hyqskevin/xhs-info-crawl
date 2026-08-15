@@ -7,7 +7,7 @@
 import re
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,6 +16,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import require_admin
 from app.models.xhs_account import XhsAccount
+from app.services.audit import record_audit
 from app.services.crawler import AuthenticationRequired, VerificationRequired
 from app.services.opencli_adapter import OpenCLIAdapter
 from app.services.chrome_pool import ChromePool, ChromeLaunchError, get_global_chrome_pool
@@ -166,6 +167,52 @@ def delete_xhs_account(account_id: int, _: Admin, db: DB) -> dict:
     return {"code": 200, "message": "success", "data": {"id": account_id}}
 
 
+# ── 批量删除 ──────────────────────────────────────────────────────────────
+
+
+class BatchDeleteIdsIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class BatchDeleteOut(BaseModel):
+    deleted_count: int
+
+
+@router.post("/batch-delete", response_model=BatchDeleteOut)
+def batch_delete_xhs_accounts(
+    payload: BatchDeleteIdsIn,
+    request: Request,
+    actor: Admin,
+    db: DB,
+):
+    """批量删除小红书账号配置。
+
+    无关联表清理（XhsAccount 无外键关联）。部分 id 不存在 → 404 整体回滚。
+
+    关联 spec: docs/superpowers/specs/2026-08-13-settings-batch-delete-design.md §2.1
+    """
+    rows = db.scalars(select(XhsAccount).where(XhsAccount.id.in_(payload.ids))).all()
+    if len(rows) != len(set(payload.ids)):
+        raise HTTPException(404, "部分账号不存在，已取消")
+    deleted_ids = [r.id for r in rows]
+    for r in rows:
+        db.delete(r)
+    db.commit()
+    record_audit(
+        actor_user_id=None,
+        actor_username=actor["username"],
+        action="xhs_accounts_batch_deleted",
+        resource_type="xhs_account",
+        target_label=f"batch of {len(deleted_ids)}",
+        method="POST",
+        path="/api/v1/xhs-accounts/batch-delete",
+        status_code=200,
+        client_ip=request.client.host if request.client else "127.0.0.1",
+        extra={"deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)},
+    )
+    return BatchDeleteOut(deleted_count=len(rows))
+
+
 @router.post("/{account_id}/check-login")
 def check_login(account_id: int, _: Admin, db: DB) -> dict:
     """检查指定账号的登录状态（调 opencli whoami）。
@@ -225,3 +272,46 @@ def check_login(account_id: int, _: Admin, db: DB) -> dict:
         # 注意：不调用 chrome_pool.release_all()——保持 Chrome 实例运行让用户扫码登录
         # ChromePool 会在任务结束（crawl_task）或后端停止时被 release
         pass
+
+
+@router.post("/{account_id}/open-login")
+def open_login(account_id: int, _: Admin, db: DB) -> dict:
+    """打开小红书登录页（让用户扫码登录该账号）。
+
+    强制路由到该账号的独立 Chrome 实例（ChromePool）——保证扫码后 cookie
+    写入该账号对应的 user-data-dir，下次抓取自动使用。
+    """
+    account = db.get(XhsAccount, account_id)
+    if account is None:
+        raise HTTPException(404, "账号不存在")
+    settings = get_settings()
+    cdp_endpoint = (
+        f"http://127.0.0.1:{account.cdp_port}"
+        if account.cdp_port is not None
+        else None
+    )
+    if account.cdp_port is not None:
+        try:
+            chrome_pool = get_global_chrome_pool()
+            instance = chrome_pool.acquire(account.session_name)
+        except ChromeLaunchError as exc:
+            raise HTTPException(503, f"Chrome 实例启动失败：{exc}") from exc
+        # 同步端口回 DB
+        if instance.port != account.cdp_port:
+            account.cdp_port = instance.port
+            db.commit()
+    # 打开小红书登录页（在 Chrome 实例中打开，foreground=True 拉前台）
+    try:
+        adapter = OpenCLIAdapter(
+            settings,
+            session=account.session_name,
+            cdp_endpoint=cdp_endpoint,
+        )
+        ok = adapter.run(["browser", account.session_name, "open", settings.xhs_login_url, "--window", "foreground"])
+        if not ok:
+            raise HTTPException(503, "opencli 打开登录页失败")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(503, f"打开登录页失败：{exc}") from exc
+    return {"code": 200, "message": "success", "data": {"url": settings.xhs_login_url, "session": account.session_name}}
