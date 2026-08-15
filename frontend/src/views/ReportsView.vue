@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { Delete, Download, Plus, View } from '@element-plus/icons-vue'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { api } from '@/api/client'
 
 const rows = ref<any[]>([])
 const cities = ref<any[]>([])
 const preview = ref('')
-const previewHtml = computed(() => DOMPurify.sanitize(marked.parse(preview.value, { async: false }) as string))
+const previewHtml = ref('')
+async function renderPreview() {
+  if (!preview.value) { previewHtml.value = ''; return }
+  const { marked } = await import('marked')
+  previewHtml.value = DOMPurify.sanitize(marked.parse(preview.value, { async: false }) as string)
+}
+watch(preview, renderPreview)
 const dialog = ref(false)
 const generating = ref(false)
 const form = reactive<{ weekDate: Date | null; city: string }>({ weekDate: new Date(), city: '' })

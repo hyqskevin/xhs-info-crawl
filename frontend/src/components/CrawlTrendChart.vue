@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import * as echarts from 'echarts'
+import type { ECharts } from 'echarts'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = defineProps<{ tasks: any[] }>()
 const container = ref<HTMLDivElement | null>(null)
-let chart: echarts.ECharts | null = null
+let chart: ECharts | null = null
 
 // 后端 started_at 为 UTC naive（无 Z 后缀）：按 UTC 解析再转东八区，
 // 避免 JS 默认把 UTC 数字当本地时间导致 x 轴时间慢 8h
@@ -50,7 +50,8 @@ function resize() {
   chart?.resize()
 }
 
-onMounted(() => {
+onMounted(async () => {
+  const echarts = await import('echarts')
   chart = echarts.init(container.value!)
   render()
   window.addEventListener('resize', resize)

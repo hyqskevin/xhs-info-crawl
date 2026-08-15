@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import * as echarts from 'echarts'
+import type { ECharts } from 'echarts'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = defineProps<{ counts: Record<string, number> }>()
 const container = ref<HTMLDivElement | null>(null)
-let chart: echarts.ECharts | null = null
+let chart: ECharts | null = null
 
 const statusLabels: Record<string, string> = {
   COMPLETED: '成功',
@@ -43,7 +43,8 @@ function resize() {
   chart?.resize()
 }
 
-onMounted(() => {
+onMounted(async () => {
+  const echarts = await import('echarts')
   chart = echarts.init(container.value!)
   render()
   window.addEventListener('resize', resize)
