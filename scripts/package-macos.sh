@@ -112,6 +112,15 @@ mkdir -p $PKG_DIR/data/backups
 # 8. 打 .app bundle
 echo "==> 创建 .app bundle..."
 mkdir -p $BUILD_DIR/xhs-info-crawl.app/Contents/MacOS
+mkdir -p $BUILD_DIR/xhs-info-crawl.app/Contents/Resources
+# 把所有运行数据放到 .app/Contents/Resources/ 下,
+# 这样 Finder 双击 .app 时 macOS AppTranslocation 会把整个 .app(含数据)
+# 一起复制到 /private/var/folders/.../T/AppTranslocation/.../ 沙盒,
+# start.sh 才能找到 runtime/venv/bin/python
+echo "==> 移动运行数据到 .app/Contents/Resources/xhs-info-crawl/..."
+mv $PKG_DIR $BUILD_DIR/xhs-info-crawl.app/Contents/Resources/xhs-info-crawl
+PKG_DIR="$BUILD_DIR/xhs-info-crawl.app/Contents/Resources/xhs-info-crawl"
+
 cat > $BUILD_DIR/xhs-info-crawl.app/Contents/Info.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -132,18 +141,19 @@ cat > $BUILD_DIR/xhs-info-crawl.app/Contents/MacOS/start.sh <<'EOF'
 # 用 realpath 找脚本真实位置,不依赖 cwd(macOS GUI 双击 .app 时 cwd 是 /)
 SCRIPT="$(realpath "$0")"
 # start.sh 在 .app/Contents/MacOS/start.sh,
-# .app 旁边同级是 xhs-info-crawl/ 子目录
+# 数据目录在 .app/Contents/Resources/xhs-info-crawl/(包内资源,
+# Finder AppTranslocation 会随 .app 整体复制,不会丢)
 APP_DIR="$(dirname "$(dirname "$(dirname "$SCRIPT")")")"
-DIR="$(dirname "$APP_DIR")"
+DATA_DIR="$APP_DIR/Contents/Resources/xhs-info-crawl"
 # python-build-standalone 的 Python 二进制硬编码 /install 作为 base prefix,
 # 需要设 PYTHONHOME 指向 runtime/python,并把 runtime/python/lib 加到 DYLD_LIBRARY_PATH
 # 同时把 libpython 复制到 venv/lib/(避免 venv/bin/python 启动时找不到 libpython)
-export PYTHONHOME="$DIR/xhs-info-crawl/runtime/python"
-export DYLD_LIBRARY_PATH="$DIR/xhs-info-crawl/runtime/python/lib:${DYLD_LIBRARY_PATH}"
+export PYTHONHOME="$DATA_DIR/runtime/python"
+export DYLD_LIBRARY_PATH="$DATA_DIR/runtime/python/lib:${DYLD_LIBRARY_PATH}"
 # 把父目录加入 PYTHONPATH,让 launcher 模块可导入
-export PYTHONPATH="$DIR/xhs-info-crawl:$PYTHONPATH"
-cd "$DIR/xhs-info-crawl/launcher"
-exec "$DIR/xhs-info-crawl/runtime/venv/bin/python" "$DIR/xhs-info-crawl/launcher/main.py"
+export PYTHONPATH="$DATA_DIR:$PYTHONPATH"
+cd "$DATA_DIR/launcher"
+exec "$DATA_DIR/runtime/venv/bin/python" "$DATA_DIR/launcher/main.py"
 EOF
 chmod +x $BUILD_DIR/xhs-info-crawl.app/Contents/MacOS/start.sh
 
