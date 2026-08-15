@@ -93,13 +93,24 @@ $FrontendDistDst = Join-Path $PkgDir "app\frontend\dist"
 New-Item -ItemType Directory -Force -Path $FrontendDistDst | Out-Null
 Copy-Item -Recurse (Join-Path $FrontendDistSrc "*") $FrontendDistDst
 
-# 5. 复制启动器(不含 ui\src 和 node_modules)
+# 5. 复制启动器(不含 ui/src 和 node_modules)
 Write-Host "==> 复制启动器..."
-$LauncherUiDistDst = Join-Path $PkgDir "launcher\ui\dist"
-New-Item -ItemType Directory -Force -Path $LauncherUiDistDst | Out-Null
-Copy-Item (Join-Path $RootDir "launcher\*.py") (Join-Path $PkgDir "launcher\")
-Copy-Item (Join-Path $RootDir "launcher\requirements.txt") (Join-Path $PkgDir "launcher\")
-Copy-Item -Recurse (Join-Path $RootDir "launcher\ui\dist\*") $LauncherUiDistDst
+$LauncherDist = Join-Path $PkgDir "launcher\ui\dist"
+New-Item -ItemType Directory -Force -Path $LauncherDist | Out-Null
+Copy-Item (Join-Path $RootDir "launcher\*.py") $LauncherDist\..\ -Force
+Copy-Item (Join-Path $RootDir "launcher\requirements.txt") $LauncherDist\..\ -Force
+Copy-Item -Recurse (Join-Path $RootDir "launcher\ui\dist\*") $LauncherDist\
+
+# 修复 index.html 的绝对路径为相对路径,
+# 否则 PyWebView 用 file:// 加载时找不到 /assets/... (会白屏)
+$IndexHtml = Join-Path $LauncherDist "index.html"
+if (Test-Path $IndexHtml) {
+    Write-Host "==> 修复 index.html 资源路径为相对路径..."
+    (Get-Content $IndexHtml -Raw) `
+        -replace 'src="/assets/', 'src="./assets/' `
+        -replace 'href="/assets/', 'href="./assets/' `
+        | Set-Content -Path $IndexHtml -Encoding UTF8 -NoNewline
+}
 
 # 6. 复制 .env.example
 Copy-Item (Join-Path $RootDir ".env.example") (Join-Path $PkgDir ".env.example")

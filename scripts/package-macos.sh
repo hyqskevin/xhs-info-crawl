@@ -87,6 +87,15 @@ cp $ROOT_DIR/launcher/*.py $PKG_DIR/launcher/
 cp $ROOT_DIR/launcher/requirements.txt $PKG_DIR/launcher/
 cp -r $ROOT_DIR/launcher/ui/dist/* $PKG_DIR/launcher/ui/dist/
 
+# 修复 index.html 的绝对路径为相对路径,
+# 否则 PyWebView 用 file:// 加载时找不到 /assets/... (会白屏)
+# 把 <script src="/assets/..."> 改为 <script src="./assets/...">
+if [ -f "$PKG_DIR/launcher/ui/dist/index.html" ]; then
+    echo "==> 修复 index.html 资源路径为相对路径..."
+    sed -i '' 's|src="/assets/|src="./assets/|g; s|href="/assets/|href="./assets/|g' \
+        "$PKG_DIR/launcher/ui/dist/index.html"
+fi
+
 # 6. 复制 .env.example
 cp $ROOT_DIR/.env.example $PKG_DIR/.env.example
 
