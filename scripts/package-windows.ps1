@@ -136,7 +136,17 @@ rem python-build-standalone Windows 也可能需要 PYTHONHOME 指向 base pytho
 set PYTHONHOME=%DIR%runtime\python
 set PYTHONPATH=%DIR%;%PYTHONPATH%
 cd /d "%DIR%launcher"
-"%DIR%runtime\venv\Scripts\python.exe" "%DIR%launcher\main.py"
+rem 输出到 log 文件,即便窗口关闭也能看到错误
+"%DIR%runtime\venv\Scripts\python.exe" "%DIR%launcher\main.py" > "%DIR%data\logs\launcher.log" 2>&1
+if errorlevel 1 (
+    echo.
+    echo ========================================
+    echo  启动失败,请查看日志:
+    echo   %DIR%data\logs\launcher.log
+    echo ========================================
+    echo.
+    pause
+)
 "@
 Set-Content -Path (Join-Path $PkgDir "start.bat") -Value $startBatContent -Encoding UTF8
 
