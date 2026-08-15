@@ -24,9 +24,7 @@ __pycache__/
 *.log
 
 # TDD 过程文档(specs/plans/qa 不进仓库,本地保留)
-docs/superpowers/specs/
-docs/superpowers/plans/
-docs/superpowers/qa/
+docs/superpowers/
 
 # TDD 过程测试案例文档和脚本(根目录 tests/,非 backend/tests)
 tests/
@@ -39,8 +37,8 @@ backend/data/
 # 文档截图(临时测试用)
 docs/image*.png
 
-# 整个 docs/ 不提交(本地保留,不进仓库)
-docs/
+# AGENTS.md 声明 docs/TODO.md 是 agent 动态维护的待办入口,持续授权下频繁变更,不入库
+docs/TODO.md
 
 # 测试脚本不提交
 scripts/test-*.sh
