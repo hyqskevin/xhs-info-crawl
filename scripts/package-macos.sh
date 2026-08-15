@@ -157,6 +157,14 @@ exec "$DATA_DIR/runtime/venv/bin/python" "$DATA_DIR/launcher/main.py"
 EOF
 chmod +x $BUILD_DIR/xhs-info-crawl.app/Contents/MacOS/start.sh
 
+# 8.5 Adhoc 签名整个 .app(避免 Gatekeeper 弹"Apple 无法验证 python")
+# 用 codesign --force --deep --sign - 给所有 binary 打临时签名,
+# 包括 venv/bin/python、venv/bin/python3 等。
+echo "==> Adhoc 签名 .app..."
+codesign --force --deep --sign - "$BUILD_DIR/xhs-info-crawl.app" 2>&1 | tail -3
+# 验证签名
+codesign --verify --verbose "$BUILD_DIR/xhs-info-crawl.app" 2>&1 | tail -2
+
 # 9. 压缩
 echo "==> 压缩产物..."
 cd $BUILD_DIR
