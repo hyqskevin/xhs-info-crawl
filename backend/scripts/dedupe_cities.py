@@ -11,7 +11,7 @@
 幂等：跑第二次不会有任何变更。
 
 CLI：
-    python -m app.scripts.dedupe_cities --execute
+    cd backend && python -m scripts.dedupe_cities --execute
 """
 from __future__ import annotations
 
