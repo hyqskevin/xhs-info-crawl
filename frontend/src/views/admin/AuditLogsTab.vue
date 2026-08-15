@@ -116,9 +116,11 @@ onMounted(load)
       :total="total"
       :page-size="size"
       :current-page="page"
-      layout="prev, pager, next, total"
+      :page-sizes="[20, 50, 100, 200]"
+      layout="total, sizes, prev, pager, next, jumper"
       style="margin-top: 12px;"
       @current-change="(p: number) => { page = p; load() }"
+      @size-change="(s: number) => { size = s; page = 1; load() }"
     />
   </div>
 </template>
