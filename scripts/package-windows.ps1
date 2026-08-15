@@ -53,8 +53,8 @@ Remove-Item $PythonTgz -Force
 # 2. 创建 venv 并安装依赖(不含 ocr extra)
 Write-Host "==> 创建 venv 并安装依赖..."
 $VenvPython = Join-Path $PkgDir "runtime\python\python.exe"
-# --copies 强制 copy python.exe,不要 symlink(Windows 默认就 copy,但显式更稳)
-& $VenvPython -m venv --copies (Join-Path $PkgDir "runtime\venv")
+# 默认模式即可(Windows 默认 copy,MacOS 默认 symlink,MacOS 我们手动替换)
+& $VenvPython -m venv (Join-Path $PkgDir "runtime\venv")
 $VenvPip = Join-Path $PkgDir "runtime\venv\Scripts\pip.exe"
 # 不强制升级 pip,避免 Windows 编码问题;venv 自带 pip 足够
 & $VenvPip install -r (Join-Path $RootDir "backend\requirements-runtime.txt")

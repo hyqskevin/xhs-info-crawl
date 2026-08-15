@@ -56,10 +56,9 @@ rm -f $PYTHON_TGZ
 
 # 2. 创建 venv 并安装依赖(不含 ocr extra)
 echo "==> 创建 venv 并安装依赖..."
-# --copies 强制 copy bin/python 而不是创建符号链接。
-# 默认 venv 在 macOS 上会 symlink bin/python -> ../python/bin/python3,
-# 但 #8 步 mv 后符号链接变成死链,zip 也会跳过符号链接。
-$PKG_DIR/runtime/python/bin/python3 -m venv --copies $PKG_DIR/runtime/venv
+# 不用 --copies:python-build-standalone 的 ensurepip 在 --copies 模式下 SIGABRT。
+# 默认创建 symlink,然后第 8 步 mv 之后我们手动把 symlink 替换为真实 copy。
+$PKG_DIR/runtime/python/bin/python3 -m venv $PKG_DIR/runtime/venv
 $PKG_DIR/runtime/venv/bin/pip install --upgrade pip
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/backend/requirements-runtime.txt
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/launcher/requirements.txt
@@ -123,6 +122,18 @@ mkdir -p $BUILD_DIR/xhs-info-crawl.app/Contents/Resources
 echo "==> 移动运行数据到 .app/Contents/Resources/xhs-info-crawl/..."
 mv $PKG_DIR $BUILD_DIR/xhs-info-crawl.app/Contents/Resources/xhs-info-crawl
 PKG_DIR="$BUILD_DIR/xhs-info-crawl.app/Contents/Resources/xhs-info-crawl"
+
+# 8.1 替换 venv/bin/ 里的 python 符号链接为真实 copy
+# macOS venv 默认 symlink bin/python -> ../python/bin/python3,
+# mv 之后 symlink 路径失效。手动删除 symlink,copy base python 进去。
+echo "==> 替换 venv/bin/python* symlink 为真实 copy..."
+for binfile in $PKG_DIR/runtime/venv/bin/python python3 python3.11; do
+    src="$PKG_DIR/runtime/venv/bin/$binfile"
+    if [ -L "$src" ]; then
+        rm "$src"
+        cp "$PKG_DIR/runtime/python/bin/$(basename $binfile)" "$src"
+    fi
+done
 
 cat > $BUILD_DIR/xhs-info-crawl.app/Contents/Info.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
