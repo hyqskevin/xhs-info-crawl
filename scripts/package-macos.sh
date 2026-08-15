@@ -56,7 +56,10 @@ rm -f $PYTHON_TGZ
 
 # 2. 创建 venv 并安装依赖(不含 ocr extra)
 echo "==> 创建 venv 并安装依赖..."
-$PKG_DIR/runtime/python/bin/python3 -m venv $PKG_DIR/runtime/venv
+# --copies 强制 copy bin/python 而不是创建符号链接。
+# 默认 venv 在 macOS 上会 symlink bin/python -> ../python/bin/python3,
+# 但 #8 步 mv 后符号链接变成死链,zip 也会跳过符号链接。
+$PKG_DIR/runtime/python/bin/python3 -m venv --copies $PKG_DIR/runtime/venv
 $PKG_DIR/runtime/venv/bin/pip install --upgrade pip
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/backend/requirements-runtime.txt
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/launcher/requirements.txt
