@@ -1,249 +1,99 @@
+"""Celery 抓取任务 facade。
+
+原 ``crawl_task.py`` 1095 行的单文件实现已按职责拆分到 ``app.tasks.crawl.*``
+子模块（runtime / accounts / notes / search）。本模块作为 **facade** 兼
+**Celery task 入口**，原因如下：
+
+1. **Celery task name 兼容性**：``celery_app`` 的 ``imports`` + ``beat_schedule``
+   期望 ``app.tasks.crawl_task.scheduled_dispatch`` 与 ``app.tasks.crawl_task.run``
+   两个名字；切换装饰位置会破坏 beat 调度。
+2. **测试 monkeypatch 兼容**：24 个测试文件通过
+   ``monkeypatch.setattr("app.tasks.crawl_task.X", ...)`` 直接替换本模块符号；
+   facade 暴露同名符号后这些 patch 仍生效。
+3. **API 与数据库模型导入路径不变**：外部 ``from app.tasks.crawl_task import run_crawl``
+   等语句零改动。
+
+按职责拆分的子模块见 ``app.tasks.crawl``。``run_crawl`` / ``scheduled_dispatch`` 的
+**任务主体**仍在 facade 内实现（便于通过 facade 模块 globals 解析被 monkeypatch
+的 helper）；其余单条笔记处理、搜索、账号/ChromePool、运行守卫等独立职责下放
+到子模块。
+"""
+from __future__ import annotations
+
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
-from collections.abc import Callable
-from dataclasses import dataclass
 from types import SimpleNamespace
 import logging
-import shutil
-import time
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 
-from app.core.config import get_settings
-from app.core.database import SessionLocal
-from app.models.activity import Activity
-from app.models.blogger_city import BloggerCity
-from app.models.blogger_group import BloggerGroup, BloggerGroupMember
-from app.models.config import Blogger, City
-from app.models.keyword_group import KeywordGroupCity
-from app.models.note import Note, NoteImage
-from app.models.schedule import ScheduledCrawl
-from app.models.task import CrawlTask, TaskLog
-from app.models.xhs_account import XhsAccount
-from app.services.archive import archive_task_folder, archive_task_result
-from app.services.crawler import AuthenticationRequired, CrawlHalted, VerificationRequired
-from app.services.browser_launcher import open_xhs_login
-from app.services.crawl_city_guard import assert_city_code_exists
-from app.services.crawl_scope import resolve_crawl_scope
-from app.services.dedup import create_note_duplicate_candidates
-from app.services.extraction import extract_activities
-from app.services.minimax import MiniMaxClient
-from app.services.note_identity import extract_platform_note_id
-from app.services.ocr import OCRService
-from app.services.note_id_published_at import note_id_published_at
-from app.services.published_at import extract_published_at
-from app.services.search_rate_limit import (
-    SearchRateLimiter,
-    increment_weekly_search,
-    iso_week_key,
-    weekly_search_count,
+# 第三方依赖
+from app.core.config import get_settings  # noqa: F401  (re-exported for tests)
+from app.core.database import SessionLocal  # noqa: F401  (re-exported for tests)
+from app.services.extraction import extract_activities  # noqa: F401  (re-exported for tests)
+from app.services.minimax import MiniMaxClient  # noqa: F401  (re-exported for tests)
+from app.services.ocr import OCRService  # noqa: F401  (re-exported for tests)
+from app.services.opencli_adapter import OpenCLIAdapter  # noqa: F401  (re-exported for tests)
+from app.services.paddleocr_adapter import PaddleOCREngine  # noqa: F401  (re-exported for tests)
+from app.services.pipeline import deduplicate_results, title_matches_keywords  # noqa: F401
+from app.services.browser_launcher import open_xhs_login  # noqa: F401  (re-exported for tests)
+
+# 子模块符号
+from app.tasks.crawl.accounts import (  # noqa: F401
+    _make_chrome_pool_for_task,
+    _resolve_cdp_endpoint_for_account,
+    load_xhs_accounts,
 )
-from app.services.opencli_adapter import OpenCLIAdapter
-from app.services.paddleocr_adapter import PaddleOCREngine
-from app.services.pipeline import deduplicate_results, run_stage, title_matches_keywords
-from app.services.chrome_pool import ChromePool, ChromeLaunchError, get_global_chrome_pool
+from app.tasks.crawl.notes import (  # noqa: F401
+    StagedNote,
+    cleanup_incomplete_note,
+    download_and_ocr,
+    extract_and_save,
+    prepare_existing_note,
+    process_note,
+)
+from app.tasks.crawl.notes import _extract_engagement  # noqa: F401  (re-exported for tests)
+from app.tasks.crawl.runtime import (  # noqa: F401
+    ExecutionStopped,
+    ExecutionSuperseded,
+    _BUSY_STATUSES,
+    _DISPATCH_TZ,
+    assert_execution_active,
+    find_opencli,
+    finish_stop_if_requested,
+    log,
+    rate_limit_sleep,
+    set_progress,
+)
+from app.tasks.crawl.search import (  # noqa: F401
+    _collect_cities_from_groups,
+    _collect_crawl_results,
+    _expand_blogger_groups,
+    throttled_search,
+)
+
+# Celery 实例
 from app.tasks.celery_app import celery_app
 
-
-def find_opencli(bin_name: str) -> str | None:
-    """解析 opencli 可执行文件路径（shutil.which 的薄封装，测试可 patch）。"""
-    return shutil.which(bin_name)
-
-
-def _extract_engagement(detail: dict, field: str) -> int | None:
-    """从 opencli note 详情中提取互动数。
-
-    字段名映射：opencli 实际返回可能是 liked_count / collected_count 等。
-    实施时若已确认实际字段名，替换候选列表。
-    """
-    if not isinstance(detail, dict):
-        return None
-    candidates = {
-        "like_count": ("like_count", "liked_count", "likes"),
-        "collect_count": ("collect_count", "collected_count", "collects"),
-        "comment_count": ("comment_count", "comments"),
-    }.get(field, (field,))
-    for key in candidates:
-        if key in detail and detail[key] is not None:
-            try:
-                return int(detail[key])
-            except (TypeError, ValueError):
-                return None
-    return None
-
-
-def rate_limit_sleep(seconds: float, guard: Callable[[], None] | None = None) -> None:
-    """可中断的频率控制 sleep：0.5s 分片，每片执行 guard（执行栅栏），stop 请求 0.5s 内响应。"""
-    deadline = time.monotonic() + max(0.0, seconds)
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
-        time.sleep(min(0.5, remaining))
-        if guard:
-            guard()
-
-
-class ExecutionStopped(Exception):
-    pass
-
-
-class ExecutionSuperseded(Exception):
-    pass
-
-
-@dataclass
-class StagedNote:
-    """阶段 1 产出、阶段 2 消费的中间结构。
-
-    - note：已写入 DB 的 Note（状态为 OCR_DONE / DOWNLOADED）
-    - combined_text：标题+正文+OCR 拼接文本，供 MiniMax/规则提取
-    - reference_now：活动日期推断基准（Note.published_at 或 task.started_at）
-    - started_at：任务开始时间，用于归档目录
-    - image_rows：[(image_path, NoteImage)]，归档时复制图片用
-    """
-
-    note: Note
-    combined_text: str
-    reference_now: datetime
-    started_at: datetime
-    image_rows: list[tuple]
+# 其他 imports（任务主体用）
+from app.models.schedule import ScheduledCrawl
+from app.models.task import CrawlTask
+from app.services.crawler import AuthenticationRequired, CrawlHalted, VerificationRequired
+from app.services.chrome_pool import ChromeLaunchError
+from app.services.note_identity import extract_platform_note_id
+from app.services.pipeline import run_stage
+from app.services.search_rate_limit import SearchRateLimiter
 
 
 logger = logging.getLogger(__name__)
 
-_DISPATCH_TZ = ZoneInfo("Asia/Shanghai")
-_BUSY_STATUSES = ("PENDING", "RUNNING", "STOP_REQUESTED")
 
-
-def _collect_cities_from_groups(db, task_params: dict) -> list[str]:
-    """不限城市（city 为空）时，从博主组/关键词组挂的城市合并出抓取城市列表。
-
-    - 博主组 → 从 BloggerCity 取组内博主挂的城市（去重保留顺序）
-    - 关键词组 → 从 KeywordGroupCity 取组挂的城市
-    """
-    city_codes: list[str] = []
-    seen: set[str] = set()
-
-    # 博主组：组内所有博主挂的城市
-    blogger_group_ids = task_params.get("blogger_group_ids") or []
-    if blogger_group_ids:
-        stmt = (
-            select(BloggerCity.city_code)
-            .join(BloggerGroupMember, BloggerGroupMember.blogger_id == BloggerCity.blogger_id)
-            .where(
-                BloggerGroupMember.group_id.in_(blogger_group_ids),
-                BloggerCity.enabled.is_(True),
-            )
-            .distinct()
-        )
-        for code in db.scalars(stmt).all():
-            if code not in seen:
-                seen.add(code)
-                city_codes.append(code)
-
-    # 关键词组：组挂的城市
-    keyword_group_ids = task_params.get("keyword_group_ids") or []
-    if keyword_group_ids:
-        stmt = (
-            select(KeywordGroupCity.city_code)
-            .where(
-                KeywordGroupCity.keyword_group_id.in_(keyword_group_ids),
-                KeywordGroupCity.enabled.is_(True),
-            )
-            .distinct()
-        )
-        for code in db.scalars(stmt).all():
-            if code not in seen:
-                seen.add(code)
-                city_codes.append(code)
-
-    return city_codes
-
-
-def _expand_blogger_groups(db, city_code: str | None, group_ids: list[int]) -> list[int]:
-    """博主组展开。
-
-    - city_code 给出：组内 enabled 博主 ∩ 该城市 blogger_cities.enabled 博主
-    - city_code=None：组内 enabled 博主（不限城市）
-    """
-    if not group_ids:
-        return []
-    stmt = (
-        select(Blogger.id)
-        .join(BloggerGroupMember, BloggerGroupMember.blogger_id == Blogger.id)
-        .join(BloggerGroup, BloggerGroup.id == BloggerGroupMember.group_id)
-        .where(
-            BloggerGroupMember.group_id.in_(group_ids),
-            BloggerGroup.enabled.is_(True),
-            Blogger.enabled.is_(True),
-        )
-    )
-    if city_code:
-        stmt = stmt.join(
-            BloggerCity, BloggerCity.blogger_id == Blogger.id
-        ).where(
-            BloggerCity.city_code == city_code,
-            BloggerCity.enabled.is_(True),
-        )
-    stmt = stmt.order_by(Blogger.id)
-    return list(dict.fromkeys(db.scalars(stmt).all()))
-
-
-def load_xhs_accounts(db) -> list:
-    """加载已启用的 XhsAccount 列表，按 priority 升序、id 升序排列。
-
-    无账号配置时返回空列表，调用方负责回退到默认 session 'xhs-crawler'。
-    """
-    return list(db.scalars(
-        select(XhsAccount)
-        .where(XhsAccount.enabled.is_(True))
-        .order_by(XhsAccount.priority, XhsAccount.id)
-    ).all())
-
-
-def _account_cdp_endpoint(account) -> str | None:
-    """从 XhsAccount.cdp_port 推导 CDP 端点（仅基于账号行静态推导，不依赖 pool 实例）；None 表示回退默认 Chrome Browser Bridge。"""
-    port = getattr(account, "cdp_port", None)
-    if port is None:
-        return None
-    return f"http://127.0.0.1:{port}"
-
-
-def _resolve_cdp_endpoint_for_account(account, chrome_pool) -> str | None:
-    """优先用 chrome_pool 中已启动实例的端点（动态端口）；fallback 到账号行的 cdp_port。"""
-    if chrome_pool is not None:
-        instance = chrome_pool.get(account.session_name)
-        if instance is not None:
-            return instance.cdp_endpoint
-    return _account_cdp_endpoint(account)
-
-
-def _make_chrome_pool_for_task(settings, db, accounts) -> ChromePool:
-    """为当前任务启动 ChromePool（每个有 cdp_port 的账号一个实例）。
-
-    使用全局 ChromePool 单例——API 端点（如 check-login）和 crawl_task 共享同一池，
-    避免重复启动 Chrome 实例导致端口冲突。
-    """
-    pool = get_global_chrome_pool()
-    # 同步端口到 DB（持久化，供下次复用）
-    for account in accounts:
-        port = getattr(account, "cdp_port", None)
-        if port is None:
-            continue
-        try:
-            instance = pool.acquire(account.session_name)
-        except ChromeLaunchError:
-            raise
-        # 同步实际分配端口（避免 ChromePool 分配与 cdp_port 不一致）
-        if instance.port != port:
-            account.cdp_port = instance.port
-            db.commit()
-    return pool
+# ============================================================
+# Celery task 主体
+# ============================================================
 
 
 @celery_app.task(name="app.tasks.crawl_task.scheduled_dispatch")
-def scheduled_dispatch(now: datetime | None = None) -> None:
+def scheduled_dispatch(now=None) -> None:
     """每分钟由 beat 触发：匹配到点的 enabled 定时任务并创建抓取任务。
 
     - slot 幂等：last_fired_slot == 当前分钟则跳过（防 beat 重启/重复 tick 重发）；
@@ -298,426 +148,15 @@ def scheduled_dispatch(now: datetime | None = None) -> None:
         db.close()
 
 
-def assert_execution_active(db, task_id: int, run_token: str) -> None:
-    row = db.execute(
-        select(CrawlTask.status, CrawlTask.run_token).where(CrawlTask.id == task_id)
-    ).one_or_none()
-    if row is None or row.run_token != run_token:
-        raise ExecutionSuperseded()
-    if row.status in {"STOP_REQUESTED", "STOPPED"}:
-        raise ExecutionStopped()
-    if row.status != "RUNNING":
-        raise ExecutionSuperseded()
-
-
-def log(db, task_id: int, level: str, message: str) -> None:
-    db.add(TaskLog(task_id=task_id, level=level, message=message))
-    db.commit()
-
-
-def set_progress(db, task: CrawlTask, run_token: str, stage: str, current_note: str | None = None) -> None:
-    changed = db.execute(
-        update(CrawlTask)
-        .where(
-            CrawlTask.id == task.id,
-            CrawlTask.run_token == run_token,
-            CrawlTask.status == "RUNNING",
-        )
-        .values(current_stage=stage, current_note=current_note)
-    )
-    db.commit()
-    if changed.rowcount != 1:
-        assert_execution_active(db, task.id, run_token)
-    db.refresh(task)
-
-
-def cleanup_incomplete_note(db, source_url: str) -> None:
-    platform_note_id = extract_platform_note_id(source_url)
-    note = db.scalar(
-        select(Note).where(
-            Note.platform_note_id == platform_note_id if platform_note_id else Note.source_url == source_url
-        )
-    )
-    if note is None or note.status == "PROCESSED":
-        return
-    db.execute(delete(Activity).where(Activity.note_id == note.id))
-    db.execute(delete(NoteImage).where(NoteImage.note_id == note.id))
-    db.delete(note)
-    db.commit()
-
-
-def prepare_existing_note(db, source_url: str) -> bool:
-    """Return True when a note is already complete; remove partial legacy rows otherwise."""
-    platform_note_id = extract_platform_note_id(source_url)
-    note = db.scalar(
-        select(Note).where(
-            Note.platform_note_id == platform_note_id if platform_note_id else Note.source_url == source_url
-        )
-    )
-    if note is None:
-        return False
-    has_activity = db.scalar(select(Activity.id).where(Activity.note_id == note.id).limit(1)) is not None
-    if note.status == "PROCESSED" or has_activity:
-        changed = False
-        if note.source_url != source_url:
-            note.source_url = source_url
-            changed = True
-        if note.status != "PROCESSED":
-            note.status = "PROCESSED"
-            changed = True
-        if changed:
-            db.commit()
-        return True
-    cleanup_incomplete_note(db, source_url)
-    return False
-
-
-def throttled_search(db, settings, task, adapter, query, recent, run_token=None, rate_limiter=None) -> list[dict] | None:
-    """模块级 throttled_search：搜索的频率与周配额闸门；返回 None 表示本周超限。
-
-    注：原位于 run_crawl 闭包内，提取为模块级以便测试 monkeypatch；行为完全等价。
-    rate_limiter 必须由调用方复用同一个实例，否则 monkeypatch 不生效。
-    """
-    week_key = iso_week_key()
-    if weekly_search_count(db, week_key) >= settings.weekly_search_limit:
-        log(db, task.id, "WARNING", f"本周搜索量已达上限（{settings.weekly_search_limit}），跳过 {query!r} 及后续关键词搜索")
-        return None
-    if rate_limiter is None:
-        rate_limiter = SearchRateLimiter(settings.search_interval_min, settings.search_interval_max)
-    delay = rate_limiter.next_delay()
-    if delay and run_token is not None:
-        rate_limit_sleep(delay, guard=lambda: assert_execution_active(db, task.id, run_token))
-    found = adapter.search_recent(query, recent)
-    increment_weekly_search(db, week_key)
-    return found
-
-
-def _collect_crawl_results(
-    db,
-    settings,
-    task: CrawlTask,
-    adapter: OpenCLIAdapter,
-    throttled_search: Callable[[str, str], list[dict] | None],
-    run_token: str,
-) -> tuple[list[tuple[str, dict]], int]:
-    """执行搜索/博主发现阶段，返回 (results, discovery_failures)。
-
-    - results: list of (city_code, item)；item 含 _matched_keywords 字段
-    - discovery_failures: 博主层失败计数（连续失败熔断在调用方处理）
-    - CrawlHalted 由博主层连续失败触发，由调用方捕获
-    """
-    results: list[tuple[str, dict]] = []
-    discovery_failures = 0
-    consecutive_failures = 0
-    # city/cities 优先级：city 优先；若 city 为 ''（不限城市）→ 视为未指定，按 keyword_group_ids/blogger_group_ids 各自挂的城市展开
-    requested_cities: list[str] = []
-    if task.params.get("city"):
-        requested_cities = [task.params["city"]]
-    elif task.params.get("cities"):
-        requested_cities = task.params["cities"]
-    else:
-        # city='' 或未设置：从博主组挂的城市 / 关键词组挂的城市合并
-        group_cities = _collect_cities_from_groups(db, task.params)
-        if group_cities:
-            requested_cities = group_cities
-    city_query = select(City).where(City.enabled.is_(True))
-    if requested_cities:
-        city_query = city_query.where(City.code.in_(requested_cities))
-    cities = list(db.scalars(city_query.order_by(City.id)).all())
-    if cities:
-        for city in cities:
-            scope = resolve_crawl_scope(db, city, task.params)
-            override = "任务参数" if ("keywords" in task.params or "blogger_ids" in task.params) else "配置默认"
-            log(db, task.id, "INFO", f"抓取范围生效：keywords={len(scope.keywords)} bloggers={len(scope.bloggers)} (override={override})")
-            recent_filter = task.params.get("recent_filter") or city.recent_filter
-            for keyword in scope.keywords:
-                found = throttled_search(f"{city.name} {keyword}", recent_filter)
-                if found is None:
-                    break
-                for item in found:
-                    tagged = dict(item)
-                    tagged["_matched_keywords"] = [keyword]
-                    results.append((city.code, tagged))
-                assert_execution_active(db, task.id, run_token)
-            for blogger in scope.bloggers:
-                username = (blogger.username or "").strip()
-                if not username:
-                    log(db, task.id, "WARNING", f"跳过博主：username 为空 id={blogger.id}")
-                    continue
-                try:
-                    items = adapter.blogger_notes(username, blogger.profile_url or "")
-                except (AuthenticationRequired, ExecutionStopped, ExecutionSuperseded):
-                    raise
-                except Exception as exc:
-                    discovery_failures += 1
-                    task.error_message = f"博主 {username!r} 抓取失败：{exc}"
-                    db.commit()
-                    log(db, task.id, "ERROR", task.error_message)
-                    consecutive_failures += 1
-                    if consecutive_failures >= settings.consecutive_note_failure_limit:
-                        raise CrawlHalted(
-                            f"已连续 {consecutive_failures} 次抓取失败（最近一次：博主 {username!r}）。"
-                            f"CDP session / 浏览器标签页可能已过期，请在 Chrome 重新打开小红书后"
-                            f"点击「检测登录并继续」，或「结束抓取」。最后一次错误：{exc}"
-                        )
-                    continue
-                consecutive_failures = 0
-                assert_execution_active(db, task.id, run_token)
-                log(db, task.id, "INFO", f"博主 {username!r} 命中 {len(items)} 篇（带 xsec_token 的）")
-                if blogger.max_notes_per_crawl and blogger.max_notes_per_crawl > 0 and len(items) > blogger.max_notes_per_crawl:
-                    log(db, task.id, "INFO", f"博主 {username!r} 抓取上限 {blogger.max_notes_per_crawl}，截断至 {blogger.max_notes_per_crawl} 篇")
-                    items = items[:blogger.max_notes_per_crawl]
-                for item in items:
-                    tagged = dict(item)
-                    tagged["_matched_blogger_id"] = blogger.id
-                    tagged["_matched_blogger_username"] = blogger.username
-                    results.append((city.code, tagged))
-    else:
-        for city_code in requested_cities:
-            quota_exceeded = False
-            for keyword in task.params.get("keywords", []):
-                found = throttled_search(f"{city_code} {keyword}", "一周内")
-                if found is None:
-                    quota_exceeded = True
-                    break
-                for item in found:
-                    tagged = dict(item)
-                    tagged["_matched_keywords"] = [keyword]
-                    results.append((city_code, tagged))
-                assert_execution_active(db, task.id, run_token)
-            if quota_exceeded:
-                break
-    return results, discovery_failures
-
-
-def finish_stop_if_requested(db, task_id: int, run_token: str) -> bool:
-    current = db.get(CrawlTask, task_id)
-    db.refresh(current)
-    if current.run_token != run_token:
-        raise ExecutionSuperseded()
-    if current.status not in ("STOP_REQUESTED", "STOPPED"):
-        return False
-    if current.status != "STOPPED":
-        current.status = "STOPPED"
-        current.current_stage = None
-        current.current_note = None
-        current.finished_at = datetime.now(timezone.utc)
-        db.commit()
-        log(db, current.id, "INFO", "任务已安全停止")
-    return True
-
-
-def download_and_ocr(db, task: CrawlTask, run_token: str, city: str, item: dict, adapter: OpenCLIAdapter, settings) -> StagedNote | None:
-    """阶段 1：下载笔记详情 + 图片 + OCR，返回 StagedNote 或 None（跳过/失败）。
-
-    不调用 MiniMax，不写 Activity。保留 assert_execution_active / set_progress 调用。
-    """
-    assert_execution_active(db, task.id, run_token)
-    note_url = (item.get("url") or "").strip()
-    if not note_url:
-        log(db, task.id, "WARNING", f"跳过笔记：url 为空 title={item.get('title', '')!r}")
-        return None
-    if not assert_city_code_exists(db, city):
-        log(db, task.id, "ERROR", f"city_code 不在 cities 表：{city!r}，跳过该笔记 url={note_url}")
-        task.skipped_activities += 1
-        return None
-    if prepare_existing_note(db, note_url):
-        return None
-
-    attempts = settings.pipeline_stage_max_retries
-    delay = settings.pipeline_stage_retry_delay_seconds
-    started_at = task.started_at or datetime.now(timezone.utc)
-    set_progress(db, task, run_token, "DOWNLOADING", item.get("title") or note_url)
-    detail = run_stage(lambda: adapter.note(note_url), attempts, delay)
-    assert_execution_active(db, task.id, run_token)
-    # 优先级 1：基于 note ID（雪花算法）反推时间戳，精度到秒，最可靠。
-    # 优先级 2：DOM 文本解析（"3天前" / "07-19" 等）。
-    # 优先级 3：started_at 兜底。
-    snowflake_at = note_id_published_at(note_url)
-    dom_at = extract_published_at(detail, fallback_now=started_at)
-    if snowflake_at is not None:
-        published_at = snowflake_at
-    elif dom_at is not None:
-        published_at = dom_at
-    else:
-        published_at = None
-    if published_at is None:
-        log(db, task.id, "INFO", f"未解析真实发布时间：{item.get('title') or note_url}")
-    note = Note(
-        task_id=task.id,
-        platform_note_id=extract_platform_note_id(note_url) or note_url.split("/")[-1].split("?")[0],
-        title=item.get("title", ""),
-        content=detail.get("content", ""),
-        source_url=note_url,
-        city_code=city,
-        status="DOWNLOADED",
-        published_at=published_at,
-        raw_data=detail,
-        matched_keywords=item.get("_matched_keywords") or [],
-        matched_blogger_id=item.get("_matched_blogger_id"),
-        matched_blogger_username=item.get("_matched_blogger_username"),
-        like_count=_extract_engagement(detail, "like_count"),
-        collect_count=_extract_engagement(detail, "collect_count"),
-        comment_count=_extract_engagement(detail, "comment_count"),
-    )
-    db.add(note)
-    db.flush()
-    folder = archive_task_folder(settings.archive_dir, started_at, task.id, city)
-    download_dir = folder / ".downloads" / note.platform_note_id
-    images = run_stage(lambda: adapter.download(note_url, download_dir), attempts, delay)
-    assert_execution_active(db, task.id, run_token)
-    task.downloaded_notes += 1
-    db.commit()
-
-    set_progress(db, task, run_token, "OCR", note.title)
-    ocr = OCRService(PaddleOCREngine(settings), settings.ocr_min_confidence) if settings.ocr_enabled else None
-    ocr_texts: list[str] = []
-    image_rows: list[tuple] = []
-    assert_execution_active(db, task.id, run_token)
-    if ocr:
-        # 并行 OCR：process_batch 用 ThreadPoolExecutor 并行处理所有图片，子线程内含重试
-        ocr_results = ocr.process_batch(
-            images,
-            workers=settings.ocr_parallel_workers,
-            attempts=attempts,
-            delay=delay,
-        )
-        assert_execution_active(db, task.id, run_token)
-        for index, (image, result) in enumerate(zip(images, ocr_results), 1):
-            image_row = NoteImage(note_id=note.id, storage_key="", ocr_text=result["text"], ocr_status=result["status"], ocr_error=result["error"])
-            db.add(image_row)
-            image_rows.append((image, image_row))
-            if result["text"]:
-                ocr_texts.append(f"[IMAGE {index}]\n{result['text']}")
-    else:
-        for index, image in enumerate(images, 1):
-            result = {"status": "disabled", "text": "", "error": ""}
-            image_row = NoteImage(note_id=note.id, storage_key="", ocr_text=result["text"], ocr_status=result["status"], ocr_error=result["error"])
-            db.add(image_row)
-            image_rows.append((image, image_row))
-    note.status = "OCR_DONE" if ocr else "DOWNLOADED"
-    task.ocr_notes += 1
-    db.commit()
-
-    combined = f"标题：{note.title}\n正文：{note.content}\n" + "\n".join(ocr_texts)
-    # now 以 Note.published_at 为基准（如已解析），否则 fallback 到任务开始时间
-    reference_now = note.published_at.replace(tzinfo=None) if note.published_at else started_at.replace(tzinfo=None)
-    return StagedNote(
-        note=note,
-        combined_text=combined,
-        reference_now=reference_now,
-        started_at=started_at,
-        image_rows=image_rows,
-    )
-
-
-def extract_and_save(db, task: CrawlTask, run_token: str, staged: StagedNote, extracted, settings) -> bool:
-    """阶段 2：校验活动 + 写 Activity + 归档 + 更新 Note 状态。
-
-    接收已提取的 extracted（list[dict]），不调用 MiniMax。
-    返回 True 表示 PROCESSED，False 表示无活动被过滤。
-    """
-    note = staged.note
-    city = note.city_code
-    started_at = staged.started_at
-    image_rows = staged.image_rows
-    set_progress(db, task, run_token, "EXTRACTING", note.title)
-    assert_execution_active(db, task.id, run_token)
-
-    from app.services.activity_validator import classify_zero_activity, validate_activities
-
-    classification = classify_zero_activity(note, extracted)
-    if classification in {"all_before_publish", "no_activity_signals"}:
-        note.status = "NO_ACTIVITIES"
-        log(db, task.id, "INFO", f"未提取到有效活动 原因={classification} url={note.source_url}")
-        if classification == "all_before_publish" and extracted:
-            preview = "; ".join(
-                f"{a.get('name')!r}@{a.get('start_time')}" for a in extracted[:5]
-            )
-            suffix = "" if len(extracted) <= 5 else f" (共 {len(extracted)} 条)"
-            log(db, task.id, "INFO", f"被拒绝活动预览：{preview}{suffix}")
-        task.extracted_notes += 1
-        db.commit()
-        set_progress(db, task, run_token, "ARCHIVING", note.title)
-        return False
-    if classification == "minimax_empty_retryable":
-        note.status = "EMPTY_RESULT_RETRYABLE"
-        log(db, task.id, "INFO", f"MiniMax 返回空但有信号，可重试 url={note.source_url}")
-        task.extracted_notes += 1
-        db.commit()
-        set_progress(db, task, run_token, "ARCHIVING", note.title)
-        return False
-
-    accepted, rejected = validate_activities(note, extracted)
-    for reason in rejected:
-        log(db, task.id, "INFO", f"跳过活动 原因={reason}")
-    if not accepted:
-        note.status = "NO_ACTIVITIES"
-        log(db, task.id, "INFO", f"全部活动被过滤 url={note.source_url}")
-        task.extracted_notes += 1
-        db.commit()
-        set_progress(db, task, run_token, "ARCHIVING", note.title)
-        return False
-
-    for fields in accepted:
-        assert_execution_active(db, task.id, run_token)
-        activity = Activity(
-            note_id=note.id,
-            name=fields.get("name") or note.title,
-            city_code=city,
-            start_time=datetime.fromisoformat(fields["start_time"]) if fields.get("start_time") else None,
-            end_time=datetime.fromisoformat(fields["end_time"]) if fields.get("end_time") else None,
-            location=fields.get("location") or "",
-            price=fields.get("price") or "",
-            type=fields.get("type") or "其他",
-            source_url=note.source_url,
-            source_image_indexes=fields.get("source_image_indexes") or [],
-            summary=fields.get("summary") or note.content[:300],
-            confidence=float(fields.get("confidence") or 0),
-        )
-        db.add(activity)
-        db.flush()
-
-    set_progress(db, task, run_token, "ARCHIVING", note.title)
-    assert_execution_active(db, task.id, run_token)
-    task_note_ids = select(Note.id).where(Note.task_id == task.id)
-    task_activities = list(db.scalars(select(Activity).where(Activity.note_id.in_(task_note_ids)).order_by(Activity.id)).all())
-    archive_task_result(settings.archive_dir, started_at, task.id, note, image_rows, task_activities, city)
-    assert_execution_active(db, task.id, run_token)
-    create_note_duplicate_candidates(db, note)
-    folder = archive_task_folder(settings.archive_dir, started_at, task.id, city)
-    shutil.rmtree(folder / ".downloads", ignore_errors=True)
-    note.status = "PROCESSED"
-    task.extracted_notes += 1
-    task.success_notes = task.extracted_notes
-    db.commit()
-    return True
-
-
-def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, adapter: OpenCLIAdapter, settings) -> bool:
-    """向后兼容包装：download_and_ocr + 单篇 MiniMax 提取 + extract_and_save。
-
-    供直接调用 process_note 的旧路径使用；run_crawl 已改为两阶段流水线，不再走这里。
-    """
-    staged = download_and_ocr(db, task, run_token, city, item, adapter, settings)
-    if staged is None:
-        return False
-    attempts = settings.pipeline_stage_max_retries
-    delay = settings.pipeline_stage_retry_delay_seconds
-    if settings.minimax_api_key:
-        client = MiniMaxClient(settings)
-        try:
-            extracted = run_stage(lambda: extract_activities(staged.combined_text, staged.reference_now, lambda text: client.extract_many(text, staged.started_at)), attempts, delay)
-        except Exception as exc:
-            log(db, task.id, "WARNING", f"MiniMax 提取失败，已降级规则提取：{exc}")
-            extracted = extract_activities(staged.combined_text, staged.reference_now, None)
-    else:
-        extracted = extract_activities(staged.combined_text, staged.reference_now, None)
-    return extract_and_save(db, task, run_token, staged, extracted, settings)
-
-
 @celery_app.task(name="app.tasks.crawl_task.run", bind=True)
-def run_crawl(self, task_id: int, run_token: str | None = None):
+def run_crawl(self, task_id: int, run_token=None) -> None:
+    """两阶段流水线：先批量 download + OCR，再批量 MiniMax + extract + archive。
+
+    函数体内的 helper 引用（``SessionLocal`` / ``OpenCLIAdapter`` / ``download_and_ocr``
+    / ``extract_and_save`` / ``throttled_search`` 等）通过本模块 globals 解析——
+    这样测试中 ``monkeypatch.setattr("app.tasks.crawl_task.X", ...)`` 能影响 run_crawl
+    的实际行为。
+    """
     db = SessionLocal()
     if not run_token:
         db.close()
@@ -755,7 +194,7 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         accounts = [SimpleNamespace(name="默认", session_name="xhs-crawler", id=None)]
     # 为每个有 cdp_port 的账号启动独立 Chrome 实例（ChromePool）
     # 缺 cdp_port 的账号回退默认 Chrome Browser Bridge（向后兼容）
-    chrome_pool: ChromePool | None = None
+    chrome_pool = None
     if any(getattr(a, "cdp_port", None) is not None for a in accounts):
         try:
             chrome_pool = _make_chrome_pool_for_task(settings, db, accounts)
@@ -783,13 +222,13 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         log(db, task.id, "INFO", "登录预检：检查小红书登录状态")
         adapter.check_login()
         log(db, task.id, "INFO", "登录预检通过")
-        results: list[tuple[str, dict]] = []
+        results: list = []
         discovery_failures = 0
         consecutive_failures = 0
 
         rate_limiter = SearchRateLimiter(settings.search_interval_min, settings.search_interval_max)
 
-        def _run_throttled_search(query: str, recent: str) -> list[dict] | None:
+        def _run_throttled_search(query: str, recent: str):
             return throttled_search(db, settings, task, adapter, query, recent, run_token, rate_limiter)
 
         results, discovery_failures = _collect_crawl_results(
@@ -800,7 +239,7 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         task.total_notes = len(results)
         db.commit()
 
-        def on_failure(entry: tuple[str, dict], exc: Exception) -> None:
+        def on_failure(entry, exc: Exception) -> None:
             db.rollback()
             cleanup_incomplete_note(db, entry[1]["url"])
             current = db.get(CrawlTask, task.id)
@@ -829,7 +268,7 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
                 )
             return new_adapter
 
-        def refresh_token_pool(entry: tuple[str, dict]) -> None:
+        def refresh_token_pool(entry) -> None:
             """token 池刷新：用 entry 的 _matched_keywords 重新跑 throttled_search，按 platform_note_id 匹配替换 URL。"""
             matched_keywords = entry[1].get("_matched_keywords") or []
             if not matched_keywords:
@@ -854,7 +293,7 @@ def run_crawl(self, task_id: int, run_token: str | None = None):
         delay = settings.pipeline_stage_retry_delay_seconds
 
         # 阶段 1：逐篇下载 + OCR（串行，opencli 不支持并发），暂存 StagedNote
-        staged_notes: list[StagedNote] = []
+        staged_notes: list = []
         empty_streak = 0  # 连续空详情熔断计数器
         empty_threshold = max(1, settings.crawl_empty_detail_threshold)  # 防 0/负数
         reset_interval = max(0, settings.crawl_session_reset_interval)  # 0 表示禁用
