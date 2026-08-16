@@ -51,7 +51,7 @@ def bootstrap_env(project_root: Path) -> int:
     set_cache_env_vars(project_root)
 
     # 4. 找可用端口
-    api_port = find_available_port(start=8000, end=8020)
+    api_port = find_available_port(start=8001, end=8020)
     update_env_value(env_path, "API_PORT", str(api_port))
 
     return api_port
