@@ -54,6 +54,14 @@ class StatusServer:
         def get_status():
             return self.process_manager.get_status()
 
+        @app.get("/api-port")
+        def get_api_port():
+            """返回后端 API 实际监听的端口(用于启动器 UI 打开业务前端)。"""
+            # 从 api_base_url (如 http://127.0.0.1:8001) 解析端口
+            from urllib.parse import urlparse
+            parsed = urlparse(self.api_base_url)
+            return {"port": parsed.port or 8000}
+
         @app.post("/service/{name}/restart")
         def restart_service(name: str):
             success = self.process_manager.restart_service(name)

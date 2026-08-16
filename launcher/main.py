@@ -100,7 +100,8 @@ def main():
         import webview
         ui_dist = project_root / "launcher" / "ui" / "dist"
         if ui_dist.exists():
-            url = f"file://{ui_dist / 'index.html'}?statusPort={status_port}"
+            # 同时传 statusPort(状态服务)和 apiPort(业务 API 端口)
+            url = f"file://{ui_dist / 'index.html'}?statusPort={status_port}&apiPort={api_port}"
         else:
             # 开发模式:用占位 HTML
             url = f"data:text/html,<html><body><h1>启动器 UI 未构建</h1><p>请先 cd launcher/ui && npm run build</p><p>状态服务: http://127.0.0.1:{status_port}</p></body></html>"

@@ -17,6 +17,7 @@ import {
   testOcr,
   getLogsTail,
   initBaseUrlFromLocation,
+  getBaseUrl,
   type StatusResponse,
   type OpencliTestResult,
   type OcrStatus,
@@ -156,8 +157,20 @@ async function handleOcrTest() {
   }
 }
 
-function handleOpenWeb() {
-  const port = new URLSearchParams(window.location.search).get('apiPort') || '8000'
+async function handleOpenWeb() {
+  // 优先读 URL query (?apiPort=xxx),
+  // 否则调状态服务 /api-port 拿真实端口(避开 hardcode 8000)
+  const queryPort = new URLSearchParams(window.location.search).get('apiPort')
+  let port = queryPort
+  if (!port) {
+    try {
+      const resp = await fetch(`${getBaseUrl()}/api-port`)
+      const data = await resp.json()
+      port = String(data.port || 8000)
+    } catch (e) {
+      port = '8000'
+    }
+  }
   window.open(`http://127.0.0.1:${port}`, '_blank')
 }
 
