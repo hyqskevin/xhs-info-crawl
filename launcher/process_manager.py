@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -21,6 +22,12 @@ class ProcessManager:
     web 服务是生产模式下的前端静态服务(等价于 vite preview),
     仅在 launcher 启动时启动;开发模式下 vite dev 已在 5173 占用端口,
     launcher 不会额外起 web 进程。
+
+    退出时清理:
+    - 子进程用 start_new_session=True 脱离 launcher 进程组(Unix),
+      避免 launcher 崩溃时通过进程组信号链杀子进程
+    - cleanup() 幂等,可被 atexit / signal handler / finally 多次调用
+    - stop_service 默认 5s 超时,超时后 SIGKILL 强杀
     """
 
     def __init__(self, project_root: Path, venv_python: Path):
@@ -31,6 +38,8 @@ class ProcessManager:
         self._logs_dir.mkdir(parents=True, exist_ok=True)
         # 默认命令模板(可被 _commands 覆盖,用于测试)
         self._commands = self._build_default_commands()
+        # cleanup 幂等锁
+        self._cleaned = False
 
     def _build_default_commands(self) -> dict[str, list[str]]:
         """构建默认的服务启动命令。"""
@@ -92,19 +101,36 @@ class ProcessManager:
             # 强制无缓冲输出,确保日志实时写入文件
             "PYTHONUNBUFFERED": "1",
         }
+        # 脱离 launcher 进程组:避免 launcher 崩溃时通过进程组信号链杀子进程
+        # Unix:start_new_session=True (setsid)
+        # Windows:CREATE_NEW_PROCESS_GROUP(进程独立 console)
+        # 关联 spec: docs/superpowers/specs/2026-08-16-launcher-cleanup-on-exit-design.md § 1
+        popen_kwargs: dict = {}
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True
         proc = subprocess.Popen(
             cmd,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             cwd=str(self.project_root),
             env=env,
+            **popen_kwargs,
         )
         self._processes[name] = proc
-        logger.info("启动服务 %s (PID %d)", name, proc.pid)
+        logger.info("启动服务 %s (PID %d, 独立进程组)", name, proc.pid)
         return True
 
     def stop_service(self, name: str, timeout: float = 5.0) -> bool:
-        """停止指定服务。"""
+        """停止指定服务。
+
+        流程:terminate (SIGTERM) → wait timeout → kill (SIGKILL)。
+        uvicorn / celery 收到 SIGTERM 会 graceful shutdown(关闭 listener),
+        但慢时(>5s)会 SIGKILL 强杀,确保不留孤儿。
+
+        关联 spec: docs/superpowers/specs/2026-08-16-launcher-cleanup-on-exit-design.md § 4
+        """
         if name not in self._processes:
             return True
 
@@ -113,13 +139,22 @@ class ProcessManager:
             del self._processes[name]
             return True
 
-        # 先 SIGTERM
+        # 先 SIGTERM,优雅退出
         proc.terminate()
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
+            logger.warning(
+                "服务 %s (PID %d) %s 秒内未响应 SIGTERM,SIGKILL 强杀",
+                name,
+                proc.pid,
+                timeout,
+            )
             proc.kill()
-            proc.wait()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                logger.error("服务 %s SIGKILL 后仍未退出(PID %d)", name, proc.pid)
 
         del self._processes[name]
         logger.info("停止服务 %s", name)
@@ -168,5 +203,14 @@ class ProcessManager:
         return all_lines[-lines:]
 
     def cleanup(self) -> None:
-        """清理资源(退出时调用)。"""
+        """清理资源(退出时调用)。
+
+        幂等:可被 atexit / signal handler / finally 多次调用,只执行一次真实清理。
+
+        关联 spec: docs/superpowers/specs/2026-08-16-launcher-cleanup-on-exit-design.md § 6
+        """
+        if self._cleaned:
+            return
+        self._cleaned = True
+        logger.info("清理子进程(共 %d 个)", len(self._processes))
         self.stop_all()

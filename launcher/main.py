@@ -7,7 +7,9 @@
 """
 from __future__ import annotations
 
+import atexit
 import logging
+import signal
 import sys
 import threading
 import uvicorn
@@ -119,6 +121,28 @@ def main():
     # 3. 创建进程管理器
     pm = ProcessManager(project_root=project_root, venv_python=venv_python)
 
+    # 3.1 注册退出时的清理钩子
+    # 关联 spec: docs/superpowers/specs/2026-08-16-launcher-cleanup-on-exit-design.md § 2-3
+    # atexit:正常退出 / 未捕获异常 / sys.exit()
+    # signal handler:SIGTERM / SIGINT / SIGHUP
+    atexit.register(pm.cleanup)
+
+    def _signal_handler(signum, frame):  # noqa: ARG001
+        signame = signal.Signals(signum).name if isinstance(signum, int) else str(signum)
+        logger.info("收到信号 %s,清理子进程后退出", signame)
+        pm.cleanup()
+        sys.exit(0)
+
+    # SIGTERM:osascript "tell application to quit" / kill PID
+    # SIGINT:开发模式 Ctrl-C
+    # SIGHUP:终端关闭(双击 .app 不会触发,但 start.sh 后台跑时会)
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(sig, _signal_handler)
+        except (ValueError, OSError):
+            # 某些平台/线程下无法注册(如子线程),忽略
+            pass
+
     # 4. 创建状态服务(同时传 api_base_url 和 web_base_url)
     status_server = StatusServer(
         process_manager=pm,
@@ -177,11 +201,13 @@ def main():
             return str(target)
 
         def exit(self) -> None:
-            """退出启动器:用户点 PyWebView 窗口的「退出」按钮时调用。"""
-            import webview as _wv
-            if _wv.windows:
-                for w in _wv.windows:
-                    w.destroy()
+            """退出启动器:用户点 PyWebView 窗口的「退出」按钮时调用。
+
+            发 SIGTERM 给当前进程 → 触发 main.py 的 signal handler → pm.cleanup()。
+            不直接 destroy 窗口,避免子进程被进程组信号链杀而无法 graceful shutdown。
+            """
+            import os
+            os.kill(os.getpid(), signal.SIGTERM)
 
     def create_pywebview_window():
         import webview
