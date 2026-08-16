@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.database import init_database
+from app.core.json_response import UtcJsonResponse
 
 
 settings = get_settings()
@@ -23,7 +24,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title=settings.app_name,
+    version="0.1.0",
+    lifespan=lifespan,
+    default_response_class=UtcJsonResponse,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -35,8 +41,8 @@ app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 
 @app.exception_handler(HTTPException)
-async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content={"code": exc.status_code, "message": str(exc.detail), "data": {}})
+async def http_exception_handler(_: Request, exc: HTTPException) -> UtcJsonResponse:
+    return UtcJsonResponse(status_code=exc.status_code, content={"code": exc.status_code, "message": str(exc.detail), "data": {}})
 
 
 def mount_static_frontend_if_exists(app: FastAPI, dist_path: Path) -> None:

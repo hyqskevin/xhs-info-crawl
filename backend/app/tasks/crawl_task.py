@@ -104,10 +104,14 @@ def scheduled_dispatch(now=None) -> None:
     slot = now.strftime("%Y-%m-%dT%H:%M")
     db = SessionLocal()
     try:
+        # day_of_week == 8 表示"每天触发"，跳过星期匹配
         schedules = db.scalars(
             select(ScheduledCrawl).where(
                 ScheduledCrawl.enabled.is_(True),
-                ScheduledCrawl.day_of_week == now.isoweekday(),
+                (
+                    (ScheduledCrawl.day_of_week == 8)
+                    | (ScheduledCrawl.day_of_week == now.isoweekday())
+                ),
                 ScheduledCrawl.hour == now.hour,
                 ScheduledCrawl.minute == now.minute,
             )

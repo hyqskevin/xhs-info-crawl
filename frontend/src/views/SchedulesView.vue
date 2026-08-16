@@ -22,10 +22,12 @@ const keywordGroups = ref<any[]>([])
 const bloggerGroups = ref<any[]>([])
 const dialog = ref(false)
 const editingId = ref<number | null>(null)
-const recentFilters = ['不限', '一天内', '一周内', '半年内']
+const recentFilters = ['不限', '当天', '一天内', '一周内', '半年内']
+// 后端约定：day_of_week == 8 表示"每天触发"（dispatch 时跳过星期匹配）
 const weekdays = [
   { value: 1, label: '周一' }, { value: 2, label: '周二' }, { value: 3, label: '周三' },
   { value: 4, label: '周四' }, { value: 5, label: '周五' }, { value: 6, label: '周六' }, { value: 7, label: '周日' },
+  { value: 8, label: '每天' },
 ]
 const form = reactive<any>({})
 

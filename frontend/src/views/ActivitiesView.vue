@@ -3,6 +3,7 @@ import { CircleCheck, CircleClose, Delete, Edit, Refresh, Search, View } from '@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
+import { formatUtcAsShanghai } from '@/utils/datetime'
 
 const rows = ref<any[]>([])
 const cities = ref<any[]>([])
@@ -113,8 +114,8 @@ function resetFilters() {
   })
   load()
 }
-function formatTime(value: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '待确认' }
-function formatDate(value: string | null) { return value ? new Date(value).toISOString().slice(0, 10) : '待确认' }
+function formatTime(value: string | null) { return value ? formatUtcAsShanghai(value) : '待确认' }
+function formatDate(value: string | null) { return value ? formatUtcAsShanghai(value).slice(0, 10) : '待确认' }
 /** 点赞/收藏/评论；任一字段缺失显示 "—"；全部缺失显示 "—" */
 function formatEngagement(row: any) {
   const fmt = (v: any) => (v == null ? '—' : Number(v).toLocaleString())

@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
+import { formatUtcAsShanghai } from '@/utils/datetime'
 
 interface AuditLogOut {
   id: number
@@ -103,7 +104,11 @@ onMounted(load)
       @selection-change="onSelectionChange"
     >
       <ElTableColumn type="selection" width="48" />
-      <ElTableColumn prop="created_at" label="时间" width="180" />
+      <ElTableColumn label="时间" width="180">
+        <template #default="scope">
+          {{ formatUtcAsShanghai(scope.row.created_at) }}
+        </template>
+      </ElTableColumn>
       <ElTableColumn prop="actor_username" label="操作者" width="140" />
       <ElTableColumn prop="action" label="动作" width="200" />
       <ElTableColumn prop="target_label" label="目标" />

@@ -67,6 +67,24 @@ def _next_available_session_name(db: Session, name: str) -> str:
 DB = Annotated[Session, Depends(get_db)]
 
 
+_CDP_PORT_START = 9223
+_CDP_PORT_RANGE = 100  # 与 chrome_pool.py 同口径：9223-9322 范围分配
+
+
+def _next_available_cdp_port(db: Session) -> int:
+    """从 9223 开始扫描，跳过已被占用的端口，返回第一个空闲端口。"""
+    used = set(
+        db.scalars(
+            select(XhsAccount.cdp_port).where(XhsAccount.cdp_port.is_not(None))
+        ).all()
+    )
+    for offset in range(_CDP_PORT_RANGE):
+        candidate = _CDP_PORT_START + offset
+        if candidate not in used:
+            return candidate
+    raise HTTPException(507, "CDP 端口池（9223-9322）已用尽，请先禁用部分账号")
+
+
 class XhsAccountIn(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     remark: str = Field(default="", max_length=256)
@@ -131,6 +149,7 @@ def create_xhs_account(payload: XhsAccountIn, _: Admin, db: DB) -> dict:
         platform_user_id=payload.platform_user_id,
         enabled=payload.enabled,
         priority=payload.priority,
+        cdp_port=_next_available_cdp_port(db),
     )
     db.add(account)
     db.commit()

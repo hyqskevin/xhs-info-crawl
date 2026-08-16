@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
+import { formatUtcAsShanghai } from '@/utils/datetime'
 
 const rows = ref<any[]>([])
 
@@ -46,10 +47,10 @@ onMounted(load)
   <ElCard shadow="never">
     <ElTable :data="rows">
       <ElTableColumn label="推文 A" min-width="220">
-        <template #default="scope"><strong>{{ scope.row.note_a?.title }}</strong><div>{{ scope.row.note_a?.published_at || '发布时间待确认' }}</div><div>识别活动 {{ scope.row.note_a?.activity_count || 0 }} 条</div></template>
+        <template #default="scope"><strong>{{ scope.row.note_a?.title }}</strong><div>{{ scope.row.note_a?.published_at ? formatUtcAsShanghai(scope.row.note_a.published_at) : '发布时间待确认' }}</div><div>识别活动 {{ scope.row.note_a?.activity_count || 0 }} 条</div></template>
       </ElTableColumn>
       <ElTableColumn label="推文 B" min-width="220">
-        <template #default="scope"><strong>{{ scope.row.note_b?.title }}</strong><div>{{ scope.row.note_b?.published_at || '发布时间待确认' }}</div><div>识别活动 {{ scope.row.note_b?.activity_count || 0 }} 条</div></template>
+        <template #default="scope"><strong>{{ scope.row.note_b?.title }}</strong><div>{{ scope.row.note_b?.published_at ? formatUtcAsShanghai(scope.row.note_b.published_at) : '发布时间待确认' }}</div><div>识别活动 {{ scope.row.note_b?.activity_count || 0 }} 条</div></template>
       </ElTableColumn>
       <ElTableColumn prop="similarity" label="相似度"><template #default="scope"><ElProgress :percentage="Math.round(scope.row.similarity * 100)" /></template></ElTableColumn>
       <ElTableColumn prop="matched_fields" label="匹配字段" />
