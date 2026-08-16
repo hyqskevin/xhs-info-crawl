@@ -431,7 +431,7 @@ onUnmounted(() => {
 
           <!-- Row 4: 操作账号（占满整行） -->
           <ElFormItem label="操作账号" class="grid-row-4">
-            <ElSelect v-model="form.xhs_account_id" clearable placeholder="不选则自动按优先级">
+            <ElSelect v-model="form.xhs_account_id" clearable placeholder="不选则自动按优先级" class="account-select">
               <ElOption v-for="account in xhsAccounts" :key="account.id" :label="account.name" :value="account.id" />
             </ElSelect>
           </ElFormItem>
@@ -455,7 +455,7 @@ onUnmounted(() => {
       </div>
       <ElProgress :percentage="lastTask.progress_percent || 0" :indeterminate="lastTask.progress_percent == null && ['PENDING','RUNNING'].includes(lastTask.status)" />
       <ElAlert v-if="shouldShowLastTaskError" :title="lastTask.error_message" type="error" :closable="false" />
-      <ElButton v-if="['FAILED','STOPPED'].includes(lastTask.status)" type="primary" :icon="RefreshRight" :loading="restarting" @click="restart">继续抓取</ElButton>
+      <ElButton v-if="['FAILED','STOPPED','STOP_REQUESTED'].includes(lastTask.status)" type="primary" :icon="RefreshRight" :loading="restarting" @click="restart">继续抓取</ElButton>
       <ElButton v-if="['FAILED','PAUSED'].includes(lastTask.status)" type="danger" :loading="stopping" @click="finish">结束抓取</ElButton>
       <ElButton v-if="lastTask.status === 'PAUSED'" :icon="Link" :loading="openingLogin" @click="openLogin">打开小红书登录</ElButton>
       <ElButton v-if="lastTask.status === 'PAUSED'" type="primary" :icon="RefreshRight" :loading="restarting" @click="restart">检测登录并继续</ElButton>
@@ -534,6 +534,8 @@ onUnmounted(() => {
 .crawl-grid :deep(.el-select) { width: 100%; }
 .grid-row-1, .grid-row-2, .grid-row-3 { grid-column: span 1; }
 .grid-row-4 { grid-column: 1 / -1; }
+/* 操作账号下拉框固定宽度，不要撑满整行 */
+.account-select { width: 280px; max-width: 100%; }
 .crawl-actions { display: flex; align-items: center; gap: 16px; color: var(--el-text-color-secondary); }
 @media (max-width: 800px) {
   .crawl-grid { grid-template-columns: 1fr; }

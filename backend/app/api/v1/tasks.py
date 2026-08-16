@@ -120,12 +120,16 @@ def crawl(payload:CrawlIn,_:Admin,db:DB):
 def restart(task_id:int,_:Admin,db:DB):
     task=db.get(CrawlTask,task_id)
     if not task: raise HTTPException(404,'任务不存在')
-    if task.status not in ['FAILED','STOPPED','PAUSED']: raise HTTPException(409,'仅失败、已停止或等待登录任务可以继续抓取')
+    if task.status not in ['FAILED','STOPPED','STOP_REQUESTED','PAUSED']: raise HTTPException(409,'仅失败、已停止或等待登录任务可以继续抓取')
     running=db.scalar(select(CrawlTask).where(CrawlTask.id!=task_id,CrawlTask.status.in_(['PENDING','RUNNING','STOP_REQUESTED','SEARCH_DONE','DOWNLOADING','PROCESSING','DEDUPING'])))
     if running: raise HTTPException(409,'TASK_IN_PROGRESS')
     city_code=task.params.get('city')
-    city=db.scalar(select(City).where(City.code==city_code,City.enabled.is_(True)))
-    if not city: raise HTTPException(422,'原任务城市已停用')
+    # city 可选：未传 / 空字符串 = 不限城市。原任务如显式配置城市，城市被停用时报错
+    city = None
+    if city_code:
+        city = db.scalar(select(City).where(City.code == city_code, City.enabled.is_(True)))
+        if not city:
+            raise HTTPException(422, '原任务城市已停用')
     if task.status == 'PAUSED':
         try:
             OpenCLIAdapter(get_settings()).check_login()

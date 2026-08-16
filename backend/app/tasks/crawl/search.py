@@ -159,6 +159,22 @@ def _collect_crawl_results(
             scope = resolve_crawl_scope(db, city, task.params)
             override = "任务参数" if ("keywords" in task.params or "blogger_ids" in task.params) else "配置默认"
             log(db, task.id, "INFO", f"抓取范围生效：keywords={len(scope.keywords)} bloggers={len(scope.bloggers)} (override={override})")
+            # 博主挂在 blogger_cities 多对多表，按当前 scope 里的 blogger.id 批量反查 enabled 城市。
+            # 避免 N+1 查询；也不依赖 Blogger.cities 这个 relationship（模型没定义）。
+            blogger_id_to_cities: dict[int, list[str]] = {}
+            if scope.bloggers:
+                from collections import defaultdict
+                rows = db.execute(
+                    select(BloggerCity.blogger_id, BloggerCity.city_code)
+                    .where(
+                        BloggerCity.blogger_id.in_([b.id for b in scope.bloggers]),
+                        BloggerCity.enabled.is_(True),
+                    )
+                ).all()
+                bucket: dict[int, list[str]] = defaultdict(list)
+                for row in rows:
+                    bucket[row.blogger_id].append(row.city_code)
+                blogger_id_to_cities = dict(bucket)
             recent_filter = task.params.get("recent_filter") or city.recent_filter
             for keyword in scope.keywords:
                 found = throttled_search(f"{city.name} {keyword}", recent_filter)
@@ -201,6 +217,12 @@ def _collect_crawl_results(
                     tagged = dict(item)
                     tagged["_matched_blogger_id"] = blogger.id
                     tagged["_matched_blogger_username"] = blogger.username
+                    # 多城市博主：博主可能挂 nb + hz 两个城市，但当前任务是 nb 调度；
+                    # city.code 直接写 nb 会让 hz 笔记误归 nb。这里用任务城市标注，
+                    # 把"博主挂的真实城市列表"一起带上，方便下游重新核对或纠正。
+                    tagged["_matched_blogger_cities"] = sorted(
+                        blogger_id_to_cities.get(blogger.id, [])
+                    )
                     results.append((city.code, tagged))
     else:
         for city_code in requested_cities:
