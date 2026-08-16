@@ -124,6 +124,41 @@ def download_and_ocr(db, task: CrawlTask, run_token: str, city: str, item: dict,
     if not note_url:
         log(db, task.id, "WARNING", f"跳过笔记：url 为空 title={item.get('title', '')!r}")
         return None
+    # 多城市博主：若博主实际挂在 [hz] 而任务调度城市是 nb，把 city 改成 hz 让 note.city_code 正确归桶。
+    matched_blogger_cities = item.get("_matched_blogger_cities")
+    if matched_blogger_cities and city not in matched_blogger_cities and len(matched_blogger_cities) == 1:
+        corrected = matched_blogger_cities[0]
+        log(
+            db, task.id, "WARNING",
+            f"博主挂城市 {matched_blogger_cities} 与任务城市 {city!r} 不一致，按博主实际城市修正为 {corrected!r}",
+        )
+        city = corrected
+    # 关键词组排除词过滤（抓取后过滤笔记）：命中关键词但内容含排除词的笔记直接跳过
+    matched_kws = item.get("_matched_keywords") or []
+    if matched_kws:
+        from app.models.keyword_group import KeywordGroup, KeywordGroupCity, KeywordGroupWord
+        from app.models.config import City as CityModel
+        # 找挂当前 city 的 enabled 关键词组
+        group_ids = db.scalars(
+            select(KeywordGroupCity.keyword_group_id)
+            .join(KeywordGroup, KeywordGroup.id == KeywordGroupCity.keyword_group_id)
+            .where(KeywordGroupCity.city_code == city, KeywordGroupCity.enabled.is_(True), KeywordGroup.enabled.is_(True))
+        ).all()
+        if group_ids:
+            excluded_words: set[str] = set()
+            for kg_id in group_ids:
+                json_text = db.scalar(select(KeywordGroup.excluded_words_json).where(KeywordGroup.id == kg_id)) or "[]"
+                try:
+                    excluded_words.update(str(w).strip() for w in __import__("json").loads(json_text) if str(w).strip())
+                except Exception:
+                    pass
+            if excluded_words:
+                title = (item.get("title") or "").strip()
+                # 命中排除词？注意：排除词匹配只看 title（这是开放搜索的快速预筛），content 过滤交给后续 OCR 阶段精细化。
+                hit = next((w for w in excluded_words if w in title), None)
+                if hit:
+                    log(db, task.id, "INFO", f"关键词组排除词命中：title 含 '{hit}'，跳过 url={note_url}")
+                    return None
     if not assert_city_code_exists(db, city):
         log(db, task.id, "ERROR", f"city_code 不在 cities 表：{city!r}，跳过该笔记 url={note_url}")
         task.skipped_activities += 1
@@ -233,8 +268,21 @@ def download_and_ocr(db, task: CrawlTask, run_token: str, city: str, item: dict,
     db.commit()
 
     combined = f"标题：{note.title}\n正文：{note.content}\n" + "\n".join(ocr_texts)
-    # now 以 Note.published_at 为基准（如已解析），否则 fallback 到任务开始时间
-    reference_now = note.published_at.replace(tzinfo=None) if note.published_at else started_at.replace(tzinfo=None)
+    # reference_now 必须是"笔记发布当天"对应的本地日期（CST），无年份推断时才正确。
+    # 错误做法：把 aware UTC 直接 .replace(tzinfo=None) 会保留 UTC 时间数值却被当本地解析，
+    # 导致活动日期推断比实际早 8 小时（同一天内），容易把当天/次日误判成过去。
+    # 修正：转 Asia/Shanghai 后归零到 00:00，并向前减 2 天作为推断基准，
+    # 避免"凌晨发布的笔记提到当天活动"被误判成上一年（datetime 比较只看数值不区分凌晨）。
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    _CST = ZoneInfo("Asia/Shanghai")
+    def _to_local_midnight(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(hour=0, minute=0, second=0, microsecond=0)
+        local = value.astimezone(_CST).replace(tzinfo=None)
+        return local.replace(hour=0, minute=0, second=0, microsecond=0)
+    base_day = _to_local_midnight(note.published_at) if note.published_at else _to_local_midnight(started_at)
+    reference_now = base_day - timedelta(days=2)
     return StagedNote(
         note=note,
         combined_text=combined,

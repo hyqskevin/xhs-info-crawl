@@ -228,12 +228,15 @@ class OpenCLIAdapter:
     def search_recent(self,query:str,recent_filter:str='一周内')->list[dict[str,Any]]:
         if not query or not query.strip():
             raise OpenCLIError(f'search_recent: 查询关键词为空（query={query!r}）')
+        # 前端文案 "当天" 对应小红书的 "一天内"（搜索面板无"当天"按钮）
+        _FILTER_ALIAS = {'当天': '一天内'}
+        actual_filter = _FILTER_ALIAS.get(recent_filter, recent_filter)
         self.check_login(); url=f'https://www.xiaohongshu.com/search_result?keyword={quote_plus(query)}'
         try:
             self.run(['browser',self.session,'open',url,'--window','background'])
             self.run(['browser',self.session,'wait','time','2'])
             self._open_filter_panel(); self._click_filter_option('最新')
-            if recent_filter != '不限': self._click_filter_option(recent_filter)
+            if recent_filter != '不限': self._click_filter_option(actual_filter)
             self.run(['browser',self.session,'wait','time','2'])
             script=r"""(() => Array.from(document.querySelectorAll('section')).map(s => { const links=[...s.querySelectorAll('a[href*="/search_result/"]')]; const title=s.querySelector('a[href*="/search_result/"] span')?.textContent?.trim(); const time=[...s.querySelectorAll('div')].map(x=>x.textContent?.trim()).find(x=>/^(\d+分钟前|\d+小时前|\d+天前|\d{2}-\d{2})$/.test(x||'')); return title&&links[0]?{title,url:new URL(links[0].getAttribute('href'),location.origin).href,published_text:time||''}:null }).filter(Boolean))()"""
             previous=0; stagnant=0; items=[]

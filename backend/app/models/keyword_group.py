@@ -26,6 +26,8 @@ class KeywordGroup(Base):
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     enabled: Mapped[bool] = mapped_column(default=True)
+    # 排除词：抓取后命中任一关键词，但内容含任一排除词的笔记会被过滤（JSON list of str）
+    excluded_words_json: Mapped[str | None] = mapped_column(Text, nullable=True, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

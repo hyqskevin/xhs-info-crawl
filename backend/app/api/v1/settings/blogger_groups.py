@@ -8,7 +8,9 @@
 - DELETE /settings/blogger-groups/{group_id}
 - POST   /settings/blogger-groups/batch-delete
 """
-from fastapi import APIRouter, HTTPException, Request
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
@@ -21,6 +23,9 @@ from app.api.v1.settings._deps import (
     BatchDeleteOut,
     DB,
 )
+from app.core.security import get_current_user
+
+LoggedInUser = Annotated[dict, Depends(get_current_user)]
 
 router = APIRouter(tags=["settings"])
 
@@ -59,7 +64,7 @@ def _validate_blogger_ids(db, blogger_ids: list[int]) -> None:
 
 
 @router.get("/settings/blogger-groups")
-def list_blogger_groups(_: Admin = None, db: DB = None) -> dict:
+def list_blogger_groups(_user: LoggedInUser = None, db: DB = None) -> dict:
     groups = db.scalars(select(BloggerGroup).order_by(BloggerGroup.id)).all()
     return {
         "code": 200,

@@ -10,21 +10,43 @@
 - POST   /settings/keyword-groups/batch-delete
 - PATCH  /settings/keyword-groups/{kg_id}
 """
-from fastapi import APIRouter, HTTPException, Request
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
 from app.models.config import City
 from app.models.keyword_group import KeywordGroup, KeywordGroupCity, KeywordGroupWord
 from app.services.audit import record_audit
+from typing import Annotated
+
 from app.api.v1.settings._deps import (
     Admin,
     BatchDeleteIdsIn,
     BatchDeleteOut,
     DB,
 )
+from app.core.security import get_current_user
+
+# 仅要求已登录用户（GET 用），不再 Admin-only
+LoggedInUser = Annotated[dict, Depends(get_current_user)]
 
 router = APIRouter(tags=["settings"])
+
+
+def _parse_excluded_words(json_text: str | None) -> list[str]:
+    if not json_text:
+        return []
+    try:
+        parsed = json.loads(json_text)
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+
+
+def _serialize_excluded_words(words: list[str]) -> str:
+    return json.dumps(sorted(set(str(w).strip() for w in words if str(w).strip())), ensure_ascii=False)
 
 
 class KeywordGroupIn(BaseModel):
@@ -32,6 +54,8 @@ class KeywordGroupIn(BaseModel):
     description: str | None = None
     city_codes: list[str] = Field(default_factory=list)
     words: list[str] = Field(default_factory=list)
+    # 排除词：命中关键词的笔记若内容含任一排除词则被过滤
+    excluded_words: list[str] = Field(default_factory=list)
     enabled: bool = True
 
 
@@ -72,12 +96,19 @@ def _dump_keyword_group(db, kg: KeywordGroup) -> dict:
         "city_codes": city_codes,
         "cities": cities,
         "words": words,
+        "excluded_words": _parse_excluded_words(kg.excluded_words_json),
         "created_at": kg.created_at,
     }
 
 
 @router.get("/settings/keyword-groups")
-def list_keyword_groups(city_code: str | None = None, _: Admin = None, db: DB = None) -> dict:
+def list_keyword_groups(
+    city_code: str | None = None,
+    db: DB = None,
+    _user: LoggedInUser = None,
+) -> dict:
+    # GET 改为仅要求已登录用户（不再 Admin-only），方便 Dashboard 选关键词组；
+    # 写操作（POST/PUT/DELETE/PATCH/batch-delete）仍保持 Admin-only。
     stmt = select(KeywordGroup).order_by(KeywordGroup.id)
     if city_code:
         stmt = stmt.join(
@@ -105,7 +136,12 @@ def create_keyword_group(payload: KeywordGroupIn, _: Admin, db: DB) -> dict:
     if existing is not None:
         raise HTTPException(409, f"关键词组名称 '{payload.name}' 已存在")
 
-    kg = KeywordGroup(name=payload.name, description=payload.description, enabled=payload.enabled)
+    kg = KeywordGroup(
+        name=payload.name,
+        description=payload.description,
+        enabled=payload.enabled,
+        excluded_words_json=_serialize_excluded_words(payload.excluded_words),
+    )
     db.add(kg)
     db.flush()
     for code in dict.fromkeys(payload.city_codes):
@@ -146,6 +182,21 @@ def replace_keyword_group_cities(kg_id: int, payload: KeywordGroupCitiesIn, _: A
         if db.scalar(select(City).where(City.code == code)) is None:
             raise HTTPException(422, f"城市代码 '{code}' 不存在")
         db.add(KeywordGroupCity(keyword_group_id=kg_id, city_code=code, enabled=True))
+    db.commit()
+    db.refresh(kg)
+    return {"code": 200, "message": "success", "data": _dump_keyword_group(db, kg)}
+
+
+class KeywordGroupExcludedWordsIn(BaseModel):
+    excluded_words: list[str] = Field(default_factory=list)
+
+
+@router.put("/settings/keyword-groups/{kg_id}/excluded-words")
+def replace_keyword_group_excluded_words(kg_id: int, payload: KeywordGroupExcludedWordsIn, _: Admin, db: DB) -> dict:
+    kg = db.get(KeywordGroup, kg_id)
+    if kg is None:
+        raise HTTPException(404, "关键词组不存在")
+    kg.excluded_words_json = _serialize_excluded_words(payload.excluded_words)
     db.commit()
     db.refresh(kg)
     return {"code": 200, "message": "success", "data": _dump_keyword_group(db, kg)}
