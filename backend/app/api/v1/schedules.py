@@ -28,7 +28,7 @@ RecentFilter = Literal["不限", "一天内", "一周内", "半年内"]
 
 class ScheduleIn(BaseModel):
     name: str = Field(min_length=1, max_length=128)
-    day_of_week: int = Field(ge=1, le=7)  # ISO，1=周一
+    day_of_week: int = Field(ge=1, le=8)  # ISO 1-7=周一至周日，8=每天
     hour: int = Field(ge=0, le=23)
     minute: int = Field(ge=0, le=59)
     city_code: str = Field(min_length=1, max_length=32)

@@ -147,9 +147,12 @@ async function initialize() {
     const [kgResp, bgResp] = await Promise.all([api.keywordGroups(), api.bloggerGroups()])
     allEnabledKeywordGroups.value = (kgResp.data.data?.items || []).filter((g: any) => g.enabled)
     allEnabledBloggerGroups.value = (bgResp.data.data?.items || []).filter((g: any) => g.enabled)
+    // 城市默认空=不限城市，关键词组下拉显示全部启用组
+    cityKeywordGroups.value = [...allEnabledKeywordGroups.value]
   } catch {
     allEnabledKeywordGroups.value = []
     allEnabledBloggerGroups.value = []
+    cityKeywordGroups.value = []
   }
   try {
     const accountResponse = await api.xhsAccounts()
@@ -467,11 +470,11 @@ onUnmounted(() => {
         :icon="RefreshRight"
         :loading="restarting"
         :disabled="lastTask.status === 'STOP_REQUESTED'"
-        @click="restart"
+        @click="restart()"
       >
         {{ lastTask.status === 'STOP_REQUESTED' ? '正在停止…' : lastTask.status === 'PAUSED' ? '检测登录并继续' : '继续抓取' }}
       </ElButton>
-      <ElButton v-if="['FAILED','PAUSED'].includes(lastTask.status)" type="danger" :loading="stopping" @click="finish">结束抓取</ElButton>
+      <ElButton v-if="['FAILED','PAUSED'].includes(lastTask.status)" type="danger" :loading="stopping" @click="finish()">结束抓取</ElButton>
       <ElButton v-if="lastTask.status === 'PAUSED'" :icon="Link" :loading="openingLogin" @click="openLogin">打开小红书登录</ElButton>
       <ElButton v-if="['PENDING','RUNNING','STOP_REQUESTED'].includes(lastTask.status)" type="danger" :loading="stopping || lastTask.status === 'STOP_REQUESTED'" :disabled="lastTask.status === 'STOP_REQUESTED'" @click="stop">停止抓取</ElButton>
     </ElCard>
@@ -580,8 +583,8 @@ onUnmounted(() => {
 .crawl-grid :deep(.el-select) { width: 100%; }
 .grid-row-1, .grid-row-2, .grid-row-3 { grid-column: span 1; }
 .grid-row-4 { grid-column: 1 / -1; }
-/* 操作账号下拉框固定宽度，不要撑满整行 */
-.account-select { width: 280px; max-width: 100%; }
+/* 操作账号下拉框固定宽度，不要撑满整行（.el-select.account-select 组合类特异性高于 .crawl-grid :deep(.el-select) 的 100%） */
+.crawl-grid :deep(.el-select.account-select) { width: 280px; max-width: 100%; }
 .crawl-actions { display: flex; align-items: center; gap: 16px; color: var(--el-text-color-secondary); }
 @media (max-width: 800px) {
   .crawl-grid { grid-template-columns: 1fr; }
