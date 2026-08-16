@@ -171,7 +171,15 @@ async function handleOpenWeb() {
       port = '8000'
     }
   }
-  window.open(`http://127.0.0.1:${port}`, '_blank')
+  const url = `http://127.0.0.1:${port}`
+  // 用 PyWebView 注入的 API 在系统默认浏览器打开,
+  // 避免 PyWebView 窗口跳转后无法返回
+  const pywebview = (window as unknown as { pywebview?: { api?: { open_url: (u: string) => void } } }).pywebview
+  if (pywebview?.api?.open_url) {
+    pywebview.api.open_url(url)
+  } else {
+    window.open(url, '_blank')
+  }
 }
 
 function handleExit() {
@@ -182,6 +190,18 @@ function handleExit() {
   } else {
     // 无 PyWebView 时(开发模式)只停止服务
     handleStopAll()
+  }
+}
+
+function handleOpenLogDir() {
+  // 通过 PyWebView 注入的 API 在 Finder/Explorer 打开日志目录
+  const pywebview = (window as unknown as { pywebview?: { api?: { open_dir: (p: string) => Promise<string> } } }).pywebview
+  if (pywebview?.api?.open_dir) {
+    pywebview.api.open_dir('data/logs').catch((err: unknown) => {
+      ElMessage.error(`打开日志目录失败: ${err}`)
+    })
+  } else {
+    ElMessage.warning('该功能仅在桌面启动器中可用')
   }
 }
 
@@ -230,7 +250,7 @@ onUnmounted(() => {
         @test="handleOcrTest"
       />
 
-      <LogViewer :lines="logLines" @refresh="refreshLogs" @open-dir="() => {}" />
+      <LogViewer :lines="logLines" @refresh="refreshLogs" @open-dir="handleOpenLogDir" />
     </main>
 
     <footer class="bottom-action-bar" data-test="bottom-action-bar">

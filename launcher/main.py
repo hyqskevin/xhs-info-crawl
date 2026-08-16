@@ -106,12 +106,50 @@ def main():
             # 开发模式:用占位 HTML
             url = f"data:text/html,<html><body><h1>启动器 UI 未构建</h1><p>请先 cd launcher/ui && npm run build</p><p>状态服务: http://127.0.0.1:{status_port}</p></body></html>"
 
+        # 暴露给前端的 API:
+        # - open_url(url):用系统默认浏览器打开 URL
+        # - open_dir(path):在 Finder/Explorer 打开本地路径
+        # - exit():退出启动器
+        class Api:
+            def __init__(self, project_root: Path):
+                self._project_root = project_root
+
+            def open_url(self, url: str) -> None:
+                import webbrowser
+                webbrowser.open(url)
+
+            def open_dir(self, path: str) -> str:
+                """在系统文件管理器(Finder/Explorer)中打开目录。返回绝对路径。"""
+                import subprocess
+                target = Path(path)
+                if not target.is_absolute():
+                    target = self._project_root / path
+                target = target.resolve()
+                if not target.exists():
+                    raise FileNotFoundError(f"路径不存在: {target}")
+                if sys.platform == "darwin":
+                    subprocess.Popen(["open", str(target)])
+                elif sys.platform.startswith("win"):
+                    subprocess.Popen(["explorer", str(target)])
+                else:
+                    subprocess.Popen(["xdg-open", str(target)])
+                return str(target)
+
+            def exit(self) -> None:
+                import webview as _wv
+                if _wv.windows:
+                    for w in _wv.windows:
+                        w.destroy()
+
+        api = Api(project_root=project_root)
+
         webview.create_window(
             "小红书活动信息抓取系统",
             url,
             width=900,
             height=700,
             min_size=(720, 600),
+            js_api=api,
         )
         webview.start()
     finally:
