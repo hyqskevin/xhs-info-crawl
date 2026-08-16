@@ -1,11 +1,14 @@
 /** 菜单 ↔ 权限码静态映射。
  *
- * 与后端 Permission.code / require_permission 一致。`*` 通配视为具备所有权限码。
+ * 权限码统一命名：`<资源>:<动作>`；动作细分 view（只读）与 action（写/执行）。
+ *
+ * - view 权限：进入页面/查看列表所需
+ * - action 权限：执行按钮（保存/删除/触发/审核等）所需
  *
  * 顶级菜单可见 = 该顶级菜单下任一子项可见；若顶级自身指定了 `topLevelPermission` 则要求该码存在。
  * 子项不可见 = 该子项声明的 permission 用户不具备。
  *
- * 关联 TODO: navbar 按权限过滤（2026-08-13）
+ * 与后端 Permission.code / require_permission 一致；`*` 通配视为具备所有权限码。
  */
 export interface SubItem {
   /** Element Plus `index` 值（路由或带 query 的路径） */
@@ -31,33 +34,33 @@ export interface TopItem {
 
 /** null = 对所有已登录用户可见 */
 export const NAV_ITEMS: TopItem[] = [
-  { index: '/dashboard', label: '仪表盘', hasChildren: false, topLevelPermission: null },
-  { index: '/activities', label: '活动管理', hasChildren: false, topLevelPermission: null },
-  { index: '/duplicates', label: '去重审核', hasChildren: false, topLevelPermission: 'duplicates:resolve' },
-  { index: '/tasks', label: '任务日志', hasChildren: false, topLevelPermission: 'tasks:crawl' },
+  { index: '/dashboard', label: '仪表盘', hasChildren: false, topLevelPermission: 'tasks:read' },
+  { index: '/activities', label: '活动管理', hasChildren: false, topLevelPermission: 'activities:read' },
+  { index: '/duplicates', label: '去重审核', hasChildren: false, topLevelPermission: 'duplicates:read' },
+  { index: '/tasks', label: '任务日志', hasChildren: false, topLevelPermission: 'tasks:read' },
   {
     index: '/schedules',
     label: '定时任务',
     hasChildren: true,
-    topLevelPermission: 'tasks:crawl',
+    topLevelPermission: 'tasks:read',
     children: [
-      { index: '/schedules?tab=schedules', label: '定时任务列表', permission: 'tasks:crawl' },
-      { index: '/schedules?tab=batch', label: '抓取批次配置', permission: 'settings:write' },
+      { index: '/schedules?tab=schedules', label: '定时任务列表', permission: 'tasks:read' },
+      { index: '/schedules?tab=batch', label: '抓取批次配置', permission: 'settings:read' },
     ],
   },
-  { index: '/reports', label: '周报管理', hasChildren: false, topLevelPermission: 'reports:generate' },
+  { index: '/reports', label: '周报管理', hasChildren: false, topLevelPermission: 'reports:read' },
   {
     index: '/settings',
     label: '配置中心',
     hasChildren: true,
-    topLevelPermission: 'settings:write',
+    topLevelPermission: 'settings:read',
     children: [
-      { index: '/settings?tab=cities', label: '城市抓取配置', permission: 'settings:write' },
-      { index: '/settings?tab=bloggers', label: '博主白名单', permission: 'settings:write' },
-      { index: '/settings?tab=keyword-groups', label: '关键词组', permission: 'settings:write' },
-      { index: '/settings?tab=blogger-groups', label: '博主组', permission: 'settings:write' },
-      { index: '/settings?tab=xhs-accounts', label: '账号配置', permission: 'settings:write' },
-      { index: '/settings?tab=system-config', label: '系统配置', permission: 'settings:write' },
+      { index: '/settings?tab=cities', label: '城市抓取配置', permission: 'settings:read' },
+      { index: '/settings?tab=bloggers', label: '博主白名单', permission: 'settings:read' },
+      { index: '/settings?tab=keyword-groups', label: '关键词组', permission: 'settings:read' },
+      { index: '/settings?tab=blogger-groups', label: '博主组', permission: 'settings:read' },
+      { index: '/settings?tab=xhs-accounts', label: '账号配置', permission: 'settings:read' },
+      { index: '/settings?tab=system-config', label: '系统配置', permission: 'settings:read' },
     ],
   },
   {
@@ -68,7 +71,7 @@ export const NAV_ITEMS: TopItem[] = [
     children: [
       { index: '/system-admin?tab=accounts', label: '操作账号', permission: 'users:manage' },
       { index: '/system-admin?tab=groups', label: '账号分组', permission: 'users:read' },
-      { index: '/system-admin?tab=permissions', label: '权限配置', permission: 'users:read' },
+      { index: '/system-admin?tab=permissions', label: '权限配置', permission: 'users:manage' },
       { index: '/system-admin?tab=audit', label: '操作日志', permission: 'users:manage' },
     ],
   },
