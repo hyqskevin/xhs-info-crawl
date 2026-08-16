@@ -20,7 +20,38 @@ class Settings(BaseSettings):
     api_port: int = 8000
     web_host: str = "127.0.0.1"
     web_port: int = 5173
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    # CORS origin 列表(逗号分隔)。默认包含 5173-5199 范围内所有 host。
+    # 启动器启动后会通过 .env 注入 WEB_PORT,即使端口被推到范围外也能命中。
+    # 关联 spec: docs/superpowers/specs/2026-08-16-packaged-frontend-static-serving-design.md
+    cors_origins: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:5174,http://127.0.0.1:5174,"
+        "http://localhost:5175,http://127.0.0.1:5175,"
+        "http://localhost:5176,http://127.0.0.1:5176,"
+        "http://localhost:5177,http://127.0.0.1:5177,"
+        "http://localhost:5178,http://127.0.0.1:5178,"
+        "http://localhost:5179,http://127.0.0.1:5179,"
+        "http://localhost:5180,http://127.0.0.1:5180,"
+        "http://localhost:5181,http://127.0.0.1:5181,"
+        "http://localhost:5182,http://127.0.0.1:5182,"
+        "http://localhost:5183,http://127.0.0.1:5183,"
+        "http://localhost:5184,http://127.0.0.1:5184,"
+        "http://localhost:5185,http://127.0.0.1:5185,"
+        "http://localhost:5186,http://127.0.0.1:5186,"
+        "http://localhost:5187,http://127.0.0.1:5187,"
+        "http://localhost:5188,http://127.0.0.1:5188,"
+        "http://localhost:5189,http://127.0.0.1:5189,"
+        "http://localhost:5190,http://127.0.0.1:5190,"
+        "http://localhost:5191,http://127.0.0.1:5191,"
+        "http://localhost:5192,http://127.0.0.1:5192,"
+        "http://localhost:5193,http://127.0.0.1:5193,"
+        "http://localhost:5194,http://127.0.0.1:5194,"
+        "http://localhost:5195,http://127.0.0.1:5195,"
+        "http://localhost:5196,http://127.0.0.1:5196,"
+        "http://localhost:5197,http://127.0.0.1:5197,"
+        "http://localhost:5198,http://127.0.0.1:5198,"
+        "http://localhost:5199,http://127.0.0.1:5199"
+    )
     secret_key: str = "change-me-in-local-env"
     jwt_expire_hours: int = 24
     project_root: Path = Path(__file__).resolve().parents[3]

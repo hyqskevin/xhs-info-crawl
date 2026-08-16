@@ -1,4 +1,4 @@
-"""子进程管理:启动/停止/重启 API/Worker/Beat 进程。
+"""子进程管理:启动/停止/重启 API/Worker/Beat/Web 进程。
 
 关联 spec: docs/superpowers/specs/2026-08-10-one-click-packaging-design.md § 2.1-2.2
 """
@@ -12,11 +12,16 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-SERVICE_NAMES = ("api", "worker", "beat")
+SERVICE_NAMES = ("api", "worker", "beat", "web")
 
 
 class ProcessManager:
-    """管理 API/Worker/Beat 三个子进程。"""
+    """管理 API/Worker/Beat/Web 四个子进程。
+
+    web 服务是生产模式下的前端静态服务(等价于 vite preview),
+    仅在 launcher 启动时启动;开发模式下 vite dev 已在 5173 占用端口,
+    launcher 不会额外起 web 进程。
+    """
 
     def __init__(self, project_root: Path, venv_python: Path):
         self.project_root = project_root
@@ -31,17 +36,22 @@ class ProcessManager:
         """构建默认的服务启动命令。"""
         python = str(self.venv_python)
         backend_dir = self.project_root / "app" / "backend"
-        # 从 .env 读 API_PORT(launcher.bootstrap_env 会写入),
-        # 默认 8000 防止 .env 不存在时崩
-        api_port = self._read_api_port(default=8000)
+        # 从 .env 读 API_PORT 和 WEB_PORT(launcher.bootstrap_env 会写入),
+        # 默认 8000 / 5173 防止 .env 不存在时崩
+        api_port = self._read_env_int("API_PORT", default=8000)
+        web_port = self._read_env_int("WEB_PORT", default=5173)
+        frontend_dist = self.project_root / "app" / "frontend" / "dist"
         return {
             "api": [python, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(api_port)],
             "worker": [python, "-m", "celery", "-A", "app.tasks.crawl_task", "worker", "--loglevel=info"],
             "beat": [python, "-m", "celery", "-A", "app.tasks.crawl_task", "beat", "--loglevel=info"],
+            # web 服务:等价 vite preview 行为,python -m http.server 提供静态文件
+            # bind 127.0.0.1 仅本机访问;directory 指向 frontend/dist
+            "web": [python, "-m", "http.server", str(web_port), "--bind", "127.0.0.1", "--directory", str(frontend_dist)],
         }
 
-    def _read_api_port(self, default: int = 8000) -> int:
-        """从 .env 读 API_PORT,找不到则用 default。"""
+    def _read_env_int(self, key: str, default: int) -> int:
+        """从 .env 读 int 值,找不到或解析失败则用 default。"""
         env_path = self.project_root / ".env"
         if not env_path.exists():
             return default
@@ -49,8 +59,8 @@ class ProcessManager:
             line = line.strip()
             if line.startswith("#") or "=" not in line:
                 continue
-            key, _, value = line.partition("=")
-            if key.strip() == "API_PORT":
+            k, _, value = line.partition("=")
+            if k.strip() == key:
                 try:
                     return int(value.strip())
                 except ValueError:
@@ -143,7 +153,7 @@ class ProcessManager:
         return result
 
     def get_logs_tail(self, lines: int = 50) -> list[str]:
-        """获取最近日志(三个服务合并)。"""
+        """获取最近日志(所有服务合并)。"""
         all_lines = []
         for name in SERVICE_NAMES:
             log_file = self._logs_dir / f"{name}.log"

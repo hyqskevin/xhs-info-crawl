@@ -32,11 +32,13 @@ class StatusServer:
         project_root: Path,
         venv_python: Path,
         api_base_url: str = "http://127.0.0.1:8000",
+        web_base_url: str = "http://127.0.0.1:5173",
     ):
         self.process_manager = process_manager
         self.project_root = project_root
         self.venv_python = venv_python
         self.api_base_url = api_base_url
+        self.web_base_url = web_base_url
         self._install_thread: Optional[threading.Thread] = None
         self._install_progress: dict = {"active": False, "percent": 0, "message": ""}
         self.app = self._create_app()
@@ -61,6 +63,16 @@ class StatusServer:
             from urllib.parse import urlparse
             parsed = urlparse(self.api_base_url)
             return {"port": parsed.port or 8000}
+
+        @app.get("/web-port")
+        def get_web_port():
+            """返回前端静态服务实际监听的端口(用于启动器 UI 打开业务前端页面)。
+
+            与 /api-port 对称:api-port 指向后端 API,web-port 指向前端页面所在端口。
+            """
+            from urllib.parse import urlparse
+            parsed = urlparse(self.web_base_url)
+            return {"port": parsed.port or 5173, "url": self.web_base_url}
 
         @app.post("/service/{name}/restart")
         def restart_service(name: str):

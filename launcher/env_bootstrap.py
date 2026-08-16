@@ -102,3 +102,46 @@ def update_env_value(env_path: Path, key: str, value: str) -> None:
     if not found:
         new_lines.append(f"{key}={value}")
     env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+
+def _read_env_value(env_path: Path, key: str, default: str) -> str:
+    """从 .env 读取某个 key 的字符串值,缺失则返回 default。"""
+    if not env_path.exists():
+        return default
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        if k.strip() == key:
+            return v.strip()
+    return default
+
+
+def build_api_base_url(env_path: Path) -> str:
+    """从 .env 拼出后端 API base URL:http://<API_HOST>:<API_PORT>。
+
+    缺失 key 时用默认 127.0.0.1:8000,而不是抛异常,保证启动器在 .env 未就绪时也能拿到合理 URL。
+    """
+    host = _read_env_value(env_path, "API_HOST", "127.0.0.1")
+    port = _read_env_value(env_path, "API_PORT", "8000")
+    return f"http://{host}:{port}"
+
+
+def build_cors_origins(env_path: Path) -> list[str]:
+    """从 .env 的 WEB_PORT 推导允许的 CORS origin 列表。
+
+    默认包含 5173-5199 范围内所有 host(127.0.0.1 + localhost),保证端口自适应后前端仍能 fetch。
+    .env 中的 WEB_PORT 即使落在 5173-5199 之外也会被加入(防止端口冲突跳出去)。
+    """
+    host = _read_env_value(env_path, "API_HOST", "127.0.0.1")
+    web_port = _read_env_value(env_path, "WEB_PORT", "5173")
+    origins: set[str] = set()
+    # 默认范围 5173-5199:同时支持 127.0.0.1 和 localhost
+    for port in range(5173, 5200):
+        origins.add(f"http://127.0.0.1:{port}")
+        origins.add(f"http://localhost:{port}")
+    # .env 里的 WEB_PORT 即使在范围外也加入
+    origins.add(f"http://{host}:{web_port}")
+    origins.add(f"http://localhost:{web_port}")
+    return sorted(origins)

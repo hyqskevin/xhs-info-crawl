@@ -113,6 +113,18 @@ if (Test-Path $IndexHtml) {
         | Set-Content -Path $IndexHtml -Encoding UTF8 -NoNewline
 }
 
+# 修复 frontend/dist 的绝对路径为相对路径(launcher 用 python -m http.server
+# 暴露 frontend/dist,浏览器通过 http://127.0.0.1:<web_port>/ 访问,
+# 相对路径才能正确加载 assets)
+$FrontendIndex = Join-Path $PkgDir "app\frontend\dist\index.html"
+if (Test-Path $FrontendIndex) {
+    Write-Host "==> 修复 frontend/dist/index.html 资源路径为相对路径..."
+    (Get-Content $FrontendIndex -Raw) `
+        -replace 'src="/assets/', 'src="./assets/' `
+        -replace 'href="/assets/', 'href="./assets/' `
+        | Set-Content -Path $FrontendIndex -Encoding UTF8 -NoNewline
+}
+
 # 6. 复制 .env.example
 Copy-Item (Join-Path $RootDir ".env.example") (Join-Path $PkgDir ".env.example")
 

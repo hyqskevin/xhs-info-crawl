@@ -158,20 +158,21 @@ async function handleOcrTest() {
 }
 
 async function handleOpenWeb() {
-  // 优先读 URL query (?apiPort=xxx),
-  // 否则调状态服务 /api-port 拿真实端口(避开 hardcode 8000)
-  const queryPort = new URLSearchParams(window.location.search).get('apiPort')
+  // 优先读 URL query (?webPort=xxx),否则调状态服务 /web-port 拿前端静态服务端口
+  // 注意:不能跳 API 端口——API 没有前端页面,跳过去只会看到 404。
+  // 关联 spec: docs/superpowers/specs/2026-08-16-packaged-frontend-static-serving-design.md
+  const queryPort = new URLSearchParams(window.location.search).get('webPort')
   let port = queryPort
   if (!port) {
     try {
-      const resp = await fetch(`${getBaseUrl()}/api-port`)
+      const resp = await fetch(`${getBaseUrl()}/web-port`)
       const data = await resp.json()
-      port = String(data.port || 8000)
+      port = String(data.port || 5173)
     } catch (e) {
-      port = '8000'
+      port = '5173'
     }
   }
-  const url = `http://127.0.0.1:${port}`
+  const url = `http://127.0.0.1:${port}/`
   // 用 PyWebView 注入的 API 在系统默认浏览器打开,
   // 避免 PyWebView 窗口跳转后无法返回
   const pywebview = (window as unknown as { pywebview?: { api?: { open_url: (u: string) => void } } }).pywebview

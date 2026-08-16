@@ -98,6 +98,14 @@ if [ -f "$PKG_DIR/launcher/ui/dist/index.html" ]; then
         "$PKG_DIR/launcher/ui/dist/index.html"
 fi
 
+# 修复 frontend/dist 的绝对路径(因为 launcher 用 python -m http.server 提供静态文件,
+# 浏览器通过 http://127.0.0.1:<web_port>/ 访问,相对路径才有效)
+if [ -f "$PKG_DIR/app/frontend/dist/index.html" ]; then
+    echo "==> 修复 frontend/dist/index.html 资源路径为相对路径..."
+    sed -i '' 's|src="/assets/|src="./assets/|g; s|href="/assets/|href="./assets/|g' \
+        "$PKG_DIR/app/frontend/dist/index.html"
+fi
+
 # 6. 复制 .env.example
 cp $ROOT_DIR/.env.example $PKG_DIR/.env.example
 
