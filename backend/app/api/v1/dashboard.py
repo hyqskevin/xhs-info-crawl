@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from fastapi import APIRouter,Depends
-from sqlalchemy import func,select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_current_user
@@ -49,11 +49,36 @@ def analytics(_:Annotated[dict,Depends(get_current_user)],db:Annotated[Session,D
     return {'code':200,'message':'success','data':{'recent_tasks':recent_tasks,'status_counts':status_counts,'schedules':schedules}}
 @router.get('/summary')
 def summary(_:Annotated[dict,Depends(get_current_user)],db:Annotated[Session,Depends(get_db)]):
-    last=db.scalar(select(CrawlTask).order_by(CrawlTask.id.desc()).limit(1))
+    # last_task：优先展示"正在抓取"的任务（RUNNING/PENDING/...），再按最近启动时间排序。
+    # 这样正在抓取的任务不会被 id 更大但已停止的任务（或 started_at 为空的历史任务）盖掉。
+    _ACTIVE = ['PENDING','RUNNING','STOP_REQUESTED','SEARCH_DONE','DOWNLOADING','PROCESSING','DEDUPING']
+    active_rank = case(
+        *[(CrawlTask.status == s, 0) for s in _ACTIVE],
+        else_=1,
+    )
+    last = db.scalar(
+        select(CrawlTask)
+        .order_by(active_rank, CrawlTask.started_at.desc().nullslast(), CrawlTask.id.desc())
+        .limit(1)
+    )
     last_task=None
     if last:
         progress=round((last.extracted_notes+last.failed_notes+last.skipped_notes)*100/last.total_notes,1) if last.total_notes else None
         last_task={'id':last.id,'status':last.status,'total_notes':last.total_notes,'downloaded_notes':last.downloaded_notes,'ocr_notes':last.ocr_notes,'extracted_notes':last.extracted_notes,'success_notes':last.success_notes,'failed_notes':last.failed_notes,'skipped_notes':last.skipped_notes,'skipped_activities':last.skipped_activities,'current_stage':last.current_stage,'current_note':last.current_note,'error_message':last.error_message,'progress_percent':progress}
+    # resumable_task：最近一个可继续抓取的任务（FAILED/STOPPED/STOP_REQUESTED/PAUSED）。
+    # 当 last_task 本身正在运行（RUNNING/PENDING/...）时，单独展示给用户，避免被 RUNNING 任务覆盖。
+    # 注意：STOP_REQUESTED 仍是中间态，按钮会被前端 disabled；这里仍然返回以方便前端拿到 task id。
+    resumable_task=None
+    if not last or last.status not in ["FAILED", "STOPPED", "STOP_REQUESTED", "PAUSED"]:
+        resumable_row = db.scalar(
+            select(CrawlTask)
+            .where(CrawlTask.status.in_(["FAILED", "STOPPED", "STOP_REQUESTED", "PAUSED"]))
+            .order_by(CrawlTask.id.desc())
+            .limit(1)
+        )
+        if resumable_row:
+            rprogress = round((resumable_row.extracted_notes + resumable_row.failed_notes + resumable_row.skipped_notes) * 100 / resumable_row.total_notes, 1) if resumable_row.total_notes else None
+            resumable_task = {'id': resumable_row.id, 'status': resumable_row.status, 'total_notes': resumable_row.total_notes, 'downloaded_notes': resumable_row.downloaded_notes, 'ocr_notes': resumable_row.ocr_notes, 'extracted_notes': resumable_row.extracted_notes, 'success_notes': resumable_row.success_notes, 'failed_notes': resumable_row.failed_notes, 'skipped_notes': resumable_row.skipped_notes, 'skipped_activities': resumable_row.skipped_activities, 'current_stage': resumable_row.current_stage, 'current_note': resumable_row.current_note, 'error_message': resumable_row.error_message, 'progress_percent': rprogress}
     week_start = _iso_week_start_utc_naive()
     recent_logs = [
         {'id': log.id, 'task_id': log.task_id, 'level': log.level, 'message': log.message, 'created_at': log.created_at}
@@ -72,4 +97,4 @@ def summary(_:Annotated[dict,Depends(get_current_user)],db:Annotated[Session,Dep
             note_b_alias.c.review_status.notin_(['DELETED', 'MERGED']),
         )
     ) or 0
-    return {'code':200,'message':'success','data':{'weekly_notes_count':db.scalar(select(func.count()).select_from(Note).where(Note.review_status.notin_(['DELETED','MERGED']), Note.created_at >= week_start)) or 0,'weekly_activities_count':db.scalar(select(func.count()).select_from(Activity).where(Activity.deleted_at.is_(None), Activity.created_at >= week_start)) or 0,'pending_duplicates':pending_dup_total,'pending_review':db.scalar(select(func.count()).select_from(Note).where(Note.review_status=='PENDING')) or 0,'last_task':last_task,'recent_logs':recent_logs}}
+    return {'code':200,'message':'success','data':{'weekly_notes_count':db.scalar(select(func.count()).select_from(Note).where(Note.review_status.notin_(['DELETED','MERGED']), Note.created_at >= week_start)) or 0,'weekly_activities_count':db.scalar(select(func.count()).select_from(Activity).where(Activity.deleted_at.is_(None), Activity.created_at >= week_start)) or 0,'pending_duplicates':pending_dup_total,'pending_review':db.scalar(select(func.count()).select_from(Note).where(Note.review_status=='PENDING')) or 0,'last_task':last_task,'resumable_task':resumable_task,'recent_logs':recent_logs}}

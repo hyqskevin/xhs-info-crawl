@@ -18,6 +18,7 @@ const restarting = ref(false)
 const openingLogin = ref(false)
 const stopping = ref(false)
 const lastTask = ref<any>(null)
+const resumableTask = ref<any>(null)
 const summary = ref<any>({ weekly_notes_count: 0, weekly_activities_count: 0, pending_duplicates: 0, recent_logs: [] })
 const analytics = ref<any>({ recent_tasks: [], status_counts: {}, schedules: [] })
 const diagnostics = ref<any>({
@@ -201,6 +202,7 @@ async function loadLatestTask() {
   try {
     const data = (await api.dashboard()).data.data
     lastTask.value = data.last_task
+    resumableTask.value = data.resumable_task || null
     summary.value = { weekly_notes_count: 0, weekly_activities_count: 0, pending_duplicates: 0, recent_logs: [], ...data }
   } catch { /* health card reports service errors */ }
 }
@@ -210,6 +212,7 @@ async function pollLastTask() {
   try {
     const data = (await api.dashboard()).data.data
     lastTask.value = data.last_task
+    resumableTask.value = data.resumable_task || null
   } catch { /* health card reports service errors */ }
 }
 
@@ -272,12 +275,13 @@ async function start() {
   }
 }
 
-async function restart() {
-  if (!lastTask.value) return
+async function restart(taskOverride?: any) {
+  const target = taskOverride || lastTask.value
+  if (!target) return
   restarting.value = true
   try {
-    await api.restartTask(lastTask.value.id)
-    ElMessage.success(lastTask.value.status === 'PAUSED' ? '登录状态正常，任务已继续抓取' : '任务已继续抓取')
+    await api.restartTask(target.id)
+    ElMessage.success(target.status === 'PAUSED' ? '登录状态正常，任务已继续抓取' : '任务已继续抓取')
     await loadLatestTask()
   } catch (error:any) {
     ElMessage.error(error.response?.data?.message === 'AUTH_REQUIRED' ? '尚未检测到小红书登录状态，请登录后重试' : error.response?.data?.message || error.response?.data?.detail || '任务续跑失败')
@@ -307,12 +311,13 @@ async function stop() {
   } finally { stopping.value = false }
 }
 
-async function finish() {
-  if (!lastTask.value) return
-  await ElMessageBox.confirm('此任务已失败。结束抓取将强制清理残留状态并关闭 Browser 标签，已抓取数据会保留。确认结束？', '结束抓取', { type: 'warning' })
+async function finish(taskOverride?: any) {
+  const target = taskOverride || lastTask.value
+  if (!target) return
+  await ElMessageBox.confirm(`此任务（#${target.id}）已失败。结束抓取将强制清理残留状态并关闭 Browser 标签，已抓取数据会保留。确认结束？`, '结束抓取', { type: 'warning' })
   stopping.value = true
   try {
-    await api.stopTask(lastTask.value.id)
+    await api.stopTask(target.id)
     ElMessage.success('抓取已结束')
     await loadLatestTask()
   } catch (error:any) {
@@ -455,11 +460,52 @@ onUnmounted(() => {
       </div>
       <ElProgress :percentage="lastTask.progress_percent || 0" :indeterminate="lastTask.progress_percent == null && ['PENDING','RUNNING'].includes(lastTask.status)" />
       <ElAlert v-if="shouldShowLastTaskError" :title="lastTask.error_message" type="error" :closable="false" />
-      <ElButton v-if="['FAILED','STOPPED','STOP_REQUESTED'].includes(lastTask.status)" type="primary" :icon="RefreshRight" :loading="restarting" @click="restart">继续抓取</ElButton>
+      <!-- 继续抓取：后端允许 FAILED/STOPPED/STOP_REQUESTED/PAUSED；STOP_REQUESTED 是中间态，按钮 disabled 提示稍候 -->
+      <ElButton
+        v-if="['FAILED','STOPPED','STOP_REQUESTED','PAUSED'].includes(lastTask.status)"
+        type="primary"
+        :icon="RefreshRight"
+        :loading="restarting"
+        :disabled="lastTask.status === 'STOP_REQUESTED'"
+        @click="restart"
+      >
+        {{ lastTask.status === 'STOP_REQUESTED' ? '正在停止…' : lastTask.status === 'PAUSED' ? '检测登录并继续' : '继续抓取' }}
+      </ElButton>
       <ElButton v-if="['FAILED','PAUSED'].includes(lastTask.status)" type="danger" :loading="stopping" @click="finish">结束抓取</ElButton>
       <ElButton v-if="lastTask.status === 'PAUSED'" :icon="Link" :loading="openingLogin" @click="openLogin">打开小红书登录</ElButton>
-      <ElButton v-if="lastTask.status === 'PAUSED'" type="primary" :icon="RefreshRight" :loading="restarting" @click="restart">检测登录并继续</ElButton>
       <ElButton v-if="['PENDING','RUNNING','STOP_REQUESTED'].includes(lastTask.status)" type="danger" :loading="stopping || lastTask.status === 'STOP_REQUESTED'" :disabled="lastTask.status === 'STOP_REQUESTED'" @click="stop">停止抓取</ElButton>
+    </ElCard>
+
+    <!-- 可继续抓取的任务：当 lastTask 本身正在运行时，单独展示最近一个 FAILED/STOPPED/PAUSED 任务，方便用户继续 -->
+    <ElCard v-if="resumableTask && resumableTask.id !== lastTask?.id" shadow="never" class="progress-card resumable-card">
+      <template #header>
+        <div class="card-title">
+          <strong>可继续抓取的任务 #{{ resumableTask.id }}</strong>
+          <ElTag :type="resumableTask.status === 'FAILED' ? 'danger' : resumableTask.status === 'PAUSED' ? 'warning' : 'info'">{{ statusLabels[resumableTask.status] || resumableTask.status }}</ElTag>
+          <span class="hint">（最近一次中止的任务，task #{{ resumableTask.id }}）</span>
+        </div>
+      </template>
+      <div class="progress-summary">
+        <div><span>当前阶段</span><strong>{{ stageLabels[resumableTask.current_stage] || '未执行' }}</strong></div>
+        <div><span>已下载</span><strong>{{ resumableTask.downloaded_notes }}</strong></div>
+        <div><span>OCR 完成</span><strong>{{ resumableTask.ocr_notes }}</strong></div>
+        <div><span>提取完成</span><strong>{{ resumableTask.extracted_notes }}</strong></div>
+        <div><span>失败</span><strong>{{ resumableTask.failed_notes }}</strong></div>
+        <div><span>已跳过</span><strong>{{ resumableTask.skipped_notes || 0 }}</strong></div>
+      </div>
+      <ElProgress :percentage="resumableTask.progress_percent || 0" />
+      <ElAlert v-if="resumableTask.error_message" :title="resumableTask.error_message" type="error" :closable="false" />
+      <ElButton
+        type="primary"
+        :icon="RefreshRight"
+        :loading="restarting"
+        :disabled="resumableTask.status === 'STOP_REQUESTED'"
+        @click="restart(resumableTask)"
+      >
+        {{ resumableTask.status === 'STOP_REQUESTED' ? '正在停止…' : resumableTask.status === 'PAUSED' ? '检测登录并继续' : '继续抓取' }}
+      </ElButton>
+      <ElButton v-if="['FAILED','PAUSED'].includes(resumableTask.status)" type="danger" :loading="stopping" @click="finish(resumableTask)">结束抓取</ElButton>
+      <ElButton v-if="resumableTask.status === 'PAUSED'" :icon="Link" :loading="openingLogin" @click="openLogin">打开小红书登录</ElButton>
     </ElCard>
 
     <ElCard shadow="never" class="schedule-status-card">
