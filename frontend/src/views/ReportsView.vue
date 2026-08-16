@@ -17,8 +17,37 @@ async function renderPreview() {
 watch(preview, renderPreview)
 const dialog = ref(false)
 const generating = ref(false)
-const form = reactive<{ weekDate: Date | null; city: string }>({ weekDate: new Date(), city: '' })
+const form = reactive<{
+  weekDate: Date | null
+  cities: string[]
+  keyword_group_ids: number[]
+  keywords: string[]
+  blogger_group_ids: number[]
+  blogger_ids: number[]
+}>({
+  weekDate: new Date(),
+  cities: [],
+  keyword_group_ids: [],
+  keywords: [],
+  blogger_group_ids: [],
+  blogger_ids: [],
+})
 const cityNames = computed(() => Object.fromEntries(cities.value.map((city) => [city.code, city.name])))
+const allKeywordGroups = ref<any[]>([])
+const allBloggerGroups = ref<any[]>([])
+const allBloggers = ref<any[]>([])
+const kgNames = computed(() => Object.fromEntries(allKeywordGroups.value.map((g) => [g.id, g.name])))
+const bgNames = computed(() => Object.fromEntries(allBloggerGroups.value.map((g) => [g.id, g.name])))
+const bloggerNames = computed(() => Object.fromEntries(allBloggers.value.map((b) => [b.id, b.username])))
+
+function formatFilters(row: any): string {
+  const parts: string[] = []
+  if (row.keyword_group_ids?.length) parts.push(`关键词组：${row.keyword_group_ids.map((id: number) => kgNames.value[id] ?? id).join('、')}`)
+  if (row.keywords?.length) parts.push(`关键词：${row.keywords.join('、')}`)
+  if (row.blogger_group_ids?.length) parts.push(`博主组：${row.blogger_group_ids.map((id: number) => bgNames.value[id] ?? id).join('、')}`)
+  if (row.blogger_ids?.length) parts.push(`博主：${row.blogger_ids.map((id: number) => bloggerNames.value[id] ?? id).join('、')}`)
+  return parts.join(' · ')
+}
 
 function toIsoWeek(value: Date): string {
   const date = new Date(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate()))
@@ -31,18 +60,34 @@ function toIsoWeek(value: Date): string {
 }
 
 async function load() {
-  const [reportResponse, cityResponse] = await Promise.all([api.reports(), api.settings('cities')])
+  const [reportResponse, cityResponse, kgResp, bgResp, bloggerResp] = await Promise.all([
+    api.reports(),
+    api.settings('cities'),
+    api.keywordGroups(),
+    api.bloggerGroups(),
+    api.settings('bloggers'),
+  ])
   rows.value = reportResponse.data.data
   cities.value = cityResponse.data.data.filter((city: any) => city.enabled)
-  if (!form.city && cities.value.length) form.city = cities.value[0].code
+  allKeywordGroups.value = (kgResp.data.data?.items || []).filter((g: any) => g.enabled)
+  allBloggerGroups.value = (bgResp.data.data?.items || []).filter((g: any) => g.enabled)
+  allBloggers.value = bloggerResp.data.data || []
+  if (!form.cities.length && cities.value.length) form.cities = [cities.value[0].code]
 }
 
 async function generate() {
   if (!form.weekDate) { ElMessage.warning('请选择周次'); return }
-  if (!form.city) { ElMessage.warning('请选择城市'); return }
+  if (!form.cities.length && !form.keyword_group_ids.length && !form.keywords.length && !form.blogger_group_ids.length && !form.blogger_ids.length) { ElMessage.warning('请至少选择城市或关键词/博主等筛选条件'); return }
   generating.value = true
   try {
-    await api.generateReport({ week: toIsoWeek(form.weekDate), cities: [form.city] })
+    await api.generateReport({
+      week: toIsoWeek(form.weekDate),
+      cities: form.cities,
+      keyword_group_ids: form.keyword_group_ids,
+      keywords: form.keywords,
+      blogger_group_ids: form.blogger_group_ids,
+      blogger_ids: form.blogger_ids,
+    })
     ElMessage.success('周报生成成功')
     await load()
   } catch (error: any) {
@@ -61,8 +106,10 @@ async function download(row: any, format: 'md' | 'xlsx') {
   try {
     const response = await api.downloadReport(row.id, format)
     const disposition = response.headers?.['content-disposition'] || ''
-    const matched = disposition.match(/filename="?([^";]+)"?/i)
-    const filename = matched?.[1] || `${row.week}.${format}`
+    const star = disposition.match(/filename\*=(?:UTF-8'')?([^;]+)/i)
+    const plain = disposition.match(/filename="?([^";]+)"?/i)
+    const filename = star ? decodeURIComponent(star[1])
+      : plain?.[1] || `${row.week}.${format}`
     const url = URL.createObjectURL(response.data)
     const link = document.createElement('a')
     link.href = url
@@ -95,13 +142,21 @@ onMounted(load)
   <ElCard shadow="never">
     <div class="toolbar">
       <ElDatePicker v-model="form.weekDate" type="week" format="YYYY 第 ww 周" placeholder="选择周次" aria-label="周次" />
-      <ElSelect v-model="form.city" placeholder="选择城市" filterable aria-label="城市">
+      <ElSelect v-model="form.cities" multiple placeholder="选择城市（可多选）" filterable collapse-tags collapse-tags-tooltip aria-label="城市">
         <ElOption v-for="city in cities" :key="city.code" :label="city.name" :value="city.code" />
+      </ElSelect>
+      <ElSelect v-model="form.keyword_group_ids" multiple placeholder="关键词组（可选）" filterable collapse-tags collapse-tags-tooltip aria-label="关键词组">
+        <ElOption v-for="g in allKeywordGroups" :key="g.id" :label="g.name" :value="g.id" />
+      </ElSelect>
+      <ElSelect v-model="form.blogger_group_ids" multiple placeholder="博主组（可选）" filterable collapse-tags collapse-tags-tooltip aria-label="博主组">
+        <ElOption v-for="g in allBloggerGroups" :key="g.id" :label="g.name" :value="g.id" />
       </ElSelect>
       <ElButton type="primary" :icon="Plus" :loading="generating" @click="generate">生成周报</ElButton>
     </div>
     <ElTable :data="rows">
-      <ElTableColumn prop="week" label="周次" />
+      <ElTableColumn prop="week" label="周次" width="110" />
+      <ElTableColumn prop="name" label="名称" min-width="180" show-overflow-tooltip />
+      <ElTableColumn label="筛选条件" min-width="180"><template #default="scope">{{ formatFilters(scope.row) }}</template></ElTableColumn>
       <ElTableColumn label="城市"><template #default="scope">{{ (scope.row.cities || []).map((code: string) => cityNames[code] || code).join('、') }}</template></ElTableColumn>
       <ElTableColumn prop="note_count" label="推文数" />
       <ElTableColumn prop="activity_count" label="活动数" />
