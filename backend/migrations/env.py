@@ -3,7 +3,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from app.core.config import get_settings
 from app.core.database import Base
-from app.models import activity, audit, blogger_city, blogger_group, config, duplicate, group, keyword_group, note, poster, report, schedule, search_usage, task, user  # noqa: F401
+from app.models import activity, audit, blogger_city, blogger_group, config, duplicate, group, keyword_group, note, poster, report, schedule, search_usage, task, user, xhs_account  # noqa: F401
 
 configuration = context.config
 if configuration.config_file_name: fileConfig(configuration.config_file_name)
