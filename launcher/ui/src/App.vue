@@ -16,6 +16,7 @@ import {
   getOcrInstallProgress,
   testOcr,
   getLogsTail,
+  getInitialPassword,
   initBaseUrlFromLocation,
   getBaseUrl,
   type StatusResponse,
@@ -23,6 +24,7 @@ import {
   type OcrStatus,
   type OcrInstallProgress,
   type OcrTestResult,
+  type InitialPasswordResult,
 } from './api/client'
 
 const APP_VERSION = '0.1.0'
@@ -43,6 +45,10 @@ const ocrTestResult = ref<OcrTestResult | null>(null)
 const ocrInstalling = ref(false)
 const ocrTesting = ref(false)
 const logLines = ref<string[]>([])
+// 启动器自动生成的初始密码,启动时拉一次,展示在顶部 banner
+// 用户关闭后存 sessionStorage,本次会话不再展示
+const initialPassword = ref<InitialPasswordResult | null>(null)
+const passwordBannerDismissed = ref(false)
 
 let statusTimer: ReturnType<typeof setInterval> | null = null
 let logsTimer: ReturnType<typeof setInterval> | null = null
@@ -206,9 +212,22 @@ function handleOpenLogDir() {
   }
 }
 
+async function refreshInitialPassword() {
+  // 拉一次启动器自动生成的初始密码(204 表示用户手动配置,不展示 banner)
+  try {
+    initialPassword.value = await getInitialPassword()
+  } catch (e) {
+    initialPassword.value = null
+  }
+}
+
+function dismissPasswordBanner() {
+  passwordBannerDismissed.value = true
+}
+
 onMounted(async () => {
   initBaseUrlFromLocation()
-  await Promise.all([refreshStatus(), refreshLogs(), refreshOcrStatus()])
+  await Promise.all([refreshStatus(), refreshLogs(), refreshOcrStatus(), refreshInitialPassword()])
   statusTimer = setInterval(refreshStatus, STATUS_POLL_MS)
   logsTimer = setInterval(refreshLogs, LOGS_POLL_MS)
 })
@@ -226,6 +245,19 @@ onUnmounted(() => {
       <h1 class="app-title" data-test="app-title">小红书活动信息抓取系统</h1>
       <span class="app-version">v{{ APP_VERSION }}</span>
     </header>
+
+    <!-- 初始密码 banner:仅当启动器自动生成密码且用户未关闭时展示 -->
+    <el-alert
+      v-if="initialPassword && initialPassword.auto_generated && !passwordBannerDismissed"
+      type="warning"
+      :title="`初始 admin 密码: ${initialPassword.password}`"
+      description="这是启动器自动生成的随机密码,登录后请到「操作账号」立即修改。密码同时写入 data/run/INITIAL_ADMIN_PASSWORD.txt。"
+      show-icon
+      :closable="true"
+      class="initial-password-banner"
+      data-test="initial-password-banner"
+      @close="dismissPasswordBanner"
+    />
 
     <main class="main-content">
       <ServiceStatus

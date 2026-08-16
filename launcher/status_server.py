@@ -74,6 +74,41 @@ class StatusServer:
             parsed = urlparse(self.web_base_url)
             return {"port": parsed.port or 5173, "url": self.web_base_url}
 
+        @app.get("/initial-password")
+        def get_initial_password():
+            """返回启动器自动生成的初始密码(用于启动器 UI 顶部 banner)。
+
+            仅当 data/run/INITIAL_ADMIN_PASSWORD.txt 存在时返回;
+            该文件由 ensure_env_file 自动写密码时创建,用户手动配置密码时不会创建。
+
+            关联 spec: docs/superpowers/specs/2026-08-16-launcher-password-visibility-design.md § 2
+            """
+            from fastapi.responses import JSONResponse
+            password_file = self.project_root / "data" / "run" / "INITIAL_ADMIN_PASSWORD.txt"
+            if not password_file.exists():
+                # 用户手动配置,启动器 UI 不展示 banner
+                return JSONResponse(status_code=204, content=None)
+            content = password_file.read_text(encoding="utf-8")
+            # 解析 password=<value> 行
+            password = None
+            auto_generated = True
+            generated_at = None
+            for line in content.splitlines():
+                line = line.strip()
+                if line.startswith("password="):
+                    password = line.split("=", 1)[1].strip()
+                elif line.startswith("# 类型:"):
+                    auto_generated = "自动生成" in line
+                elif line.startswith("# 生成时间:"):
+                    generated_at = line.replace("# 生成时间:", "").strip()
+            if not password:
+                return JSONResponse(status_code=204, content=None)
+            return {
+                "password": password,
+                "auto_generated": auto_generated,
+                "generated_at": generated_at,
+            }
+
         @app.post("/service/{name}/restart")
         def restart_service(name: str):
             success = self.process_manager.restart_service(name)

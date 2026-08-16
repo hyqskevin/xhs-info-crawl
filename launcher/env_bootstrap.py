@@ -24,22 +24,29 @@ def generate_admin_password() -> str:
     return "".join(secrets.choice(alphabet) for _ in range(12))
 
 
-def ensure_env_file(env_path: Path, env_example_path: Path) -> None:
+def ensure_env_file(env_path: Path, env_example_path: Path) -> str | None:
     """确保 .env 存在;不存在则从 .env.example 复制并生成敏感配置。
 
     - SECRET_KEY 为占位值时自动生成 32 字节随机密钥
     - INITIAL_ADMIN_PASSWORD 为空时自动生成 12 位密码
+
+    Returns:
+        自动生成的初始密码(仅当本次调用确实生成了密码时返回);
+        否则返回 None(.env 已存在 / 用户显式配置 / .env.example 不存在)
+
+    关联 spec: docs/superpowers/specs/2026-08-16-launcher-password-visibility-design.md § 1
     """
     if env_path.exists():
-        return  # 不覆盖已存在的 .env
+        return None  # 不覆盖已存在的 .env,密码可能是用户手动配置
 
     if not env_example_path.exists():
         env_path.write_text("# .env auto-generated\n")
-        return
+        return None
 
     content = env_example_path.read_text(encoding="utf-8")
     lines = content.splitlines()
 
+    auto_generated_password: str | None = None
     new_lines = []
     for line in lines:
         # SECRET_KEY 占位值替换
@@ -47,10 +54,12 @@ def ensure_env_file(env_path: Path, env_example_path: Path) -> None:
             line = f"SECRET_KEY={generate_secret_key()}"
         # INITIAL_ADMIN_PASSWORD 为空时生成
         elif line.startswith("INITIAL_ADMIN_PASSWORD=") and not line.split("=", 1)[1].strip():
-            line = f"INITIAL_ADMIN_PASSWORD={generate_admin_password()}"
+            auto_generated_password = generate_admin_password()
+            line = f"INITIAL_ADMIN_PASSWORD={auto_generated_password}"
         new_lines.append(line)
 
     env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    return auto_generated_password
 
 
 def force_local_host(env_path: Path) -> None:

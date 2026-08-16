@@ -110,3 +110,24 @@ export function testOcr(): Promise<OcrTestResult> {
 export function getLogsTail(lines = 50): Promise<{ lines: string[] }> {
   return request<{ lines: string[] }>(`/logs/tail?lines=${lines}`)
 }
+
+/**
+ * 启动器自动生成的初始密码信息。
+ * 关联 spec: docs/superpowers/specs/2026-08-16-launcher-password-visibility-design.md § 2
+ */
+export interface InitialPasswordResult {
+  password: string
+  auto_generated: boolean
+  generated_at: string | null
+}
+
+/**
+ * 拉取初始密码:204 No Content 表示用户手动配置(不展示 banner)。
+ */
+export async function getInitialPassword(): Promise<InitialPasswordResult | null> {
+  const resp = await fetch(`${baseUrl}/initial-password`)
+  if (resp.status === 204) {
+    return null
+  }
+  return (await resp.json()) as InitialPasswordResult
+}
