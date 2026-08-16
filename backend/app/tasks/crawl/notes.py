@@ -190,16 +190,42 @@ def download_and_ocr(db, task: CrawlTask, run_token: str, city: str, item: dict,
             delay=delay,
         )
         assert_execution_active(db, task.id, run_token)
+        data_root = settings.data_dir.resolve()
         for index, (image, result) in enumerate(zip(images, ocr_results), 1):
-            image_row = NoteImage(note_id=note.id, storage_key="", ocr_text=result["text"], ocr_status=result["status"], ocr_error=result["error"])
+            # storage_key 用相对 data_dir 的路径，与 API 端 FileResponse(data_root / storage_key) 一致
+            try:
+                storage_key = str(image.resolve().relative_to(data_root))
+            except ValueError:
+                # image 不在 data_root 下，落到 .downloads/<platform_note_id> 目录（兜底）
+                storage_key = str(image)
+            image_row = NoteImage(
+                note_id=note.id,
+                storage_key=storage_key,
+                original_url="",  # 小红书图片原始 URL 不持久化（防盗链）；相对路径即足够
+                ocr_text=result["text"],
+                ocr_status=result["status"],
+                ocr_error=result["error"],
+            )
             db.add(image_row)
             image_rows.append((image, image_row))
             if result["text"]:
                 ocr_texts.append(f"[IMAGE {index}]\n{result['text']}")
     else:
+        data_root = settings.data_dir.resolve()
         for index, image in enumerate(images, 1):
             result = {"status": "disabled", "text": "", "error": ""}
-            image_row = NoteImage(note_id=note.id, storage_key="", ocr_text=result["text"], ocr_status=result["status"], ocr_error=result["error"])
+            try:
+                storage_key = str(image.resolve().relative_to(data_root))
+            except ValueError:
+                storage_key = str(image)
+            image_row = NoteImage(
+                note_id=note.id,
+                storage_key=storage_key,
+                original_url="",
+                ocr_text=result["text"],
+                ocr_status=result["status"],
+                ocr_error=result["error"],
+            )
             db.add(image_row)
             image_rows.append((image, image_row))
     note.status = "OCR_DONE" if ocr else "DOWNLOADED"
