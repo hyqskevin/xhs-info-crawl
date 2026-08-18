@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory } from 'vue-router'
 
 import AppLayout from '@/layouts/AppLayout.vue'
 import DashboardView from '@/views/DashboardView.vue'
@@ -14,7 +14,7 @@ import PosterWizardView from '@/views/PosterWizardView.vue'
 import SystemAdminView from '@/views/SystemAdminView.vue'
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHashHistory(),
   routes: [
     {path:'/login',component:LoginView,meta:{public:true,title:'登录'}},
     {

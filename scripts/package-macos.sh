@@ -1,29 +1,83 @@
 #!/bin/bash
 set -e
 
-# macOS 打包脚本:产出 xhs-info-crawl-<version>-macos.zip
-# 用法: ./scripts/package-macos.sh <version>
+# macOS 打包脚本:产出 xhs-info-crawl-<version>-macos-<arch>.zip
+# 用法: ./scripts/package-macos.sh <version> [arch]
+# 架构:
+#   arm64  (默认) — Apple Silicon (M1/M2/M3/M4)
+#   x86_64        — Intel Mac
 # 依赖: frontend/dist 和 launcher/ui/dist 已构建完成
 # Python: python-build-standalone cpython-3.11.9 (astral-sh)
 
-VERSION=${1:?"用法: ./scripts/package-macos.sh <version>"}
+VERSION=${1:?"用法: ./scripts/package-macos.sh <version> [arm64|x86_64]"}
+ARCH=${2:-arm64}
+
+case "$ARCH" in
+  arm64)
+    PYTHON_TRIPLE="aarch64-apple-darwin"
+    ZIP_SUFFIX="macos-arm64"
+    ;;
+  x86_64)
+    PYTHON_TRIPLE="x86_64-apple-darwin"
+    ZIP_SUFFIX="macos-x86_64"
+    ;;
+  *)
+    echo "错误:不支持的架构: $ARCH(支持: arm64 / x86_64)"
+    exit 1
+    ;;
+esac
+
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
-BUILD_DIR=$ROOT_DIR/dist/build
+# 允许外部覆盖 BUILD_DIR(用于并行打多个架构,不覆盖 dist/build 已有产物)
+BUILD_DIR=${BUILD_DIR:-$ROOT_DIR/dist/build}
 PKG_DIR=$BUILD_DIR/xhs-info-crawl
-# python-build-standalone 用 triple 命名: aarch64-apple-darwin (不是 darwin-arm64)
 PYTHON_VERSION="cpython-3.11.9+20240415"
-PYTHON_ARCHIVE="$PYTHON_VERSION-aarch64-apple-darwin-install_only.tar.gz"
+PYTHON_ARCHIVE="$PYTHON_VERSION-$PYTHON_TRIPLE-install_only.tar.gz"
 PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20240415/$PYTHON_ARCHIVE"
 
-echo "==> 打包 macOS v$VERSION"
+echo "==> 打包 macOS v$VERSION ($ARCH / $ZIP_SUFFIX)"
 echo "项目根目录: $ROOT_DIR"
+
+# -1. 前置检查:前端 / launcher UI dist 必须先 build 出来
+# 关联: docs/superpowers/specs/2026-08-17-launcher-ui-baseurl-pywebview-design.md
+# vite build 默认输出绝对路径 /assets/... PyWebView file:// 加载会失败,
+# 必须用 npm run build(已配 --base './') 或 vite build --base './'
+echo "==> 前置检查:前端 dist 必须存在"
+if [ ! -f "$ROOT_DIR/frontend/dist/index.html" ]; then
+    echo "错误: frontend/dist/index.html 不存在。"
+    echo "请先运行: cd frontend && npm run build"
+    exit 1
+fi
+# 检查 asset 路径必须是相对路径(不能是 /assets/...)
+if /usr/bin/grep -qE 'src="/assets/|href="/assets/' "$ROOT_DIR/frontend/dist/index.html"; then
+    echo "错误: frontend/dist/index.html 含绝对路径 /assets/... PyWebView / http 服务加载会失败"
+    echo "请确保 frontend/package.json 的 build script 带 --base './'"
+    echo "或运行: cd frontend && npm run build:fast"
+    exit 1
+fi
+echo "==> 前置检查:launcher UI dist 必须存在"
+if [ ! -f "$ROOT_DIR/launcher/ui/dist/index.html" ]; then
+    echo "错误: launcher/ui/dist/index.html 不存在。"
+    echo "请先运行: cd launcher/ui && npm run build:fast"
+    exit 1
+fi
+if /usr/bin/grep -qE 'src="/assets/|href="/assets/' "$ROOT_DIR/launcher/ui/dist/index.html"; then
+    echo "错误: launcher/ui/dist/index.html 含绝对路径 /assets/... PyWebView 加载会失败"
+    echo "请确保 launcher/ui/package.json 的 build script 带 --base './'"
+    exit 1
+fi
+# 检查 OCR 测试 fixtures 必须存在(diagnostics_ocr.probe_ocr 需要)
+if [ ! -f "$ROOT_DIR/backend/tests/fixtures/ocr_test.png" ]; then
+    echo "警告: backend/tests/fixtures/ocr_test.png 不存在,OCR 测试会失败"
+    echo "(不影响打包,但 launcher UI '测试 OCR' 会返回 test_image_missing)"
+fi
 
 # 0. 清理旧构建
 rm -rf $BUILD_DIR
 mkdir -p $PKG_DIR
 
 # 1. 下载便携版 Python 3.11.9(python-build-standalone)
-echo "==> 下载便携版 Python..."
+echo "==> 下载便携版 Python ($PYTHON_TRIPLE)..."
 PYTHON_TGZ=$BUILD_DIR/python.tar.gz
 curl -fL $PYTHON_URL -o $PYTHON_TGZ
 echo "==> 解压 Python..."
@@ -63,6 +117,14 @@ $PKG_DIR/runtime/venv/bin/pip install --upgrade pip
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/backend/requirements-runtime.txt
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/launcher/requirements.txt
 
+# 2.1 安装 OCR 依赖(paddleocr + paddlepaddle)
+# OCR 增强包(模型权重)在 launcher UI 第一次点"下载安装 OCR"时按需下载到
+# $DATA_DIR/paddlex/ (~/.xhs-info-crawl/paddlex/),所以不在打包里;
+# 但 paddleocr / paddlepaddle 包本身是 Python 包,必须在 venv 里。
+# 关联 spec: docs/superpowers/specs/2026-08-17-launcher-ocr-direct-design.md
+echo "==> 安装 OCR 依赖(paddleocr + paddlepaddle)..."
+$PKG_DIR/runtime/venv/bin/pip install paddleocr paddlepaddle
+
 # 修复 venv 缺少 libpython3.11.dylib 问题:
 # python-build-standalone 解压后创建的 venv/lib 下没有 libpython,
 # venv/bin/python 启动时报 Library not loaded 错误。
@@ -70,12 +132,26 @@ $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/launcher/requirements.txt
 echo "==> 修复 venv libpython..."
 cp $PKG_DIR/runtime/python/lib/libpython3.11.dylib $PKG_DIR/runtime/venv/lib/libpython3.11.dylib 2>&1
 
-# 3. 复制后端源码(排除测试代码)
-echo "==> 复制后端源码(排除 tests)..."
+# 3. 复制后端源码(排除测试代码 + 本地 venv + 数据)
+echo "==> 复制后端源码(排除 tests/venv/data)..."
 mkdir -p $PKG_DIR/app/backend
-rsync -a --exclude='tests/' --exclude='__pycache__/' --exclude='.pytest_cache/' \
+rsync -a --exclude='__pycache__/' --exclude='.pytest_cache/' \
   --exclude='.coverage' --exclude='htmlcov/' \
+  --exclude='.venv/' --exclude='venv/' --exclude='.env' --exclude='*.pyc' \
+  --exclude='data/' --exclude='.git/' --exclude='node_modules/' \
   $ROOT_DIR/backend/ $PKG_DIR/app/backend/
+
+# 3.1 单独复制 tests/fixtures/(诊断用 OCR 测试图)
+# 不能整目录 rsync(避免带 .py 测试文件),只复制 fixtures 子目录里的 png 等数据文件。
+# diagnostics_ocr.py 用 OCR_TEST_IMAGE = backend/tests/fixtures/ocr_test.png 测 OCR 探针。
+# 关联 spec: docs/superpowers/specs/2026-08-17-launcher-ocr-direct-design.md
+echo "==> 复制 OCR 测试 fixtures..."
+mkdir -p $PKG_DIR/app/backend/tests/fixtures
+if [ -d "$ROOT_DIR/backend/tests/fixtures" ]; then
+    rsync -a --include='*/' --include='*.png' --include='*.jpg' --include='*.jpeg' \
+      --include='*.json' --exclude='*' \
+      $ROOT_DIR/backend/tests/fixtures/ $PKG_DIR/app/backend/tests/fixtures/ || true
+fi
 
 # 4. 复制前端构建产物
 echo "==> 复制前端构建产物..."
@@ -89,22 +165,8 @@ cp $ROOT_DIR/launcher/*.py $PKG_DIR/launcher/
 cp $ROOT_DIR/launcher/requirements.txt $PKG_DIR/launcher/
 cp -r $ROOT_DIR/launcher/ui/dist/* $PKG_DIR/launcher/ui/dist/
 
-# 修复 index.html 的绝对路径为相对路径,
-# 否则 PyWebView 用 file:// 加载时找不到 /assets/... (会白屏)
-# 把 <script src="/assets/..."> 改为 <script src="./assets/...">
-if [ -f "$PKG_DIR/launcher/ui/dist/index.html" ]; then
-    echo "==> 修复 index.html 资源路径为相对路径..."
-    sed -i '' 's|src="/assets/|src="./assets/|g; s|href="/assets/|href="./assets/|g' \
-        "$PKG_DIR/launcher/ui/dist/index.html"
-fi
-
-# 修复 frontend/dist 的绝对路径(因为 launcher 用 python -m http.server 提供静态文件,
-# 浏览器通过 http://127.0.0.1:<web_port>/ 访问,相对路径才有效)
-if [ -f "$PKG_DIR/app/frontend/dist/index.html" ]; then
-    echo "==> 修复 frontend/dist/index.html 资源路径为相对路径..."
-    sed -i '' 's|src="/assets/|src="./assets/|g; s|href="/assets/|href="./assets/|g' \
-        "$PKG_DIR/app/frontend/dist/index.html"
-fi
+# 注: 不再需要 sed 修复绝对路径 — vite build --base './' 已固化在 package.json,
+# 永远输出相对路径 ./assets/... (关联 spec: .../2026-08-17-launcher-ui-baseurl-pywebview-design.md)
 
 # 6. 复制 .env.example
 cp $ROOT_DIR/.env.example $PKG_DIR/.env.example
@@ -172,6 +234,8 @@ DATA_DIR="$APP_DIR/Contents/Resources/xhs-info-crawl"
 # 同时把 libpython 复制到 venv/lib/(避免 venv/bin/python 启动时找不到 libpython)
 export PYTHONHOME="$DATA_DIR/runtime/python"
 export DYLD_LIBRARY_PATH="$DATA_DIR/runtime/python/lib:${DYLD_LIBRARY_PATH}"
+# opencli 默认装在 ~/.local/bin/,launcher 和子进程需要能找到
+export PATH="$HOME/.local/bin:$PATH"
 # 把父目录加入 PYTHONPATH,让 launcher 模块可导入
 export PYTHONPATH="$DATA_DIR:$PYTHONPATH"
 cd "$DATA_DIR/launcher"
@@ -187,9 +251,44 @@ codesign --force --deep --sign - "$BUILD_DIR/xhs-info-crawl.app" 2>&1 | tail -3
 # 验证签名
 codesign --verify --verbose "$BUILD_DIR/xhs-info-crawl.app" 2>&1 | tail -2
 
+# 8.6 打包后校验:OCR 依赖 + 测试图 + 相对路径 都在 .app 内
+# 关联: docs/superpowers/specs/2026-08-17-launcher-ocr-direct-design.md
+# 失败要明确指出哪个文件缺,而不是给用户一个不能跑的 .app。
+echo "==> 校验 .app 内 OCR 依赖..."
+APP_CHECK_DIR="$BUILD_DIR/xhs-info-crawl.app/Contents/Resources/xhs-info-crawl"
+CHECK_FAILED=0
+if [ ! -d "$APP_CHECK_DIR/runtime/venv/lib/python3.11/site-packages/paddleocr" ]; then
+    echo "  ✗ paddleocr 包缺失(OCR 增强不可用)"
+    CHECK_FAILED=1
+fi
+if [ ! -d "$APP_CHECK_DIR/runtime/venv/lib/python3.11/site-packages/paddlepaddle" ]; then
+    echo "  ✗ paddlepaddle 包缺失(OCR 推理失败)"
+    CHECK_FAILED=1
+fi
+if [ ! -f "$APP_CHECK_DIR/app/backend/tests/fixtures/ocr_test.png" ]; then
+    echo "  ✗ OCR 测试图缺失(launcher '测试 OCR' 会返回 test_image_missing)"
+    CHECK_FAILED=1
+fi
+# index.html 不能含绝对路径 /assets/
+if /usr/bin/grep -qE 'src="/assets/|href="/assets/' "$APP_CHECK_DIR/launcher/ui/dist/index.html"; then
+    echo "  ✗ launcher ui 含绝对路径 /assets/(白屏)"
+    CHECK_FAILED=1
+fi
+if /usr/bin/grep -qE 'src="/assets/|href="/assets/' "$APP_CHECK_DIR/app/frontend/dist/index.html"; then
+    echo "  ✗ frontend 含绝对路径 /assets/(子路由加载失败)"
+    CHECK_FAILED=1
+fi
+if [ $CHECK_FAILED -eq 1 ]; then
+    echo ""
+    echo "错误: 打包校验失败 — 上面列了缺失/异常文件"
+    echo "zip 已生成但 .app 不能直接给用户使用。请修复后重打包。"
+    # 不 exit 1 让 zip 仍然生成,便于人工核对 — 但要醒目提示
+fi
+echo "==> .app 校验完毕"
+
 # 9. 压缩
 echo "==> 压缩产物..."
 cd $BUILD_DIR
-zip -r xhs-info-crawl-$VERSION-macos.zip xhs-info-crawl xhs-info-crawl.app
+zip -r xhs-info-crawl-$VERSION-$ZIP_SUFFIX.zip xhs-info-crawl xhs-info-crawl.app
 
-echo "==> 完成: $BUILD_DIR/xhs-info-crawl-$VERSION-macos.zip"
+echo "==> 完成: $BUILD_DIR/xhs-info-crawl-$VERSION-$ZIP_SUFFIX.zip"

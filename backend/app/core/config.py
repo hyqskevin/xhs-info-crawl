@@ -2,7 +2,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,7 +55,9 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-in-local-env"
     jwt_expire_hours: int = 24
     project_root: Path = Path(__file__).resolve().parents[3]
-    database_url: str | None = None
+    # base dir 模式: DATABASE_URL 留空时自动从 DATA_DIR 拼 sqlite:///$DATA_DIR/app.db
+    # 关联 spec: docs/superpowers/specs/2026-08-17-launcher-storage-base-dir-design.md
+    database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
     celery_broker_url: str = "filesystem://"
     celery_timezone: str = "Asia/Shanghai"
     celery_worker_pool: str = "solo"
@@ -78,10 +80,10 @@ class Settings(BaseSettings):
     # 每抓 N 条调一次 adapter.close_session() 重建 CDP 连接；0 表示禁用
     crawl_session_reset_interval: int = 30
     minimax_api_key: str = ""
-    minimax_base_url: str = "https://api.minimaxi.com/v1"
-    minimax_model: str = "MiniMax-M3"
-    minimax_vision_model: str = "MiniMax-vision-01"
-    minimax_chat_path: str = "/text/chatcompletion_v2"
+    minimax_base_url: str = "https://api.openai.com/v1"
+    minimax_model: str = ""
+    minimax_vision_model: str = ""
+    minimax_chat_path: str = "/chat/completions"
     minimax_timeout_seconds: int = 180
     ocr_enabled: bool = False
     ocr_language: str = "ch"
@@ -93,16 +95,6 @@ class Settings(BaseSettings):
     ocr_parallel_workers: int = 2
     # MiniMax API 并发调用数（1-4，默认 1 向后兼容，小范围并行避免 529 限流）
     minimax_concurrency: int = 1
-    # PaddleOCR 3.x 模型缓存目录(通过环境变量 PADDLE_PDX_CACHE_HOME 生效)
-    paddle_pdx_cache_home: Path = Field(
-        Path("./data/paddlex"),
-        validation_alias="PADDLE_PDX_CACHE_HOME",
-    )
-    # HuggingFace 缓存目录(paddlex 传递依赖,通过环境变量 HF_HOME 生效)
-    huggingface_cache_home: Path = Field(
-        Path("./data/huggingface"),
-        validation_alias="HF_HOME",
-    )
     # 前端构建产物目录(打包版用,开发模式不存在则跳过挂载)
     frontend_dist_path: Path = Field(
         Path("./frontend/dist"),
@@ -119,26 +111,61 @@ class Settings(BaseSettings):
     # 多账号轮询：每个账号连续抓 N 篇后主动切换到下一个账号（避免触发频率限制）
     # 仅当配置了 ≥2 个已启用账号时生效；=1 时不切换
     account_rotation_notes: int = 25
+    # ─── 存储路径(用户只设 DATA_DIR,其他自动从 DATA_DIR 推导) ───
+    # 关联: docs/superpowers/specs/2026-08-17-launcher-storage-base-dir-design.md
     data_dir_setting: Path = Field(Path("./data"), validation_alias="DATA_DIR")
-    image_dir_setting: Path = Field(Path("./data/images"), validation_alias="IMAGE_DIR")
-    export_dir_setting: Path = Field(Path("./data/exports"), validation_alias="EXPORT_DIR")
-    archive_dir_setting: Path = Field(Path("./data/archive"), validation_alias="ARCHIVE_DIR")
-    celery_folder_setting: Path = Field(Path("./data/celery"), validation_alias="CELERY_FOLDER")
+    # 子目录 *_DIR 默认从 DATA_DIR 拼,但如果用户在 .env 明确设了 *_DIR,
+    # 就用用户值(向后兼容 + 高级用户可单独覆盖)
+    image_dir_setting: Path | None = Field(default=None, validation_alias="IMAGE_DIR")
+    export_dir_setting: Path | None = Field(default=None, validation_alias="EXPORT_DIR")
+    archive_dir_setting: Path | None = Field(default=None, validation_alias="ARCHIVE_DIR")
+    celery_folder_setting: Path | None = Field(default=None, validation_alias="CELERY_FOLDER")
+    tmp_dir_setting: Path | None = Field(default=None, validation_alias="TMP_DIR")
+    paddle_pdx_cache_home: Path | None = Field(default=None, validation_alias="PADDLE_PDX_CACHE_HOME")
+    huggingface_cache_home: Path | None = Field(default=None, validation_alias="HF_HOME")
     # 任务子进程注册表路径（跨 API 与 worker 进程共享）
-    task_registry_path: Path = Field(
-        Path("./data/run/task_registry.json"), validation_alias="TASK_REGISTRY_PATH"
+    task_registry_path: Path | None = Field(
+        default=None, validation_alias="TASK_REGISTRY_PATH"
     )
-    # 临时文件目录（如海报渲染的临时 HTML）
-    tmp_dir_setting: Path = Field(Path("./data/tmp"), validation_alias="TMP_DIR")
     # ChromePool 启动的多 Chrome 实例的 user-data-dir 根目录
-    chrome_user_data_dir: Path = Field(
-        Path("./data/chrome-pool"), validation_alias="CHROME_USER_DATA_DIR"
+    chrome_user_data_dir: Path | None = Field(
+        default=None, validation_alias="CHROME_USER_DATA_DIR"
     )
     # Chrome 二进制路径（ChromePool 启动用）
     chrome_bin: str = Field(
         "google-chrome",
         validation_alias="CHROME_BIN",
     )
+
+    @model_validator(mode="after")
+    def _sync_storage_subdirs_from_data_dir(self) -> "Settings":
+        """从 DATA_DIR 推导所有子目录,除非用户在 .env 明确设了。
+
+        用户体验:只设一个 DATA_DIR=~/xhs-info-crawl,
+        子目录自动 ~/xhs-info-crawl/{images,exports,archive,logs,paddlex,huggingface,celery,tmp,run}
+        关联 spec: docs/superpowers/specs/2026-08-17-launcher-storage-base-dir-design.md
+        """
+        data_dir = self.data_dir_setting
+        # 把 ~ 展开
+        if str(data_dir).startswith("~"):
+            data_dir = Path(os.path.expanduser(str(data_dir)))
+            self.data_dir_setting = data_dir
+
+        defaults = {
+            "image_dir_setting": data_dir / "images",
+            "export_dir_setting": data_dir / "exports",
+            "archive_dir_setting": data_dir / "archive",
+            "celery_folder_setting": data_dir / "celery",
+            "tmp_dir_setting": data_dir / "tmp",
+            "paddle_pdx_cache_home": data_dir / "paddlex",
+            "huggingface_cache_home": data_dir / "huggingface",
+            "task_registry_path": data_dir / "run" / "task_registry.json",
+            "chrome_user_data_dir": data_dir / "chrome-pool",
+        }
+        for attr, default_path in defaults.items():
+            if getattr(self, attr) is None:
+                setattr(self, attr, default_path)
+        return self
 
     def resolve_project_path(self, path: Path) -> Path:
         return path if path.is_absolute() else self.project_root / path
@@ -156,34 +183,36 @@ class Settings(BaseSettings):
     @computed_field
     @property
     def image_dir(self) -> Path:
-        return self.resolve_project_path(self.image_dir_setting)
+        return self.resolve_project_path(self.image_dir_setting) if self.image_dir_setting else self.data_dir / "images"
 
     @computed_field
     @property
     def export_dir(self) -> Path:
-        return self.resolve_project_path(self.export_dir_setting)
+        return self.resolve_project_path(self.export_dir_setting) if self.export_dir_setting else self.data_dir / "exports"
 
     @computed_field
     @property
     def archive_dir(self) -> Path:
-        return self.resolve_project_path(self.archive_dir_setting)
+        return self.resolve_project_path(self.archive_dir_setting) if self.archive_dir_setting else self.data_dir / "archive"
 
     @computed_field
     @property
     def celery_folder(self) -> Path:
-        return self.resolve_project_path(self.celery_folder_setting)
+        return self.resolve_project_path(self.celery_folder_setting) if self.celery_folder_setting else self.data_dir / "celery"
 
     @computed_field
     @property
     def task_registry_file(self) -> Path:
         """解析后的任务注册表文件路径（绝对路径，在项目内）。"""
-        return self.resolve_project_path(self.task_registry_path)
+        path = self.task_registry_path or self.data_dir / "run" / "task_registry.json"
+        return self.resolve_project_path(path)
 
     @computed_field
     @property
     def tmp_dir(self) -> Path:
         """解析后的临时文件目录（绝对路径，在项目内）。"""
-        return self.resolve_project_path(self.tmp_dir_setting)
+        path = self.tmp_dir_setting or self.data_dir / "tmp"
+        return self.resolve_project_path(path)
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -191,10 +220,18 @@ class Settings(BaseSettings):
 
     @property
     def effective_database_url(self) -> str:
+        """DATABASE_URL 缺省时自动从 DATA_DIR 拼 sqlite:///$DATA_DIR/app.db,
+        保证 db 跟随 DATA_DIR(用户只设一个 base 目录即可)。
+        关联 spec: docs/superpowers/specs/2026-08-17-launcher-storage-base-dir-design.md
+        """
         if self.database_url and self.database_url.startswith("sqlite:///./"):
-            relative_path = self.database_url.removeprefix("sqlite:///./")
-            return f"sqlite:///{(self.project_root / relative_path).resolve()}"
-        return self.database_url or f"sqlite:///{self.sqlite_path}"
+            # 老式 dev 相对路径 → 用 DATA_DIR 重写
+            return f"sqlite:///{self.sqlite_path}"
+        if self.database_url and self.database_url.startswith("sqlite:///"):
+            # 已经是绝对路径(用户自配),保留
+            return self.database_url
+        # 完全缺省 → 自动从 DATA_DIR 拼
+        return f"sqlite:///{self.sqlite_path}"
 
     def ensure_runtime_directories(self) -> None:
         for path in (

@@ -15,6 +15,7 @@ import {
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useUserStore } from '@/stores/user'
+import { goLogin } from '@/utils/navigation'
 import { NAV_ITEMS, type SubItem, type TopItem } from '@/config/navPermissions'
 
 const route = useRoute()
@@ -59,7 +60,7 @@ function toggleCollapse() {
   localStorage.setItem('sidebar_collapsed', isCollapse.value ? '1' : '0')
 }
 
-function logout(){localStorage.removeItem('token');userStore.clear();location.href='/login'}
+function logout(){localStorage.removeItem('token');userStore.clear();goLogin()}
 </script>
 
 <template>

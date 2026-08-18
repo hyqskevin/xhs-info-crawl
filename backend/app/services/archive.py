@@ -1,6 +1,6 @@
 import shutil
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -18,8 +18,11 @@ def resolve_storage_path(data_dir:Path,image_dir:Path,key:str)->Path:
     return image_dir/key
 
 
-def iso_week_folder_name(started_at: datetime) -> str:
-    reference = started_at if started_at.tzinfo else started_at.replace(tzinfo=ZoneInfo("UTC"))
+def iso_week_folder_name(started_at: datetime | None) -> str:
+    if started_at is None:
+        reference = datetime.now(timezone.utc)
+    else:
+        reference = started_at if started_at.tzinfo else started_at.replace(tzinfo=ZoneInfo("UTC"))
     iso_year, iso_week, _ = reference.astimezone(_LOCAL_TZ).isocalendar()
     return f"{iso_year}-W{iso_week:02d}"
 

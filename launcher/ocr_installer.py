@@ -36,23 +36,75 @@ def get_addon_url(os_name: str, arch: str, version: str) -> str:
 def get_ocr_status(project_root: Path) -> dict:
     """获取 OCR 安装状态。
 
+    支持外部 PADDLE_PDX_CACHE_HOME 路径(用户改到 .app 外 ~/Library/... 时
+    launcher 不应该误判为未安装)。
+    检查顺序:
+    1. os.environ['PADDLE_PDX_CACHE_HOME'](可能指向 .app 外的绝对路径)
+    2. .env 里的 PADDLE_PDX_CACHE_HOME(launcher 启动时不一定 load 到 os.environ)
+    3. .env 里的 DATA_DIR/paddlex(base dir 模式下用户只设 DATA_DIR)
+    4. fallback 到 .app 内 data/paddlex/
+
     Returns:
         {"status": "not_installed"|"installing"|"installed", "version": "..."}
     """
-    paddlex_dir = project_root / "data" / "paddlex"
-    installing_marker = paddlex_dir / ".installing"
-    version_file = paddlex_dir / ".ocr_addon_version"
-    models_dir = paddlex_dir / "official_models"
+    import os as _os
+    candidate_dirs: list[Path] = []
 
-    if installing_marker.exists():
-        return {"status": "installing", "version": ""}
+    # 1. os.environ(子进程继承)
+    env_paddlex = _os.environ.get("PADDLE_PDX_CACHE_HOME")
+    if env_paddlex:
+        candidate_dirs.append(Path(env_paddlex))
 
-    if version_file.exists() and models_dir.exists() and any(models_dir.iterdir()):
-        version = ""
-        for line in version_file.read_text(encoding="utf-8").splitlines():
-            if line.startswith("version:"):
-                version = line.split(":", 1)[1].strip()
-        return {"status": "installed", "version": version}
+    # 2-3. 读 .env(launcher 启动时不一定 load .env)
+    env_path = project_root / ".env"
+    if env_path.exists():
+        env_paddlex_2 = None
+        data_dir = None
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip()
+            v = v.strip()
+            if k == "PADDLE_PDX_CACHE_HOME" and v:
+                env_paddlex_2 = v
+            elif k == "DATA_DIR" and v:
+                data_dir = v
+                # 展开 ~
+                if v.startswith("~"):
+                    data_dir = str(Path(data_dir).expanduser())
+        if env_paddlex_2 and env_paddlex_2 not in [str(d) for d in candidate_dirs]:
+            candidate_dirs.append(Path(env_paddlex_2))
+        if data_dir:
+            derived = Path(data_dir) / "paddlex"
+            if str(derived) not in [str(d) for d in candidate_dirs]:
+                candidate_dirs.append(derived)
+
+    # 4. fallback 到 .app 内
+    candidate_dirs.append(project_root / "data" / "paddlex")
+
+    for paddlex_dir in candidate_dirs:
+        if not paddlex_dir.exists():
+            continue
+        installing_marker = paddlex_dir / ".installing"
+        version_file = paddlex_dir / ".ocr_addon_version"
+        models_dir = paddlex_dir / "official_models"
+
+        if installing_marker.exists():
+            return {"status": "installing", "version": ""}
+
+        if models_dir.exists() and any(models_dir.iterdir()):
+            version = ""
+            if version_file.exists():
+                for line in version_file.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("version:"):
+                        version = line.split(":", 1)[1].strip()
+            else:
+                # 模型存在但没有版本文件(用户手动迁移 dev 模型的场景):
+                # 标记为 installed 但 version 留空
+                version = "migrated"
+            return {"status": "installed", "version": version}
 
     return {"status": "not_installed", "version": ""}
 

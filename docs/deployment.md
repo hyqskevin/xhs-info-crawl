@@ -85,9 +85,18 @@ xhs-info-crawl/
 两个独立工作流:
 
 1. **主程序**(`release.yml`):推 `v*.*.*` tag 触发
-   - `build-macos` job:macos-latest,构建 `xhs-info-crawl-<version>-macos.zip`
-   - `build-windows` job:windows-latest,构建 `xhs-info-crawl-<version>-windows.zip`
-   - `release` job:ubuntu-latest,下载两个 zip + 生成源码 zip + 创建 GitHub Release
+   - `build-macos-arm64` job:macos-latest,构建 `xhs-info-crawl-<version>-macos-arm64.zip`(Apple Silicon)
+   - `build-macos-x86_64` job:macos-13,构建 `xhs-info-crawl-<version>-macos-x86_64.zip`(Intel Mac)
+   - `build-windows` job:windows-latest,构建 `xhs-info-crawl-<version>-windows.zip`(Windows x64)
+   - `release` job:ubuntu-latest,下载 3 个 zip + 创建 GitHub Release
+
+   **架构支持矩阵**(主程序):
+   | 平台 | Apple Silicon | Intel |
+   |---|---|---|
+   | macOS | ✅ | ✅ |
+   | Windows | ✅(via Rosetta) | ✅ |
+
+   **暂不支持**:Windows ARM64(Surface Pro X 等);如需支持需新增 `windows-latest-arm` runner + python-build-standalone ARM64 wheel。
 
 2. **OCR 增强包**(`release-ocr-addon.yml`):推 `ocr-addon-*` tag 触发
    - `build-macos-arm64` job:macos-latest
@@ -98,10 +107,13 @@ xhs-info-crawl/
 ### 本地复现打包
 
 ```bash
-# macOS(需先构建 frontend/dist 和 launcher/ui/dist)
-./scripts/package-macos.sh <version>
+# macOS Apple Silicon(需先构建 frontend/dist 和 launcher/ui/dist)
+./scripts/package-macos.sh <version> arm64
 
-# Windows
+# macOS Intel
+./scripts/package-macos.sh <version> x86_64
+
+# Windows x64
 .\scripts\package-windows.ps1 -Version <version>
 
 # OCR 增强包(3 平台)

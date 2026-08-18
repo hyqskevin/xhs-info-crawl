@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -52,7 +53,11 @@ class ProcessManager:
         frontend_dist = self.project_root / "app" / "frontend" / "dist"
         return {
             "api": [python, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(api_port)],
-            "worker": [python, "-m", "celery", "-A", "app.tasks.crawl_task", "worker", "--loglevel=info"],
+            # worker 用 solo pool:单进程模式,不 fork worker 子进程
+            # prefork 模式下 worker 主进程会 fork 出多个 grand-children,
+            # launcher 直接 SIGTERM worker main 会留下 grand-children 孤儿
+            # solo 模式 worker main 直接执行任务,无 grand-children,可以被干净 kill
+            "worker": [python, "-m", "celery", "-A", "app.tasks.crawl_task", "worker", "--pool=solo", "--concurrency=1", "--loglevel=info"],
             "beat": [python, "-m", "celery", "-A", "app.tasks.crawl_task", "beat", "--loglevel=info"],
             # web 服务:等价 vite preview 行为,python -m http.server 提供静态文件
             # bind 127.0.0.1 仅本机访问;directory 指向 frontend/dist
@@ -125,9 +130,11 @@ class ProcessManager:
     def stop_service(self, name: str, timeout: float = 5.0) -> bool:
         """停止指定服务。
 
-        流程:terminate (SIGTERM) → wait timeout → kill (SIGKILL)。
-        uvicorn / celery 收到 SIGTERM 会 graceful shutdown(关闭 listener),
-        但慢时(>5s)会 SIGKILL 强杀,确保不留孤儿。
+        流程:
+        1. SIGTERM 子进程 → wait timeout(允许 graceful shutdown)
+        2. 超时未退出 → SIGKILL **整个进程组**(因为 start_new_session=True,
+           PGID == PID,可以用 os.killpg 一并杀掉 grand-children)
+        3. 兜底:遍历 PID 列表,任何还在的 PID 直接 SIGKILL
 
         关联 spec: docs/superpowers/specs/2026-08-16-launcher-cleanup-on-exit-design.md § 4
         """
@@ -139,26 +146,47 @@ class ProcessManager:
             del self._processes[name]
             return True
 
-        # 先 SIGTERM,优雅退出
+        # Step 1: SIGTERM 子进程,优雅退出
         proc.terminate()
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
+            # Step 2: 超时,SIGKILL 整个进程组(包含 grand-children)
             logger.warning(
-                "服务 %s (PID %d) %s 秒内未响应 SIGTERM,SIGKILL 强杀",
+                "服务 %s (PID %d, PGID %d) %s 秒内未退出,SIGKILL 进程组",
                 name,
+                proc.pid,
                 proc.pid,
                 timeout,
             )
-            proc.kill()
+            self._kill_process_group(proc.pid)
             try:
                 proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                logger.error("服务 %s SIGKILL 后仍未退出(PID %d)", name, proc.pid)
+                logger.error("服务 %s 进程组 SIGKILL 后仍未退出", name)
 
         del self._processes[name]
         logger.info("停止服务 %s", name)
         return True
+
+    def _kill_process_group(self, pgid: int) -> None:
+        """SIGKILL 整个进程组(macOS/Linux)。
+
+        进程组 ID 与进程启动时传的 start_new_session=True 配套使用。
+        start_new_session 让 PGID == PID,所以可以用 proc.pid 直接传。
+        """
+        if sys.platform == "win32":
+            # Windows 用 taskkill /T(递归杀子进程);pgid 在 Windows 无意义
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pgid)],
+                check=False,
+                capture_output=True,
+            )
+            return
+        try:
+            os.killpg(pgid, signal.SIGKILL)  # type: ignore[attr-defined]
+        except (ProcessLookupError, PermissionError, OSError) as exc:
+            logger.warning("killpg(%d) 失败: %s", pgid, exc)
 
     def restart_service(self, name: str) -> bool:
         """重启指定服务。"""

@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.services.browser_launcher import BrowserLaunchError, open_xhs_login
+from app.services.browser_launcher import BrowserLaunchError, open_xhs_login, open_xhs_login_via_opencli
 from app.services.opencli_adapter import OpenCLIAdapter
 from app.api.v1.settings._deps import Admin
 
@@ -49,13 +49,21 @@ def opencli_test(_: Admin):
 
 @router.post("/settings/opencli/open-login")
 def open_login(_: Admin):
-    # 关键：每次调用时从包级命名空间查找，兼容测试中
-    # ``monkeypatch.setattr("app.api.v1.settings.open_xhs_login", ...)`` 的写法。
-    from app.api.v1.settings import get_settings, open_xhs_login
+    """打开小红书登录页:优先走 opencli daemon 的 profile Chrome,无 profile fallback 到系统 Chrome。
+
+    关联 spec: docs/superpowers/specs/2026-08-16-dashboard-open-login-button-design.md
+    """
+    # 关键:每次调用时从包级命名空间查找,兼容测试中
+    # ``monkeypatch.setattr("app.api.v1.settings.open_xhs_login_via_opencli", ...)`` 的写法。
+    from app.api.v1.settings import get_settings, open_xhs_login_via_opencli
     settings = get_settings()
     try:
-        url = open_xhs_login(settings)
-        return {"code": 200, "message": "已打开 Chrome 小红书登录页", "data": {"url": url}}
+        url, source = open_xhs_login_via_opencli(settings)
+        return {
+            "code": 200,
+            "message": "已打开 Chrome 小红书登录页" if source == "opencli" else "已通过系统 Chrome 打开小红书登录页(opencli daemon 无可用 profile)",
+            "data": {"url": url, "source": source},
+        }
     except BrowserLaunchError as exc:
         raise HTTPException(503, str(exc)) from exc
 
@@ -87,6 +95,16 @@ _ENV_KEY_MAP: dict[str, str] = {
     "chrome_bin": "CHROME_BIN",
     "chrome_user_data_dir": "CHROME_USER_DATA_DIR",
     "opencli_bin": "OPENCLI_BIN",
+    # 存储路径 — 写到 .env 让业务进程下一轮启动时用新路径
+    # 关联: launcher 也会读这些字段,launcher UI 默认值 = ~/Library/Application Support/com.xhs-info-crawl.local
+    "data_dir": "DATA_DIR",
+    "image_dir": "IMAGE_DIR",
+    "export_dir": "EXPORT_DIR",
+    "archive_dir": "ARCHIVE_DIR",
+    # OCR 模型缓存 — PaddleOCR/HuggingFace 模型下载位置,
+    # 升级 .app 时会清掉,所以强烈建议放在 .app 外部绝对路径
+    "paddle_pdx_cache_home": "PADDLE_PDX_CACHE_HOME",
+    "huggingface_cache_home": "HF_HOME",
 }
 
 
@@ -116,6 +134,14 @@ class SystemConfigIn(BaseModel):
     chrome_bin: str | None = None
     chrome_user_data_dir: str | None = None
     opencli_bin: str | None = None
+    # 存储路径(launcher UI 推荐用绝对路径;留空恢复默认)
+    data_dir: str | None = None
+    image_dir: str | None = None
+    export_dir: str | None = None
+    archive_dir: str | None = None
+    # OCR 模型缓存路径
+    paddle_pdx_cache_home: str | None = None
+    huggingface_cache_home: str | None = None
 
 
 def _read_system_config(settings) -> dict[str, Any]:

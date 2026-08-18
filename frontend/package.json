@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "_build_note": "build 用 --base './' 因为 launcher 用 http://127.0.0.1:<web_port>/ 提供静态文件,子路由(/admin/users 等)必须用相对路径。关联: docs/superpowers/specs/2026-08-17-launcher-ui-baseurl-pywebview-design.md",
+    "build": "vue-tsc --noEmit && vite build --base './'",
+    "build:fast": "vite build --base './'",
     "test": "vitest",
     "test:e2e": "playwright test"
   },

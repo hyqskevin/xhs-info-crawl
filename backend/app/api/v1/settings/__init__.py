@@ -10,7 +10,7 @@
 xhs-accounts 端点在 ``app/api/v1/xhs_accounts.py``（独立 router），不在本包内。
 
 为兼容测试中 ``monkeypatch.setattr("app.api.v1.settings.get_settings", ...)``
-和 ``monkeypatch.setattr("app.api.v1.settings.open_xhs_login", ...)`` 的写法，
+和 ``monkeypatch.setattr("app.api.v1.settings.open_xhs_login_via_opencli", ...)`` 的写法，
 ``__init__`` 把这两个名字提升到包级；endpoint 通过延迟 import
 （``from app.api.v1.settings import get_settings``）查找，monkeypatch 后能正确看到新值。
 """
@@ -19,7 +19,8 @@ from fastapi import APIRouter
 # 在 ``include_router`` 之前先 import 子模块，确保它们的 handler 已绑定。
 from app.api.v1.settings import bloggers, blogger_groups, cities, keyword_groups, system_config
 from app.api.v1.settings.bloggers import get_settings
-from app.api.v1.settings.system_config import open_xhs_login  # noqa: F401  (re-export for tests)
+from app.api.v1.settings.system_config import open_xhs_login  # noqa: F401  (re-export for tests/兼容)
+from app.api.v1.settings.system_config import open_xhs_login_via_opencli  # noqa: F401  (re-export for tests)
 
 router = APIRouter()
 
@@ -39,4 +40,5 @@ __all__ = [
     "router",
     "get_settings",
     "open_xhs_login",
+    "open_xhs_login_via_opencli",
 ]

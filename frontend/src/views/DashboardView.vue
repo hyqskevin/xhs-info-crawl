@@ -58,6 +58,34 @@ const xhsPoolTag = computed(() => {
   if (v.mode === 'unknown') return { type: 'danger' as const, text: '未就绪' }
   return { type: 'info' as const, text: '未检测' }
 })
+
+// 抓取启动门控：opencli OK + extension connected + 浏览器连接 OK + xhs 已登录
+const crawlGate = computed(() => {
+  const opencliOk = diagnostics.value.opencli.ok === true
+  const xhsLoginOk = diagnostics.value.xhs_login.logged_in === true
+  const poolV = diagnostics.value.xhs_pool
+  const browserOk =
+    poolV.mode === 'daemon'
+      ? poolV.daemon_running === true && poolV.extension_connected === true && (poolV.profiles || []).length > 0
+      : poolV.mode === 'cdp'
+        ? poolV.cdp_reachable === true
+        : false
+  const reasons: string[] = []
+  if (!opencliOk) reasons.push('opencli 未就绪')
+  if (!browserOk) reasons.push('浏览器/扩展未连接')
+  if (!xhsLoginOk) reasons.push('小红书未登录')
+  return {
+    ok: opencliOk && browserOk && xhsLoginOk,
+    reasons,
+    opencliOk,
+    browserOk,
+    xhsLoginOk,
+  }
+})
+const crawlGateHint = computed(() => {
+  if (crawlGate.value.ok) return '系统就绪，可发起抓取'
+  return `无法发起抓取：${crawlGate.value.reasons.join(' / ')}`
+})
 const scheduleStatusMeta: Record<string, { type: string; label: string }> = {
   COMPLETED: { type: 'success', label: '成功' },
   COMPLETED_WITH_ERRORS: { type: 'warning', label: '部分成功' },
@@ -72,6 +100,7 @@ const pad2 = (n: number) => String(n).padStart(2, '0')
 const scheduleStatusOf = (task: any) => scheduleStatusMeta[task?.status] || { type: 'info', label: task?.status || '' }
 let pollLastTaskTimer: ReturnType<typeof setInterval> | undefined
 let pollStatsTimer: ReturnType<typeof setInterval> | undefined
+let diagRefreshTimer: ReturnType<typeof setInterval> | undefined
 const form = reactive({
   city: '',
   keyword_source: 'custom' as 'custom' | 'groups',
@@ -174,6 +203,8 @@ async function initialize() {
     await pollSummaryStats()
     await pollAnalytics()
   }, 60_000)
+  // 诊断每 30s 刷新（whoami 1-2s × 3 项顺序执行 → 整体 ≤6s，对仪表盘压力可接受）
+  diagRefreshTimer = setInterval(loadDiagnosticsSnapshot, 30_000)
 }
 
 async function loadDiagnosticsSnapshot() {
@@ -248,6 +279,11 @@ async function start() {
   }
   if (incompleteBloggers.value.length) {
     ElMessage.warning(`所选博主信息不完整（${incompleteBloggers.value.length} 个），请到配置中心点"补充博主信息"后再发起抓取`)
+    return
+  }
+  // 抓取启动门控：opencli + extension + 浏览器 + xhs 登录全部就绪
+  if (!crawlGate.value.ok) {
+    ElMessage.warning(crawlGateHint.value)
     return
   }
   submitting.value = true
@@ -332,6 +368,7 @@ onMounted(initialize)
 onUnmounted(() => {
   if (pollLastTaskTimer) clearInterval(pollLastTaskTimer)
   if (pollStatsTimer) clearInterval(pollStatsTimer)
+  if (diagRefreshTimer) clearInterval(diagRefreshTimer)
 })
 </script>
 
@@ -363,6 +400,7 @@ onUnmounted(() => {
           <span class="system-label">小红书登录</span>
           <ElTag :type="xhsLoginTag.type">{{ xhsLoginTag.text }}</ElTag>
           <ElButton size="small" :loading="diagLoading.xhs_login" @click="probe('xhs_login')">检测</ElButton>
+          <ElButton v-if="diagnostics.xhs_login.logged_in === false" size="small" type="primary" plain :icon="Link" :loading="openingLogin" @click="openLogin">打开登录页</ElButton>
           <p v-if="diagnostics.xhs_login.logged_in === false && diagnostics.xhs_login.reason" class="system-reason">{{ reasonText(diagnostics.xhs_login.reason) }}</p>
         </div>
         <div class="system-item">
@@ -444,7 +482,17 @@ onUnmounted(() => {
             </ElSelect>
           </ElFormItem>
         </div>
-        <div class="crawl-actions"><ElButton type="primary" :icon="VideoPlay" :loading="submitting" @click="start">开始抓取</ElButton><span>任务启动前会检查 Chrome 小红书登录状态</span></div>
+        <div class="crawl-actions">
+          <ElButton
+            type="primary"
+            :icon="VideoPlay"
+            :loading="submitting"
+            :disabled="!crawlGate.ok"
+            :title="crawlGateHint"
+            @click="start"
+          >开始抓取</ElButton>
+          <span :class="['crawl-gate-hint', crawlGate.ok ? 'ok' : 'block']">{{ crawlGateHint }}</span>
+        </div>
       </ElForm>
     </ElCard>
 
@@ -586,6 +634,9 @@ onUnmounted(() => {
 /* 操作账号下拉框固定宽度，不要撑满整行（.el-select.account-select 组合类特异性高于 .crawl-grid :deep(.el-select) 的 100%） */
 .crawl-grid :deep(.el-select.account-select) { width: 280px; max-width: 100%; }
 .crawl-actions { display: flex; align-items: center; gap: 16px; color: var(--el-text-color-secondary); }
+.crawl-gate-hint { font-size: 12px; }
+.crawl-gate-hint.ok { color: var(--el-color-success); }
+.crawl-gate-hint.block { color: var(--el-color-danger); }
 @media (max-width: 800px) {
   .crawl-grid { grid-template-columns: 1fr; }
   .grid-row-1, .grid-row-2, .grid-row-3, .grid-row-4 { grid-column: 1; }

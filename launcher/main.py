@@ -3,7 +3,7 @@
 关联 spec:
 - docs/superpowers/specs/2026-08-10-one-click-packaging-design.md § 2 + § 4
 - docs/superpowers/specs/2026-08-16-packaged-frontend-static-serving-design.md
-- docs/superpowers/specs/2026-08-16-launcher-password-visibility-design.md
+- docs/superpowers/specs/2026-08-16-packaged-default-login-and-mainthread-window-design.md
 """
 from __future__ import annotations
 
@@ -16,18 +16,14 @@ import uvicorn
 from pathlib import Path
 
 from launcher.env_bootstrap import (
-    build_api_base_url,
-    build_cors_origins,
     ensure_env_file,
     force_local_host,
     set_cache_env_vars,
     update_env_value,
 )
 from launcher.inject_app_config import inject_app_config
-from launcher.password_recording import record_initial_password
 from launcher.port_finder import find_available_port
 from launcher.process_manager import ProcessManager
-from launcher.pywebview_safety import run_main_loop, safe_pywebview_start
 from launcher.status_server import StatusServer
 
 logger = logging.getLogger(__name__)
@@ -44,6 +40,96 @@ def get_venv_python(project_root: Path) -> Path:
         return project_root / "runtime" / "venv" / "bin" / "python"
     else:
         return project_root / "runtime" / "venv" / "Scripts" / "python.exe"
+
+
+class Api:
+    """PyWebView 暴露给前端 JS 的接口(open_url / open_dir / exit / get_status_port)。"""
+
+    def __init__(self, project_root: Path):
+        self._project_root = project_root
+        # 由 main() 在 launcher status_server 起来后注入;前端 JS 用这个拿 status API 端口
+        self._status_port: int | None = None
+
+    def set_status_port(self, port: int) -> None:
+        """由 main() 在 status_server 启动后调用,前端 JS 通过 pywebview.api.get_status_port() 获取。"""
+        self._status_port = port
+
+    def get_status_port(self) -> int:
+        """前端 JS 用这个方法拿到 launcher status_server 的端口,
+        比 query string 可靠(macOS PyWebView 不一定把 query string 传给 window.location.search)。
+        关联: docs/superpowers/specs/2026-08-17-launcher-ui-baseurl-pywebview-design.md
+        """
+        if self._status_port is None:
+            # 兜底:从 process_manager 实际状态推断
+            return self._status_port or 0
+        return self._status_port
+
+    def open_url(self, url: str) -> None:
+        import webbrowser
+        webbrowser.open(url)
+
+    def open_dir(self, path: str) -> str:
+        """在系统文件管理器(Finder/Explorer)中打开目录。返回绝对路径。"""
+        import os
+        import subprocess
+        # 展开 ~ → 用户主目录(launcher UI 推荐的存储路径以 ~ 开头)
+        target = Path(os.path.expanduser(path))
+        if not target.is_absolute():
+            target = self._project_root / path
+        target = target.resolve()
+        if not target.exists():
+            raise FileNotFoundError(f"路径不存在: {target}")
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(target)])
+        elif sys.platform.startswith("win"):
+            subprocess.Popen(["explorer", str(target)])
+        else:
+            subprocess.Popen(["xdg-open", str(target)])
+        return str(target)
+
+    def exit(self) -> None:
+        """退出启动器:用户点 PyWebView 窗口的「退出」按钮时调用。
+
+        发 SIGTERM 给当前进程 → 触发 main.py 的 signal handler → pm.cleanup()。
+        不直接 destroy 窗口,避免子进程被进程组信号链杀而无法 graceful shutdown。
+        """
+        import os
+        os.kill(os.getpid(), signal.SIGTERM)
+
+
+def run_gui_main_thread(url: str, project_root: Path, cleanup, status_port: int = 0, log=None) -> None:
+    """在主线程运行 PyWebView 窗口(OSX 硬性要求),关窗/异常后调 cleanup。
+
+    关联 spec: docs/superpowers/specs/2026-08-16-packaged-default-login-and-mainthread-window-design.md
+    - macOS 上 PyWebView 必须在主线程创建 NSWindow 并跑事件循环,
+      放 daemon 线程会抛 WebViewException(must be run on a main thread),窗口从不显示。
+    - 窗口关闭(webview.start() 返回)或抛异常 → finally 调 cleanup 杀全部子进程,不留孤儿。
+    - KeyboardInterrupt(Ctrl-C)由调用方的 signal handler 处理,这里不拦截。
+    - status_port: 注入到 Api,前端 JS 用 pywebview.api.get_status_port() 拿到 launcher status API 端口。
+      PyWebView macOS 不一定把 query string 传给 window.location.search,走 JS API 更可靠。
+      关联: docs/superpowers/specs/2026-08-17-launcher-ui-baseurl-pywebview-design.md
+    """
+    try:
+        import webview
+
+        api = Api(project_root=project_root)
+        api.set_status_port(status_port)
+        webview.create_window(
+            "小红书活动信息抓取系统",
+            url,
+            width=900,
+            height=700,
+            min_size=(720, 600),
+            js_api=api,
+        )
+        webview.start()
+    except Exception as exc:
+        msg = f"PyWebView 运行异常: {exc}"
+        logger.exception(msg)
+        if log is not None:
+            log(msg)
+    finally:
+        cleanup()
 
 
 def bootstrap_env(project_root: Path) -> tuple[int, int]:
@@ -81,12 +167,11 @@ def main():
     """启动器主入口。
 
     流程:
-    1. 初始化 .env(记录自动生成的初始密码到文件)
+    1. 初始化 .env(SECRET_KEY 兜底,不生成随机密码)
     2. 找端口 + 注入前端配置
     3. 启动状态服务(后台线程)
     4. 启动子进程(API/Worker/Beat/Web)
-    5. 把 PyWebView 启动放到 daemon thread(失败不影响子进程)
-    6. 主线程 keep alive,直到收到 KeyboardInterrupt 或显式清理
+    5. 主线程跑 PyWebView(macOS 硬性要求),关窗/异常后 cleanup 全部子进程
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -95,20 +180,22 @@ def main():
 
     logger.info("启动器启动,项目根目录: %s", project_root)
 
-    # 1. 初始化 .env(返回自动生成的密码,如果本次调用真生成了)
+    # 1. 初始化 .env(SECRET_KEY 兜底;admin 密码统一默认 Admin@123,由后端建库播种)
     env_path = project_root / ".env"
-    auto_pwd = ensure_env_file(env_path, project_root / ".env.example")
-    if auto_pwd:
-        record_initial_password(project_root, auto_pwd, auto_generated=True)
-        logger.warning(
-            "已自动生成初始 admin 密码: %s 写入文件: data/run/INITIAL_ADMIN_PASSWORD.txt",
-            auto_pwd,
-        )
-        logger.warning("登录后请到「操作账号」立即修改密码")
+    ensure_env_file(env_path, project_root / ".env.example")
 
     # 2. 找端口 + 写 API_BASE_URL
     api_port, web_port = bootstrap_env(project_root)
     logger.info("API 端口: %d, Web 端口: %d", api_port, web_port)
+
+    # 2.5 探测 opencli daemon 端口(仅探测,不写 .env;opencli v1.8.6+ 已强制 19825)
+    try:
+        from launcher.opencli_port_detector import bootstrap_daemon_port
+        detected = bootstrap_daemon_port()
+        if detected:
+            logger.info("opencli daemon 端口探测: %d", detected)
+    except Exception as exc:
+        logger.warning("opencli daemon 端口探测失败(非致命): %s", exc)
 
     # 3. 注入前端配置(把端口写到 index.html,前端运行时读取 __APP_CONFIG__)
     frontend_dist = project_root / "app" / "frontend" / "dist"
@@ -161,89 +248,25 @@ def main():
     status_thread.start()
     logger.info("状态服务启动: http://127.0.0.1:%d", status_port)
 
+    # 5.5 status_port 已经找到,等 run_gui_main_thread 创建 Api 后注入
+    # (Api 在 run_gui_main_thread 里创建,因为 PyWebView 必须在主线程用)
+
     # 6. 启动后端 + 前端静态服务
     pm.start_service("api")
     pm.start_service("worker")
     pm.start_service("beat")
     pm.start_service("web")
 
-    # 7. 把 PyWebView 启动放到 daemon thread
-    # 失败不影响主进程和子进程(子进程独立存活,用户仍可通过浏览器访问 API)
+    # 7. 主线程跑 PyWebView(macOS 硬性要求,GUI 必须主线程)
+    # 窗口关闭(webview.start() 返回)或抛异常 → run_gui_main_thread 的 finally 调 pm.cleanup()
+    # 杀掉 API/Worker/Beat/Web 全部子进程,释放端口,不留孤儿进程。
     ui_dist = project_root / "launcher" / "ui" / "dist"
     if ui_dist.exists():
         url = f"file://{ui_dist / 'index.html'}?statusPort={status_port}&apiPort={api_port}&webPort={web_port}"
     else:
         url = f"data:text/html,<html><body><h1>启动器 UI 未构建</h1><p>状态服务: http://127.0.0.1:{status_port}</p></body></html>"
 
-    class Api:
-        def __init__(self, project_root: Path):
-            self._project_root = project_root
-
-        def open_url(self, url: str) -> None:
-            import webbrowser
-            webbrowser.open(url)
-
-        def open_dir(self, path: str) -> str:
-            """在系统文件管理器(Finder/Explorer)中打开目录。返回绝对路径。"""
-            import subprocess
-            target = Path(path)
-            if not target.is_absolute():
-                target = self._project_root / path
-            target = target.resolve()
-            if not target.exists():
-                raise FileNotFoundError(f"路径不存在: {target}")
-            if sys.platform == "darwin":
-                subprocess.Popen(["open", str(target)])
-            elif sys.platform.startswith("win"):
-                subprocess.Popen(["explorer", str(target)])
-            else:
-                subprocess.Popen(["xdg-open", str(target)])
-            return str(target)
-
-        def exit(self) -> None:
-            """退出启动器:用户点 PyWebView 窗口的「退出」按钮时调用。
-
-            发 SIGTERM 给当前进程 → 触发 main.py 的 signal handler → pm.cleanup()。
-            不直接 destroy 窗口,避免子进程被进程组信号链杀而无法 graceful shutdown。
-            """
-            import os
-            os.kill(os.getpid(), signal.SIGTERM)
-
-    def create_pywebview_window():
-        import webview
-        api = Api(project_root=project_root)
-        return webview.create_window(
-            "小红书活动信息抓取系统",
-            url,
-            width=900,
-            height=700,
-            min_size=(720, 600),
-            js_api=api,
-        )
-
-    webview_thread = threading.Thread(
-        target=lambda: safe_pywebview_start(
-            window_creator=create_pywebview_window,
-            log=lambda msg: logger.warning(msg),
-        ),
-        daemon=True,
-        name="pywebview-window",
-    )
-    webview_thread.start()
-    logger.info("PyWebView 窗口已在后台线程启动(daemon),失败不影响主进程")
-
-    # 8. 主线程 keep alive,直到 KeyboardInterrupt(开发模式 Ctrl-C)或 SIGTERM
-    # PyWebView 失败/退出不影响子进程继续运行
-    try:
-        run_main_loop(
-            on_iteration=lambda: None,
-            exception_log=lambda msg: logger.warning(msg),
-        )
-    except KeyboardInterrupt:
-        logger.info("收到 KeyboardInterrupt,准备退出")
-    finally:
-        logger.info("启动器退出,清理子进程")
-        pm.cleanup()
+    run_gui_main_thread(url, project_root, pm.cleanup, status_port=status_port, log=lambda msg: logger.warning(msg))
 
 
 if __name__ == "__main__":

@@ -61,3 +61,7 @@ launcher/ui/src/__tests__/
 
 # CI 测试工作流(不跑测试)
 .github/workflows/ci.yml
+frontend/tmp/
+
+# 截图/调试工具脚本
+scripts/_screenshot_server.py

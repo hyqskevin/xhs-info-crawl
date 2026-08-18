@@ -25,7 +25,13 @@ from app.services.search_rate_limit import (
     weekly_search_count,
 )
 
-from app.tasks.crawl.runtime import assert_execution_active, log, rate_limit_sleep
+from app.tasks.crawl.runtime import (
+    ExecutionStopped,
+    ExecutionSuperseded,
+    assert_execution_active,
+    log,
+    rate_limit_sleep,
+)
 
 
 def _collect_cities_from_groups(db, task_params: dict) -> list[str]:

@@ -137,9 +137,12 @@ def restart(task_id:int,_:Admin,db:DB):
         except AuthenticationRequired as exc:
             raise HTTPException(409,'AUTH_REQUIRED') from exc
     if task.status == 'FAILED': task.failed_notes=0
+    was_failed = task.status == 'FAILED'
     task.status='PENDING';task.run_token=str(uuid4());task.error_message=None;task.current_stage=None;task.current_note=None;task.finished_at=None
-    # 重新启动后更新 started_at，让仪表盘 last_task 排序优先看到本次
-    task.started_at=datetime.now(timezone.utc)
+    # 重新启动后更新 started_at，让仪表盘 last_task 排序优先看到本次（仅 FAILED 全新重跑）；
+    # PAUSED 是登录续跑，保留原 started_at（不是重新开始）。
+    if was_failed:
+        task.started_at=datetime.now(timezone.utc)
     db.add(TaskLog(task_id=task.id,level='INFO',message='任务继续抓取',created_at=datetime.now(timezone.utc)))
     db.commit();db.refresh(task)
     from app.tasks.crawl_task import run_crawl

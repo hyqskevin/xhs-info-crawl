@@ -1,33 +1,33 @@
-/* M3 Dark Theme baseline + 品牌色定制
+/* 启动器主题 — 浅色(白底卡片 + 小红书红品牌色)
+ * Element Plus 主题通过 --el-* CSS 变量覆盖,自定义 token 通过 --md-sys-* 前缀。
  * 关联 spec: docs/superpowers/specs/2026-08-10-one-click-packaging-design.md § 4.6.2-4.6.6
  */
 :root {
-  /* M3 Dark Surface 层级(深灰而非纯黑,表达 elevation) */
-  --md-sys-color-background: #121212;
-  --md-sys-color-surface: #1c1c1e;
-  --md-sys-color-surface-variant: #2c2c2e;
-  --md-sys-color-surface-container-high: #3a3a3c;
+  /* === M3 Light Surface 层级(自定义品牌 token) === */
+  --md-sys-color-background: #ffffff;
+  --md-sys-color-surface: #ffffff;
+  --md-sys-color-surface-variant: #f4f4f5;
+  --md-sys-color-surface-container-high: #ececef;
 
-  /* M3 On-Surface 文字色 */
-  --md-sys-color-on-surface: #e6e6e6;
-  --md-sys-color-on-surface-variant: #9b9b9d;
+  --md-sys-color-on-surface: #1c1c1e;
+  --md-sys-color-on-surface-variant: #6b7280;
 
-  /* 品牌主色(primary = 小红书红,降饱和度适配暗色) */
-  --md-sys-color-primary: #ff5c5c;
+  /* 品牌主色(小红书红,降饱和度适配浅色) */
+  --md-sys-color-primary: #ff2442;
   --md-sys-color-on-primary: #ffffff;
-  --md-sys-color-primary-container: #4d1a1a;
+  --md-sys-color-primary-container: #ffe5e8;
 
   /* 状态语义色 */
-  --md-sys-color-success: #4ade80;
-  --md-sys-color-on-success: #003314;
-  --md-sys-color-error: #f87171;
-  --md-sys-color-on-error: #4d0000;
-  --md-sys-color-warning: #fbbf24;
-  --md-sys-color-on-warning: #4d3500;
+  --md-sys-color-success: #16a34a;
+  --md-sys-color-on-success: #ffffff;
+  --md-sys-color-error: #dc2626;
+  --md-sys-color-on-error: #ffffff;
+  --md-sys-color-warning: #d97706;
+  --md-sys-color-on-warning: #ffffff;
 
-  /* M3 Elevation 阴影 */
-  --md-sys-elevation-1: 0px 1px 2px rgba(0, 0, 0, 0.3), 0px 1px 3px 1px rgba(0, 0, 0, 0.15);
-  --md-sys-elevation-2: 0px 2px 6px 2px rgba(0, 0, 0, 0.15), 0px 1px 2px rgba(0, 0, 0, 0.3);
+  /* M3 Elevation 阴影(浅色用更柔和的阴影) */
+  --md-sys-elevation-1: 0px 1px 2px rgba(0, 0, 0, 0.06), 0px 1px 3px rgba(0, 0, 0, 0.08);
+  --md-sys-elevation-2: 0px 2px 6px rgba(0, 0, 0, 0.08), 0px 1px 2px rgba(0, 0, 0, 0.06);
 
   /* M3 Type Scale */
   --md-sys-typescale-headline-large: 600 28px/36px 'Inter', 'PingFang SC', sans-serif;
@@ -55,7 +55,95 @@
   --md-sys-shape-corner-full: 9999px;
 }
 
-/* 全局基础样式 */
+/* === Element Plus CSS 变量覆盖(浅色) === */
+:root {
+  /* 主色:小红书红 */
+  --el-color-primary: var(--md-sys-color-primary);
+  --el-color-primary-light-3: #ff6e7f;
+  --el-color-primary-light-5: #ff97a3;
+  --el-color-primary-light-7: #ffc1c8;
+  --el-color-primary-light-8: #ffd1d6;
+  --el-color-primary-light-9: #ffe5e8;
+  --el-color-primary-dark-2: #d11d36;
+
+  /* 状态色 */
+  --el-color-success: var(--md-sys-color-success);
+  --el-color-success-light-3: #4ade80;
+  --el-color-success-light-5: #86efac;
+  --el-color-success-light-7: #bbf7d0;
+  --el-color-success-light-9: #dcfce7;
+  --el-color-warning: var(--md-sys-color-warning);
+  --el-color-warning-light-3: #fbbf24;
+  --el-color-warning-light-5: #fcd34d;
+  --el-color-warning-light-7: #fde68a;
+  --el-color-warning-light-9: #fef3c7;
+  --el-color-danger: var(--md-sys-color-error);
+  --el-color-danger-light-3: #f87171;
+  --el-color-danger-light-5: #fca5a5;
+  --el-color-danger-light-7: #fecaca;
+  --el-color-danger-light-9: #fee2e2;
+  --el-color-error: var(--md-sys-color-error);
+  --el-color-info: #6b7280;
+  --el-color-info-light-3: #9ca3af;
+  --el-color-info-light-5: #d1d5db;
+  --el-color-info-light-7: #e5e7eb;
+  --el-color-info-light-9: #f3f4f6;
+
+  /* 文字色 */
+  --el-text-color-primary: var(--md-sys-color-on-surface);
+  --el-text-color-regular: var(--md-sys-color-on-surface);
+  --el-text-color-secondary: var(--md-sys-color-on-surface-variant);
+  --el-text-color-placeholder: #9ca3af;
+  --el-text-color-disabled: #d1d5db;
+
+  /* 边框 */
+  --el-border-color: #e5e5e7;
+  --el-border-color-light: #ececef;
+  --el-border-color-lighter: #f4f4f5;
+  --el-border-color-extra-light: #fafafa;
+  --el-border-color-dark: #d4d4d8;
+  --el-border-color-darker: #9ca3af;
+  --el-border-color-hover: var(--md-sys-color-primary);
+
+  /* 填充 */
+  --el-fill-color: #f4f4f5;
+  --el-fill-color-light: #f9f9fa;
+  --el-fill-color-lighter: #fafafa;
+  --el-fill-color-extra-light: #fcfcfc;
+  --el-fill-color-blank: #ffffff;
+  --el-fill-color-dark: #ececef;
+  --el-fill-color-darker: #d4d4d8;
+
+  /* 背景 */
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #f9fafb;
+  --el-bg-color-overlay: #ffffff;
+
+  /* Mask / overlay */
+  --el-mask-color: rgba(0, 0, 0, 0.5);
+  --el-mask-color-extra-light: rgba(0, 0, 0, 0.05);
+
+  /* 阴影 */
+  --el-box-shadow: 0px 12px 32px 4px rgba(0, 0, 0, 0.04),
+    0px 8px 20px rgba(0, 0, 0, 0.08);
+  --el-box-shadow-light: 0px 0px 12px rgba(0, 0, 0, 0.06);
+  --el-box-shadow-lighter: 0px 0px 6px rgba(0, 0, 0, 0.04);
+  --el-box-shadow-dark: 0px 16px 48px 16px rgba(0, 0, 0, 0.08),
+    0px 12px 32px rgba(0, 0, 0, 0.12), 0px 8px 16px rgba(0, 0, 0, 0.04);
+
+  /* 关闭按钮 hover */
+  --el-close-icon-color: #6b7280;
+  --el-close-icon-hover-color: var(--md-sys-color-primary);
+}
+
+/* === 禁用 html.dark / html.light 类切换 — 始终浅色 === */
+html,
+html.dark,
+html.light {
+  color-scheme: light;
+}
+
+/* === 全局基础样式 === */
 body {
   margin: 0;
   background: var(--md-sys-color-background);

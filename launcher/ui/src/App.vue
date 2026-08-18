@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import ServiceStatus from './components/ServiceStatus.vue'
 import OpenCLIPanel from './components/OpenCLIPanel.vue'
+import LLMConfigPanel from './components/LLMConfigPanel.vue'
 import OcrPanel from './components/OcrPanel.vue'
 import LogViewer from './components/LogViewer.vue'
 import {
@@ -25,6 +26,7 @@ import {
   type OcrInstallProgress,
   type OcrTestResult,
   type InitialPasswordResult,
+  type SystemConfigSaveResponse,
 } from './api/client'
 
 const APP_VERSION = '0.1.0'
@@ -138,6 +140,12 @@ async function handleOpencliDownload() {
   } catch (e) {
     ElMessage.error('获取下载链接失败')
   }
+}
+
+function handleLlmSaved(_resp: SystemConfigSaveResponse) {
+  // LLMConfigPanel 内部已经弹了 ElMessage,这里只刷新 status
+  // 因为后端 restartapi 后端端口可能变了(其实不会,但服务状态可能改变)
+  refreshStatus()
 }
 
 async function handleOcrInstall() {
@@ -272,6 +280,8 @@ onUnmounted(() => {
         @test="handleOpencliTest"
         @download="handleOpencliDownload"
       />
+
+      <LLMConfigPanel @saved="handleLlmSaved" />
 
       <OcrPanel
         :status="ocrStatus"

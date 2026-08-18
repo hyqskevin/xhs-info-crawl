@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "_build_note": "build 用 --base './' 因为 PyWebView 用 file:// 加载,绝对路径 /assets/... 解析失败。关联: docs/superpowers/specs/2026-08-17-launcher-ui-baseurl-pywebview-design.md",
+    "build": "vue-tsc --noEmit && vite build --base './'",
+    "build:fast": "vite build --base './'",
     "test": "vitest run",
     "test:watch": "vitest"
   },
