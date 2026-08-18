@@ -26,8 +26,10 @@ __pycache__/
 # 打包产物(本地 build / 备份)
 dist/
 
-# TDD 过程文档(specs/plans/qa 不进仓库,本地保留)
-docs/superpowers/
+# docs/ 整个是开发者设计文档(架构/部署/数据库/抓取设计等),
+# 用户文档在根目录 README-USER.md / INSTALL.md / RELEASE_NOTES.md。
+# docs/ 本地保留作开发参考,不入库。
+docs/
 
 # TDD 过程测试案例文档和脚本(根目录 tests/,非 backend/tests)
 tests/
