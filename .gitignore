@@ -45,12 +45,14 @@ scripts/test-*.sh
 
 # 非生产文件(设计文档/开发工具,不进仓库)
 SPEC.md
-RELEASE_NOTES.md
 Makefile
 
 # 测试代码不提交(和生产运行无关)
+# 注: backend/tests/fixtures/ocr_test.png 是 OCR 探针的固定测试图,必须在仓库里,
+# package-macos.sh 打包时同步到 .app/app/backend/tests/fixtures/(不然 OCR 测试 401/image missing)
 backend/tests/
-backend/tests/fixtures/
+!backend/tests/fixtures/
+!backend/tests/fixtures/ocr_test.png
 launcher/tests/
 frontend/src/**/*.spec.ts
 frontend/e2e/
