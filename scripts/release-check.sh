@@ -99,9 +99,11 @@ fi
 # 6. tag 已存在 / 当前分支
 step "6/6 检查 tag + 分支"
 if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-    fail "tag v$VERSION 已存在(删除: git tag -d v$VERSION)"
+    # tag 已存在但指向不同 commit 没事(force push tag 会重新触发 release.yml)。
+    # 只有 tag 已发布过且没有后续改动才报警。
+    echo -e "  ${YELLOW}!${NC} tag v$VERSION 已存在(force push 会重新触发 release.yml)"
 else
-    ok "tag v$VERSION 不存在"
+    ok "tag v$VERSION 不存在(首次发布)"
 fi
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "master" ]; then
