@@ -23,6 +23,9 @@ __pycache__/
 *.py[cod]
 *.log
 
+# 打包产物(本地 build / 备份)
+dist/
+
 # TDD 过程文档(specs/plans/qa 不进仓库,本地保留)
 docs/superpowers/
 
@@ -36,6 +39,7 @@ backend/data/
 
 # 文档截图(临时测试用)
 docs/image*.png
+docs/screenshots/
 
 # AGENTS.md 声明 docs/TODO.md 是 agent 动态维护的待办入口,持续授权下频繁变更,不入库
 docs/TODO.md
@@ -65,3 +69,5 @@ frontend/tmp/
 
 # 截图/调试工具脚本
 scripts/_screenshot_server.py
+scripts/_shot_cdp.mjs
+scripts/_shot_smoke.mjs
