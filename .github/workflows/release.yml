@@ -4,6 +4,14 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # 允许手动重跑 release 工作流(比如 x86_64 runner 排队严重时,
+  # 可以在 Actions 标签页手动触发,不依赖 push tag;必须填 VERSION)。
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (e.g. 0.6.0),workflow_dispatch 必须填'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -25,7 +33,12 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Install frontend deps
         run: npm --prefix frontend ci
@@ -98,7 +111,12 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Download macOS arm64 artifact
         uses: actions/download-artifact@v4
@@ -115,6 +133,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # workflow_dispatch 创建的 Release 也要找正确 tag
+          tag_name: v${{ steps.version.outputs.VERSION }}
           files: |
             artifacts/xhs-info-crawl-${{ steps.version.outputs.VERSION }}-macos-arm64.zip
             artifacts/xhs-info-crawl-${{ steps.version.outputs.VERSION }}-windows.zip
