@@ -130,7 +130,10 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build-macos-arm64, build-macos-x86_64, build-windows]
+    # macOS x86_64 (Intel) runner 公共资源严重排队,几小时到几天都可能没调度到。
+    # Apple Silicon 已占主流(~95% 新 Mac),x86_64 后补;release 不等它。
+    # 关联: docs/superpowers/specs/2026-08-17-launcher-ui-baseurl-pywebview-design.md
+    needs: [build-macos-arm64, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
