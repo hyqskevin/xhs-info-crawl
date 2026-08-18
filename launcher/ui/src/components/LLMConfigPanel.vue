@@ -80,8 +80,11 @@ function openDir(path: string) {
 // 关联 spec: docs/superpowers/specs/2026-08-17-launcher-storage-base-dir-design.md
 // base dir 模式:用户只设 config.data_dir,所有子目录从这里推导(同 backend Settings._sync_storage_subdirs_from_data_dir)
 function joinDataDir(subdir: string): string {
-  if (!config.data_dir) return `~/xhs-info-crawl/${subdir}`
-  const base = config.data_dir.endsWith('/') ? config.data_dir.slice(0, -1) : config.data_dir
+  // config 是 Ref<SystemConfig | null>,JS 访问需要 .value(template 里 Vue auto-unwraps)
+  // 关联: docs/superpowers/specs/2026-08-17-launcher-storage-base-dir-design.md
+  const dataDir = config.value?.data_dir
+  if (!dataDir) return `~/xhs-info-crawl/${subdir}`
+  const base = dataDir.endsWith('/') ? dataDir.slice(0, -1) : dataDir
   return `${base}/${subdir}`
 }
 

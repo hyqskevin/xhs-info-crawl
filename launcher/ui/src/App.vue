@@ -127,7 +127,17 @@ async function handleOpencliTest() {
   try {
     opencliResult.value = await testOpencli()
   } catch (e) {
-    opencliResult.value = { ok: false, version: '', reason: 'api_error', message: '测试失败' }
+    // OpencliTestResult 类型要求 daemon/chrome/extension 三个细粒度状态,
+    // catch 里只赋基础字段加三个默认空对象才能匹配。
+    opencliResult.value = {
+      ok: false,
+      version: '',
+      reason: 'api_error',
+      message: '测试失败',
+      daemon: { running: false, port: 0 },
+      chrome: { running: false, path: '' },
+      extension: { connected: false, profile: '' },
+    }
   } finally {
     opencliLoading.value = false
   }
