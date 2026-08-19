@@ -20,7 +20,11 @@ from app.models.config import Blogger, City
 from app.models.keyword_group import KeywordGroup
 from app.models.note import Note, NoteImage
 from app.models.report import WeeklyReport
-from app.services.report import generate_note_markdown, generate_note_xlsx, strip_report_images
+from app.services.report import (
+    build_report_zip,
+    generate_note_markdown,
+    generate_note_xlsx_with_cover,
+)
 
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -215,11 +219,6 @@ def download_report(report_id: int, _: Annotated[dict[str, str], Depends(get_cur
         raise HTTPException(status_code=404, detail="周报不存在")
     base = re.sub(r"[^\w\u4e00-\u9fff-]", "_", report.name or report.week)
     base = re.sub(r"_+", "_", base).strip("_")
-    filename = f"{base}.{format}"
-    if format == "md":
-        # md 下载不输出图片地址：剥离周报正文里生成的内联图片行
-        content = strip_report_images(report.content)
-        return Response(content, media_type="text/markdown; charset=utf-8", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})
     entries = select_notes(db, GenerateRequest(
         week=report.week,
         cities=json.loads(report.cities),
@@ -228,4 +227,13 @@ def download_report(report_id: int, _: Annotated[dict[str, str], Depends(get_cur
         blogger_group_ids=json.loads(report.blogger_group_ids),
         blogger_ids=json.loads(report.blogger_ids),
     ))
-    return Response(generate_note_xlsx(entries), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})
+    if format == "md":
+        # md 下载 = 周报压缩包 zip：<base>.zip 内含 .md + images/note_<id>/<filename>
+        # 关联 spec: docs/superpowers/specs/2026-08-18-weekly-report-images-and-zip-design.md
+        zip_bytes = build_report_zip(report.name or report.week, report.week, json.loads(report.cities), entries)
+        return Response(zip_bytes, media_type="application/zip", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(base)}.zip"})
+    return Response(
+        generate_note_xlsx_with_cover(entries, get_settings().data_dir.resolve()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(base)}.xlsx"},
+    )
