@@ -26,7 +26,11 @@ def create_celery_app(settings: Settings) -> Celery:
             "scheduled-crawl-dispatch": {
                 "task": "app.tasks.crawl_task.scheduled_dispatch",
                 "schedule": crontab(minute="*"),
-            }
+            },
+            "scheduled-crawl-retry-failed": {
+                "task": "app.tasks.crawl_task.retry_failed_schedules",
+                "schedule": crontab(minute="*"),
+            },
         },
     )
     return app

@@ -36,6 +36,9 @@ class ScheduleIn(BaseModel):
     blogger_group_ids: list[int] = Field(default_factory=list)
     recent_filter: RecentFilter | None = None
     enabled: bool = True
+    # 跨运行失败熔断（spec: 2026-08-19-schedule-circuit-breaker-retry-design.md）
+    consecutive_fail_limit: int | None = Field(default=None, ge=1, description="连续失败熔断阈值；null=跟随全局")
+    retry_interval_minutes: int | None = Field(default=None, ge=1, description="熔断后自动重启间隔(分钟)；null=跟随全局")
 
 
 def _validate_scope(db: Session, payload: ScheduleIn) -> None:
@@ -75,6 +78,10 @@ def _dump(db: Session, schedule: ScheduledCrawl, with_last_task: bool = False) -
         "keyword_group_ids": schedule.keyword_group_ids or [],
         "blogger_group_ids": schedule.blogger_group_ids or [],
         "recent_filter": schedule.recent_filter,
+        "consecutive_fail_limit": schedule.consecutive_fail_limit,
+        "retry_interval_minutes": schedule.retry_interval_minutes,
+        "consecutive_failures": schedule.consecutive_failures or 0,
+        "cooldown_until": schedule.cooldown_until,
         "created_at": schedule.created_at,
         "updated_at": schedule.updated_at,
     }
@@ -106,6 +113,8 @@ def create_schedule(payload: ScheduleIn, _: Admin, db: DB) -> dict:
         keyword_group_ids=list(dict.fromkeys(payload.keyword_group_ids)),
         blogger_group_ids=list(dict.fromkeys(payload.blogger_group_ids)),
         recent_filter=payload.recent_filter,
+        consecutive_fail_limit=payload.consecutive_fail_limit,
+        retry_interval_minutes=payload.retry_interval_minutes,
     )
     db.add(schedule)
     db.commit()
@@ -128,6 +137,8 @@ def update_schedule(schedule_id: int, payload: ScheduleIn, _: Admin, db: DB) -> 
     schedule.keyword_group_ids = list(dict.fromkeys(payload.keyword_group_ids))
     schedule.blogger_group_ids = list(dict.fromkeys(payload.blogger_group_ids))
     schedule.recent_filter = payload.recent_filter
+    schedule.consecutive_fail_limit = payload.consecutive_fail_limit
+    schedule.retry_interval_minutes = payload.retry_interval_minutes
     db.commit()
     db.refresh(schedule)
     return {"code": 200, "message": "success", "data": _dump(db, schedule, with_last_task=True)}

@@ -42,6 +42,8 @@ from app.tasks.crawl.accounts import (  # noqa: F401
     _make_chrome_pool_for_task,
     _resolve_cdp_endpoint_for_account,
     load_xhs_accounts,
+    open_account_login,
+    wait_for_login,
 )
 from app.tasks.crawl.notes import (  # noqa: F401
     StagedNote,
@@ -78,6 +80,7 @@ from app.tasks.celery_app import celery_app
 from app.models.schedule import ScheduledCrawl
 from app.models.task import CrawlTask
 from app.services.crawler import AuthenticationRequired, CrawlHalted, VerificationRequired
+from app.services.schedule_service import record_schedule_failure, record_schedule_success
 from app.services.chrome_pool import ChromeLaunchError
 from app.services.note_identity import extract_platform_note_id
 from app.services.pipeline import run_stage
@@ -148,6 +151,56 @@ def scheduled_dispatch(now=None) -> None:
             db.commit()
             run_crawl.delay(task.id, task.run_token)
             busy = True  # 同一 tick 后续 schedule 不再叠加任务
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.tasks.crawl_task.retry_failed_schedules")
+def retry_failed_schedules(now=None) -> None:
+    """每 1 分钟由 beat 触发：扫描 cooldown_until<=now 的 enabled schedule，自动再发一次抓取。
+
+    spec: docs/superpowers/specs/2026-08-19-schedule-circuit-breaker-retry-design.md
+    - 冷却到期后无需人工，自动重启（尊重 _BUSY_STATUSES 单任务约束，忙则等下一轮）。
+    - params 带 ``restart_after_failure`` 标记，便于追踪/审计是熔断恢复触发。
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    db = SessionLocal()
+    try:
+        busy = db.scalar(
+            select(func.count()).select_from(CrawlTask).where(CrawlTask.status.in_(_BUSY_STATUSES))
+        )
+        schedules = db.scalars(
+            select(ScheduledCrawl).where(
+                ScheduledCrawl.enabled.is_(True),
+                ScheduledCrawl.cooldown_until.isnot(None),
+                ScheduledCrawl.cooldown_until <= now,
+            )
+        ).all()
+        for s in schedules:
+            if busy:
+                continue
+            params: dict = {
+                "type": "scheduled",
+                "city": s.city_code,
+                "keyword_group_ids": s.keyword_group_ids or [],
+                "blogger_ids": _expand_blogger_groups(db, s.city_code, s.blogger_group_ids or []),
+                "schedule_id": s.id,
+                "schedule_name": s.name,
+                "fired_slot": s.last_fired_slot or datetime.now(_DISPATCH_TZ).strftime("%Y-%m-%dT%H:%M"),
+                "restart_after_failure": True,
+            }
+            if s.recent_filter:
+                params["recent_filter"] = s.recent_filter
+            task = CrawlTask(type="scheduled", status="PENDING", params=params)
+            db.add(task)
+            db.commit()
+            db.refresh(task)
+            s.cooldown_until = None
+            db.commit()
+            run_crawl.delay(task.id, task.run_token)
+            busy = True
     finally:
         db.close()
 
@@ -411,51 +464,95 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
                 # 让 run_crawl 顶部 except (CrawlHalted) 处理（写 PAUSED + error_message）
                 raise
             except (AuthenticationRequired, VerificationRequired) as exc:
-                # 当前账号失效（未登录/扫码超时/风控验证），切换到下一个账号并重试当前笔记一次。
-                # 每篇笔记最多切换一次，避免死循环；retry 再失效则跳过本篇，下一篇继续用新账号。
+                # 当前账号失效（未登录/扫码超时/风控验证）：
+                # ① 主动登出失效账号（清 cookie）+ 释放其 Chrome 实例
+                # ② 依次探测后续账号，未登录的自动打开其登录页并同步等待扫码
+                # ③ 首个登录成功的账号重试当前笔记一次；全部失败 → CrawlHalted(PAUSED)
+                # spec: docs/superpowers/specs/2026-08-19-xhs-account-switch-auto-login-design.md
                 db.rollback()
                 cleanup_incomplete_note(db, entry[1]["url"])
-                account_index += 1
-                if account_index >= len(accounts):
-                    raise CrawlHalted(f"所有账号均已失效，请扫码登录后继续。最近错误：{exc}")
-                old_name = accounts[account_index - 1].name
-                new_name = accounts[account_index].name
-                log(db, task.id, "INFO", f"账号 {old_name!r} 失效（{exc}），切换到 {new_name!r}")
-                adapter = OpenCLIAdapter(
-                    settings,
-                    session=accounts[account_index].session_name,
-                    cdp_endpoint=_resolve_cdp_endpoint_for_account(accounts[account_index], chrome_pool),
-                )
-                if hasattr(adapter, "bind_task"):
-                    adapter.bind_task(
-                        task.id,
-                        run_token,
-                        execution_guard=lambda: assert_execution_active(db, task.id, run_token, stop_event),
-                        warning_sink=lambda message: log(db, task.id, "WARNING", message),
-                    )
-                # 重试当前笔记一次
+                # 3.1 主动登出当前失效账号（失败静默，不阻断切换）
                 try:
-                    staged = download_and_ocr(db, task, run_token, entry[0], entry[1], adapter, settings)
-                    if staged is not None:
-                        staged_notes.append(staged)
-                    consecutive_failures = 0
-                except (AuthenticationRequired, VerificationRequired) as retry_exc:
-                    # 新账号也失效，跳过本篇，下一篇继续用新账号（account_index 已增）
-                    db.rollback()
-                    cleanup_incomplete_note(db, entry[1]["url"])
-                    log(db, task.id, "WARNING", f"切换到账号 {new_name!r} 后仍失效：{retry_exc}，跳过该笔记")
-                    continue
-                except ExecutionStopped:
-                    db.rollback()
-                    cleanup_incomplete_note(db, entry[1]["url"])
-                    finish_stop_if_requested(db, task.id, run_token)
-                    return
-                except ExecutionSuperseded:
-                    db.rollback()
-                    return
-                except Exception as retry_exc:
-                    on_failure(entry, retry_exc)
-                    continue
+                    adapter.logout()
+                except Exception:  # noqa: BLE001
+                    pass
+                if chrome_pool is not None:
+                    try:
+                        chrome_pool.release(accounts[account_index].session_name)
+                    except Exception:  # noqa: BLE001
+                        pass
+                # 3.2 依次探测后续所有账号，找到第一个能登录成功的
+                switched = False
+                while account_index + 1 < len(accounts):
+                    prev_name = accounts[account_index].name
+                    account_index += 1
+                    target = accounts[account_index]
+                    target_name = target.name
+                    if chrome_pool is not None:
+                        try:
+                            chrome_pool.acquire(target.session_name)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    adapter = OpenCLIAdapter(
+                        settings,
+                        session=target.session_name,
+                        cdp_endpoint=_resolve_cdp_endpoint_for_account(target, chrome_pool),
+                    )
+                    if hasattr(adapter, "bind_task"):
+                        adapter.bind_task(
+                            task.id,
+                            run_token,
+                            execution_guard=lambda: assert_execution_active(db, task.id, run_token, stop_event),
+                            warning_sink=lambda message: log(db, task.id, "WARNING", message),
+                        )
+                    # 3.3 已登录直接可用；未登录则打开其登录页并同步等待扫码
+                    logged = False
+                    try:
+                        raw = adapter.check_login()
+                        logged = bool(raw and raw.get("logged_in"))
+                    except (AuthenticationRequired, VerificationRequired, Exception):  # noqa: BLE001
+                        logged = False
+                    if not logged:
+                        log(db, task.id, "INFO", f"账号 {target_name!r} 未登录，打开登录页等待扫码")
+                        try:
+                            open_account_login(adapter, settings)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        try:
+                            wait_for_login(adapter, settings)
+                        except (AuthenticationRequired, VerificationRequired):
+                            # 目标账号扫码超时 → 试下一个账号
+                            log(db, task.id, "WARNING", f"账号 {target_name!r} 登录等待超时，尝试下一个账号")
+                            continue
+                    log(db, task.id, "INFO", f"账号 {prev_name!r} 失效（{exc}），切换并自动登录到 {target_name!r}")
+                    switched = True
+                    # 3.4 用新账号重试当前笔记一次
+                    try:
+                        staged = download_and_ocr(db, task, run_token, entry[0], entry[1], adapter, settings)
+                    except (AuthenticationRequired, VerificationRequired) as retry_exc:
+                        # 新账号也失效，跳过本篇，下一篇继续用当前账号（account_index 已增）
+                        db.rollback()
+                        cleanup_incomplete_note(db, entry[1]["url"])
+                        log(db, task.id, "WARNING", f"切换并登录账号 {target_name!r} 后仍失效：{retry_exc}，跳过该笔记")
+                        break
+                    except ExecutionStopped:
+                        db.rollback()
+                        cleanup_incomplete_note(db, entry[1]["url"])
+                        finish_stop_if_requested(db, task.id, run_token)
+                        return
+                    except ExecutionSuperseded:
+                        db.rollback()
+                        return
+                    except Exception as retry_exc:
+                        on_failure(entry, retry_exc)
+                        break
+                    else:
+                        if staged is not None:
+                            staged_notes.append(staged)
+                            consecutive_failures = 0
+                        break
+                if not switched:
+                    raise CrawlHalted(f"所有账号均已失效，请扫码登录后继续。最近错误：{exc}")
             except Exception as exc:
                 consecutive_failures += 1
                 on_failure(entry, exc)
@@ -519,6 +616,7 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
         task.current_note = None
         task.finished_at = datetime.now(timezone.utc)
         db.commit()
+        record_schedule_success(db, task)
         log(db, task.id, "INFO", "completed")
     except ExecutionStopped:
         db.rollback()
@@ -530,6 +628,7 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
         task.status = "PAUSED"
         task.error_message = str(exc)
         db.commit()
+        record_schedule_failure(db, task)
         log(db, task.id, "ERROR", str(exc))
         # 未登录（whoami 超时归类）、安全验证与连续失败熔断都需要用户在浏览器里
         # 检查并完成扫码/验证，统一自动打开登录页；打开失败不影响 PAUSED 状态。
@@ -546,6 +645,7 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
         task.error_message = str(exc)
         task.current_stage = None
         db.commit()
+        record_schedule_failure(db, task)
         log(db, task.id, "ERROR", str(exc))
     finally:
         # 不释放 chrome_pool——它是全局单例，由 atexit 在后端退出时统一 release

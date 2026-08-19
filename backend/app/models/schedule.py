@@ -32,5 +32,11 @@ class ScheduledCrawl(Base):
     blogger_group_ids: Mapped[list] = mapped_column(JSON, default=list)
     recent_filter: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
     last_fired_slot: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
+    # 跨运行失败熔断（spec: 2026-08-19-schedule-circuit-breaker-retry-design.md）
+    # None → 回退全局 settings.schedule_consecutive_fail_limit / schedule_retry_interval_minutes
+    consecutive_fail_limit: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    retry_interval_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=True, default=0)
+    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

@@ -36,6 +36,7 @@ function resetForm() {
   Object.assign(form, {
     name: '', day_of_week: 1, time: '09:00', city_code: '',
     keyword_group_ids: [], blogger_group_ids: [], recent_filter: null, enabled: true,
+    consecutive_fail_limit: null, retry_interval_minutes: null,
   })
 }
 
@@ -71,6 +72,8 @@ function openEdit(row: any) {
     blogger_group_ids: [...(row.blogger_group_ids || [])],
     recent_filter: row.recent_filter,
     enabled: row.enabled,
+    consecutive_fail_limit: row.consecutive_fail_limit ?? null,
+    retry_interval_minutes: row.retry_interval_minutes ?? null,
   })
   dialog.value = true
 }
@@ -100,6 +103,8 @@ async function save() {
     blogger_group_ids: form.blogger_group_ids,
     recent_filter: form.recent_filter || null,
     enabled: form.enabled,
+    consecutive_fail_limit: form.consecutive_fail_limit ?? null,
+    retry_interval_minutes: form.retry_interval_minutes ?? null,
   }
   if (editingId.value) {
     await api.updateSchedule(editingId.value, payload)
@@ -295,6 +300,12 @@ onMounted(load)
           <ElSelect v-model="form.recent_filter" clearable placeholder="默认使用城市配置" style="width: 100%">
             <ElOption v-for="item in recentFilters" :key="item" :label="item" :value="item" />
           </ElSelect>
+        </ElFormItem>
+        <ElFormItem label="连续失败熔断阈值">
+          <ElInputNumber v-model="form.consecutive_fail_limit" :min="1" :step="1" placeholder="全局默认" style="width: 100%" />
+        </ElFormItem>
+        <ElFormItem label="熔断后重启间隔(分钟)">
+          <ElInputNumber v-model="form.retry_interval_minutes" :min="1" :step="1" placeholder="全局默认" style="width: 100%" />
         </ElFormItem>
         <ElFormItem label="启用">
           <ElSwitch v-model="form.enabled" />

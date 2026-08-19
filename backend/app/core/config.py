@@ -111,6 +111,13 @@ class Settings(BaseSettings):
     # 多账号轮询：每个账号连续抓 N 篇后主动切换到下一个账号（避免触发频率限制）
     # 仅当配置了 ≥2 个已启用账号时生效；=1 时不切换
     account_rotation_notes: int = 25
+    # 账号切换-自动登录：切换目标账号后等待扫码完成 的轮询间隔(秒)与总超时(秒)
+    xhs_account_login_wait_interval: int = 5
+    xhs_account_login_wait_timeout: int = 120
+    # 定时任务多运行连续失败熔断（跨运行级）：阈值与冷却后自动重启间隔(分钟)
+    # ScheduledCrawl 行内同名字段为空时回退到这两个全局默认
+    schedule_consecutive_fail_limit: int = 3
+    schedule_retry_interval_minutes: int = 60
     # ─── 存储路径(用户只设 DATA_DIR,其他自动从 DATA_DIR 推导) ───
     # 关联: docs/superpowers/specs/2026-08-17-launcher-storage-base-dir-design.md
     data_dir_setting: Path = Field(Path("./data"), validation_alias="DATA_DIR")
