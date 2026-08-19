@@ -262,20 +262,24 @@ def check_login(account_id: int, _: Admin, db: DB) -> dict:
         except ChromeLaunchError as exc:
             raise HTTPException(503, f"Chrome 实例启动失败：{exc}") from exc
     try:
-        raw = OpenCLIAdapter(
+        adapter = OpenCLIAdapter(
             settings,
             session=account.session_name,
             cdp_endpoint=cdp_endpoint,
-        ).check_login(foreground=True)
+        )
+        raw = adapter.check_login(foreground=True)
         account.login_status = "logged_in"
-        # whoami 返回结构依 opencli 版本而异；常见字段：user_id / userId / id
+        # 1) whoami 字段（部分 opencli 版本可能含 user_id / userId / id）
         whoami_user_id = (
             (raw or {}).get("user_id")
             or (raw or {}).get("userId")
             or (raw or {}).get("id")
         )
-        if whoami_user_id and not account.platform_user_id:
-            account.platform_user_id = str(whoami_user_id)
+        # 2) 从浏览器 localStorage USER_INFO 拿 user_id（2026-08-19：whoami 默认无 user_id 字段）
+        fetched_user_id = adapter.fetch_my_user_id()
+        user_id = whoami_user_id or fetched_user_id
+        if user_id and not account.platform_user_id:
+            account.platform_user_id = str(user_id)
         db.commit()
         db.refresh(account)
         # 返回完整 account dump，前端可直接合并到 rows；同时带 login_status 便于 ElTag 刷新

@@ -208,6 +208,42 @@ class OpenCLIAdapter:
                 '小红书登录检查超时：可能未登录或登录窗口正在等待扫码，'
                 '请完成扫码登录后点击「继续抓取」'
             ) from exc
+
+    def fetch_my_user_id(self) -> str | None:
+        """从浏览器 localStorage USER_INFO 提取当前登录账号的 user_id。
+
+        2026-08-19 用户反馈：扫码后小红书账号 ID 不能自动读取。whoami 输出不包含 user_id，
+        改为读 creator.xiaohongshu.com 创建的 localStorage USER_INFO.user.value.userId。
+
+        行为：
+        - 成功 → 返回 user_id 字符串
+        - USER_INFO 不存在 / 未登录 / CDP 关闭 / 解析失败 → 返回 None（不抛错，不影响其他流程）
+        """
+        # 选择 USER_INFO.user.value.userId 字符串。opencli run() 会把 stdout 当 JSON 解析，
+        # 所以我们不包 JSON.stringify,直接返回字符串内容 → run() 拿到 Python str。
+        eval_script = (
+            "((JSON.parse(localStorage.getItem('USER_INFO')||'{}').user||{}).value||{}).userId"
+            " || ''"
+        )
+        try:
+            raw = self.run(["browser", self.session, "eval", eval_script])
+        except (OpenCLITimeout, OpenCLIError) as exc:
+            logger.info("fetch_my_user_id eval 失败,跳过 user_id 落库: %s", exc)
+            return None
+        if raw is None or raw == "":
+            return None
+        if isinstance(raw, str):
+            user_id = raw.strip().strip('"').strip()
+        else:
+            user_id = str(raw).strip()
+        if not user_id:
+            return None
+        # 启发式:小红书 user_id 是 24 位 hex;允许 hex / 字母数字 / 长度 16~64
+        # 防御 run() 解析失败返原 stdout 这种污染
+        if not (16 <= len(user_id) <= 64) or not re.match(r"^[A-Za-z0-9]+$", user_id):
+            logger.info("fetch_my_user_id 拿到非用户 ID 格式 (%r),跳过", user_id)
+            return None
+        return user_id
     @staticmethod
     def normalize_note(value:Any)->dict[str,Any]:
         if isinstance(value,dict): return value
