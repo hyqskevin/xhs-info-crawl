@@ -178,6 +178,21 @@ def run_crawl(self, task_id: int, run_token=None) -> None:
     if claimed.rowcount != 1:
         db.close()
         return
+    # 启动 stop_watchdog：兜底处理 in-process 阻塞调用（用户 2026-08-19 反馈 task29 卡死场景）。
+    # 关联 spec: docs/superpowers/specs/2026-08-19-crawl-stop-watchdog-design.md
+    from app.services.stop_watchdog import StopWatchdog
+    from app.tasks.crawl.runtime import stop_event_scope
+
+    watchdog = StopWatchdog(task_id, run_token)
+    watchdog.start()
+    try:
+        with stop_event_scope(watchdog.stop_event):
+            _run_crawl_body(task_id, run_token, db, watchdog.stop_event)
+    finally:
+        watchdog.stop(timeout=2.0)
+
+
+def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
     task = db.get(CrawlTask, task_id)
     settings = get_settings()
     if find_opencli(settings.opencli_bin) is None:
@@ -216,7 +231,7 @@ def run_crawl(self, task_id: int, run_token=None) -> None:
         adapter.bind_task(
             task.id,
             run_token,
-            execution_guard=lambda: assert_execution_active(db, task.id, run_token),
+            execution_guard=lambda: assert_execution_active(db, task.id, run_token, stop_event),
             warning_sink=lambda message: log(db, task.id, "WARNING", message),
         )
     try:
@@ -267,7 +282,7 @@ def run_crawl(self, task_id: int, run_token=None) -> None:
                 new_adapter.bind_task(
                     task.id,
                     run_token,
-                    execution_guard=lambda: assert_execution_active(db, task.id, run_token),
+                    execution_guard=lambda: assert_execution_active(db, task.id, run_token, stop_event),
                     warning_sink=lambda message: log(db, task.id, "WARNING", message),
                 )
             return new_adapter
@@ -378,7 +393,7 @@ def run_crawl(self, task_id: int, run_token=None) -> None:
                             adapter.bind_task(
                                 task.id,
                                 run_token,
-                                execution_guard=lambda: assert_execution_active(db, task.id, run_token),
+                                execution_guard=lambda: assert_execution_active(db, task.id, run_token, stop_event),
                                 warning_sink=lambda message: log(db, task.id, "WARNING", message),
                             )
                 # 正常返回（含标题不匹配/已存在等跳过）说明链路健康，连续失败计数清零
@@ -415,7 +430,7 @@ def run_crawl(self, task_id: int, run_token=None) -> None:
                     adapter.bind_task(
                         task.id,
                         run_token,
-                        execution_guard=lambda: assert_execution_active(db, task.id, run_token),
+                        execution_guard=lambda: assert_execution_active(db, task.id, run_token, stop_event),
                         warning_sink=lambda message: log(db, task.id, "WARNING", message),
                     )
                 # 重试当前笔记一次
