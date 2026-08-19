@@ -88,6 +88,39 @@ class OpenCLIAdapter:
         self._preserve_browser_tab = False
         self._close_browser_tab()
 
+    def logout(self) -> bool:
+        """登出当前账号：经 opencli browser <session> eval 清 localStorage + 全部 cookie。
+
+        Args:
+            None
+
+        Returns:
+            True 登出成功；opencli/CDP 不可用时报错被捕获，返回 False 且不抛（切换流程可安全继续）。
+
+        经 ``run(..., enforce_execution=False)`` 执行，避免任务停止 guard 中断登出。
+        """
+        script = (
+            "(function(){try{"
+            "localStorage.clear();"
+            "document.cookie.split(';').forEach(function(c){"
+            "var n=c.split('=')[0].trim();"
+            "document.cookie=n+'=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';"
+            "});return true;}catch(e){return false;}})()"
+        )
+        try:
+            raw = self.run(
+                ["browser", self.session, "eval", script],
+                enforce_execution=False,
+                timeout=10,
+            )
+            return raw is not False and raw is not None
+        except (OpenCLITimeout, OpenCLIError, AuthenticationRequired, VerificationRequired):
+            logger.info("logout 失败（session=%s），忽略", self.session)
+            return False
+        except Exception:  # noqa: BLE001 - 登出失败不阻断切换流程
+            logger.warning("logout 异常（session=%s），忽略", self.session)
+            return False
+
     @staticmethod
     def _kill_and_reap(proc: subprocess.Popen) -> None:
         if proc.poll() is None:

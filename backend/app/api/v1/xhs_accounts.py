@@ -338,3 +338,31 @@ def open_login(account_id: int, _: Admin, db: DB) -> dict:
     except Exception as exc:
         raise HTTPException(503, f"打开登录页失败：{exc}") from exc
     return {"code": 200, "message": "success", "data": {"url": settings.xhs_login_url, "session": account.session_name}}
+
+
+@router.post("/{account_id}/logout")
+def logout_account(account_id: int, _: Admin, db: DB) -> dict:
+    """手动登出指定账号：清 cookie + 释放其 Chrome 实例，login_status='logged_out'。
+
+    幂等友好：opencli/CDP 不可用时仍返回成功并标记状态（登出失败不阻断）。
+    前端账号配置页也可由该端点在抓取前主动登出并换绑下一账号。
+    """
+    account = db.get(XhsAccount, account_id)
+    if account is None:
+        raise HTTPException(404, "账号不存在")
+    settings = get_settings()
+    cdp_endpoint = (
+        f"http://127.0.0.1:{account.cdp_port}"
+        if account.cdp_port is not None
+        else None
+    )
+    adapter = OpenCLIAdapter(settings, session=account.session_name, cdp_endpoint=cdp_endpoint)
+    adapter.logout()
+    try:
+        get_global_chrome_pool().release(account.session_name)
+    except Exception:  # noqa: BLE001 - 释放实例失败不影响登出状态
+        pass
+    account.login_status = "logged_out"
+    db.commit()
+    db.refresh(account)
+    return {"code": 200, "message": "success", "data": _dump(account)}

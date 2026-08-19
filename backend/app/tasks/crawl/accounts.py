@@ -2,14 +2,18 @@
 
 - ``load_xhs_accounts`` 加载启用账号（按 priority、id 排序）；
 - ``_account_cdp_endpoint`` / ``_resolve_cdp_endpoint_for_account`` 静态/动态解析 CDP 端点；
-- ``_make_chrome_pool_for_task`` 为当前任务启动 ChromePool（复用全局单例）。
+- ``_make_chrome_pool_for_task`` 为当前任务启动 ChromePool（复用全局单例）；
+- ``wait_for_login`` / ``open_account_login`` 账号切换-自动登录辅助。
 """
 from __future__ import annotations
+
+import time
 
 from sqlalchemy import select
 
 from app.models.xhs_account import XhsAccount
 from app.services.chrome_pool import ChromeLaunchError, ChromePool, get_global_chrome_pool
+from app.services.crawler import AuthenticationRequired, OpenCLIError, VerificationRequired
 
 
 def load_xhs_accounts(db) -> list:
@@ -62,3 +66,53 @@ def _make_chrome_pool_for_task(settings, db, accounts) -> ChromePool:
             account.cdp_port = instance.port
             db.commit()
     return pool
+
+
+# ── 账号切换-自动登录辅助（spec: 2026-08-19-xhs-account-switch-auto-login-design.md）──────
+
+
+def wait_for_login(adapter, settings, timeout=None) -> bool:
+    """等待指定账号登录完成：轮询 adapter.check_login()，logged_in 为真即返回 True。
+
+    未登录/风控/瞬时 opencli 错误都被视为"还没登录"，继续轮询直到超时。
+    超时抛 ``AuthenticationRequired``（供上层切换账号）。
+
+    间隔与总超时来自 ``settings.xhs_account_login_wait_interval/timeout``。
+    """
+    timeout = timeout if timeout is not None else getattr(settings, "xhs_account_login_wait_timeout", 120)
+    interval = getattr(settings, "xhs_account_login_wait_interval", 5)
+    deadline = time.monotonic() + max(timeout, 0)
+    # 至少执行一次检查；即便已过截止时间，只要本次检查成功仍返回 True
+    while True:
+        try:
+            raw = adapter.check_login()
+            if raw and raw.get("logged_in"):
+                return True
+        except (OpenCLIError, AuthenticationRequired, VerificationRequired):
+            pass
+        except Exception:  # noqa: BLE001 - 任何检查异常都当"还没登录"继续轮询
+            pass
+        if time.monotonic() >= deadline:
+            raise AuthenticationRequired("等待登录超时，请确认已完成扫码")
+        time.sleep(max(interval, 0))
+
+
+def open_account_login(adapter, settings, session_name=None) -> bool:
+    """在指定账号（adapter 已带其 cdp_endpoint 路由）上打开小红书登录页，让用户扫码。
+
+    复用 opencli ``browser <session> open <url> --window foreground``。
+    失败返回 False 不抛错（上层可回退到 open_xhs_login）。
+    """
+    try:
+        session = session_name or adapter.session
+        return bool(
+            adapter.run(
+                ["browser", session, "open", settings.xhs_login_url, "--window", "foreground"],
+                enforce_execution=False,
+                timeout=15,
+            )
+        )
+    except (OpenCLIError, AuthenticationRequired, VerificationRequired):
+        return False
+    except Exception:  # noqa: BLE001 - 打开登录页失败不阻断切换
+        return False
