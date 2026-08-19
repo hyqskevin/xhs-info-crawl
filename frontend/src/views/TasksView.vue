@@ -72,6 +72,7 @@ onMounted(load)
     <ElTable :data="rows" @selection-change="(rows: any[]) => (selected = rows)">
       <ElTableColumn type="selection" width="48" />
       <ElTableColumn prop="id" label="任务 ID" width="100" />
+      <ElTableColumn label="定时任务" width="140"><template #default="scope">{{ scope.row.params?.schedule_name || '-' }}</template></ElTableColumn>
       <ElTableColumn label="状态" width="130"><template #default="scope"><ElTag>{{ statusLabels[scope.row.status] || scope.row.status }}</ElTag></template></ElTableColumn>
       <ElTableColumn prop="current_stage" label="当前阶段" width="120"><template #default="scope">{{ stageLabels[scope.row.current_stage] || '-' }}</template></ElTableColumn>
       <ElTableColumn prop="total_notes" label="发现" width="80" />

@@ -15,6 +15,7 @@ const bloggers = ref<any[]>([])
 const xhsAccounts = ref<any[]>([])
 const submitting = ref(false)
 const restarting = ref(false)
+const restartingScheduleId = ref<number | null>(null)
 const openingLogin = ref(false)
 const stopping = ref(false)
 const lastTask = ref<any>(null)
@@ -327,6 +328,20 @@ async function restart(taskOverride?: any) {
   } finally { restarting.value = false }
 }
 
+/** 重启某个 schedule 行最近一次抓取任务（仪表盘"定时任务状态"卡片内）。
+ *  按 schedule 行级别独立 loading（多行可并行点击）。
+ *  复用 /tasks/{id}/restart 端点；PAUSED 时由后端 check_login，未登录返回 409 AUTH_REQUIRED。*/
+async function restartScheduleTask(schedule: any, task: any) {
+  restartingScheduleId.value = schedule.id
+  try {
+    await api.restartTask(task.id)
+    ElMessage.success(task.status === 'PAUSED' ? '登录状态正常，任务已继续抓取' : '任务已继续抓取')
+    await pollAnalytics()
+  } catch (error:any) {
+    ElMessage.error(error.response?.data?.message === 'AUTH_REQUIRED' ? '尚未检测到小红书登录状态，请登录后重试' : error.response?.data?.message || error.response?.data?.detail || '任务续跑失败')
+  } finally { restartingScheduleId.value = null }
+}
+
 async function openLogin() {
   openingLogin.value = true
   try {
@@ -573,6 +588,37 @@ onUnmounted(() => {
           <template #default="scope">
             <ElTag v-if="scope.row.last_task" :type="scheduleStatusOf(scope.row.last_task).type as any">{{ scheduleStatusOf(scope.row.last_task).label }}</ElTag>
             <span v-else>未执行</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="操作" min-width="180">
+          <template #default="scope">
+            <ElButton
+              v-if="scope.row.last_task && ['FAILED','STOPPED'].includes(scope.row.last_task.status)"
+              type="primary"
+              text
+              :icon="RefreshRight"
+              :loading="restartingScheduleId === scope.row.id"
+              @click="restartScheduleTask(scope.row, scope.row.last_task)"
+            >
+              重新抓取
+            </ElButton>
+            <ElButton
+              v-else-if="scope.row.last_task && scope.row.last_task.status === 'PAUSED'"
+              type="primary"
+              text
+              :icon="RefreshRight"
+              :loading="restartingScheduleId === scope.row.id"
+              @click="restartScheduleTask(scope.row, scope.row.last_task)"
+            >
+              继续抓取
+            </ElButton>
+            <ElButton
+              v-else-if="scope.row.last_task && scope.row.last_task.status === 'STOP_REQUESTED'"
+              disabled
+              :icon="RefreshRight"
+            >
+              正在停止…
+            </ElButton>
           </template>
         </ElTableColumn>
       </ElTable>
