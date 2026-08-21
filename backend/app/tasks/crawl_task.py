@@ -90,6 +90,25 @@ from app.services.search_rate_limit import SearchRateLimiter
 logger = logging.getLogger(__name__)
 
 
+def _passes_min_engagement(
+    note_like: int | None,
+    note_collect: int | None,
+    min_likes: int,
+    min_favorites: int,
+) -> bool:
+    """min engagement 过滤判定。
+
+    - 任一阈值 > 0 且对应字段非 None 且小于阈值 → 不通过（应跳过）。
+    - 阈值 = 0：该维度不参与判定。
+    - 字段为 None：视为未知放行（不阻断入库，避免抓取失败被误杀）。
+    """
+    if min_likes > 0 and note_like is not None and note_like < min_likes:
+        return False
+    if min_favorites > 0 and note_collect is not None and note_collect < min_favorites:
+        return False
+    return True
+
+
 # ============================================================
 # Celery task 主体
 # ============================================================
@@ -369,6 +388,11 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
         empty_streak = 0  # 连续空详情熔断计数器
         empty_threshold = max(1, settings.crawl_empty_detail_threshold)  # 防 0/负数
         reset_interval = max(0, settings.crawl_session_reset_interval)  # 0 表示禁用
+
+        # 任务级 min engagement 阈值：组配置为准（spec §6.2 不再 city 级重算）
+        from app.services.crawl_scope import resolve_crawl_scope
+
+        scope = resolve_crawl_scope(db, None, task.params)
         for entry in results:
             if finish_stop_if_requested(db, task.id, run_token):
                 return
@@ -381,6 +405,25 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
                     continue
                 staged = download_and_ocr(db, task, run_token, entry[0], entry[1], adapter, settings)
                 if staged is not None:
+                    # min engagement 过滤：组配置阈值不达标时跳过不入库
+                    # 用 getattr 兼容测试中的 SimpleNamespace fake（不必显式带 like/collect 字段）
+                    note_like = getattr(staged.note, "like_count", None)
+                    note_collect = getattr(staged.note, "collect_count", None)
+                    if not _passes_min_engagement(
+                        note_like,
+                        note_collect,
+                        scope.min_likes,
+                        scope.min_favorites,
+                    ):
+                        log(
+                            db, task.id, "INFO",
+                            f"min engagement filter skipped url={entry[1]['url']} "
+                            f"like={note_like} collect={note_collect} "
+                            f"threshold_likes={scope.min_likes} threshold_favorites={scope.min_favorites}",
+                        )
+                        db.delete(staged.note)
+                        db.commit()
+                        continue
                     # 连续空详情熔断：note.content 视为空触发风控熔断
                     if not staged.note.content or not staged.note.content.strip():
                         empty_streak += 1
