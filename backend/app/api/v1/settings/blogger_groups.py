@@ -35,10 +35,19 @@ class BloggerGroupIn(BaseModel):
     description: str | None = None
     blogger_ids: list[int] = Field(default_factory=list)
     enabled: bool = True
+    min_likes: int = Field(default=0, ge=0)
+    min_favorites: int = Field(default=0, ge=0)
 
 
 class BloggerGroupMembersIn(BaseModel):
     blogger_ids: list[int] = Field(default_factory=list)
+
+
+class BloggerGroupUpdateIn(BaseModel):
+    description: str | None = None
+    min_likes: int | None = Field(default=None, ge=0)
+    min_favorites: int | None = Field(default=None, ge=0)
+    enabled: bool | None = None
 
 
 def _dump_blogger_group(db, group: BloggerGroup) -> dict:
@@ -53,6 +62,8 @@ def _dump_blogger_group(db, group: BloggerGroup) -> dict:
         "description": group.description,
         "enabled": group.enabled,
         "blogger_ids": blogger_ids,
+        "min_likes": group.min_likes,
+        "min_favorites": group.min_favorites,
         "created_at": group.created_at,
     }
 
@@ -87,11 +98,39 @@ def create_blogger_group(payload: BloggerGroupIn, _: Admin, db: DB) -> dict:
     if existing is not None:
         raise HTTPException(409, f"博主组名称 '{payload.name}' 已存在")
     _validate_blogger_ids(db, payload.blogger_ids)
-    group = BloggerGroup(name=payload.name, description=payload.description, enabled=payload.enabled)
+    group = BloggerGroup(
+        name=payload.name,
+        description=payload.description,
+        enabled=payload.enabled,
+        min_likes=payload.min_likes,
+        min_favorites=payload.min_favorites,
+    )
     db.add(group)
     db.flush()
     for blogger_id in dict.fromkeys(payload.blogger_ids):
         db.add(BloggerGroupMember(group_id=group.id, blogger_id=blogger_id))
+    db.commit()
+    db.refresh(group)
+    return {"code": 200, "message": "success", "data": _dump_blogger_group(db, group)}
+
+
+@router.patch("/settings/blogger-groups/{group_id}")
+def patch_blogger_group(group_id: int, payload: BloggerGroupUpdateIn, _: Admin, db: DB) -> dict:
+    """更新博主组基础字段（description / min_likes / min_favorites / enabled）。
+
+    name 不允许修改（与关键词组 PATCH 对称）；None 表示不动。
+    """
+    group = db.get(BloggerGroup, group_id)
+    if group is None:
+        raise HTTPException(404, "博主组不存在")
+    if payload.description is not None:
+        group.description = payload.description
+    if payload.min_likes is not None:
+        group.min_likes = payload.min_likes
+    if payload.min_favorites is not None:
+        group.min_favorites = payload.min_favorites
+    if payload.enabled is not None:
+        group.enabled = payload.enabled
     db.commit()
     db.refresh(group)
     return {"code": 200, "message": "success", "data": _dump_blogger_group(db, group)}
