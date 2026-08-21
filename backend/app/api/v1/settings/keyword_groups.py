@@ -57,12 +57,16 @@ class KeywordGroupIn(BaseModel):
     # 排除词：命中关键词的笔记若内容含任一排除词则被过滤
     excluded_words: list[str] = Field(default_factory=list)
     enabled: bool = True
+    min_likes: int = Field(default=0, ge=0)
+    min_favorites: int = Field(default=0, ge=0)
 
 
 class KeywordGroupUpdateIn(BaseModel):
     name: str | None = None
     description: str | None = None
     enabled: bool | None = None
+    min_likes: int | None = Field(default=None, ge=0)
+    min_favorites: int | None = Field(default=None, ge=0)
 
 
 class KeywordGroupWordsIn(BaseModel):
@@ -97,6 +101,8 @@ def _dump_keyword_group(db, kg: KeywordGroup) -> dict:
         "cities": cities,
         "words": words,
         "excluded_words": _parse_excluded_words(kg.excluded_words_json),
+        "min_likes": kg.min_likes,
+        "min_favorites": kg.min_favorites,
         "created_at": kg.created_at,
     }
 
@@ -141,6 +147,8 @@ def create_keyword_group(payload: KeywordGroupIn, _: Admin, db: DB) -> dict:
         description=payload.description,
         enabled=payload.enabled,
         excluded_words_json=_serialize_excluded_words(payload.excluded_words),
+        min_likes=payload.min_likes,
+        min_favorites=payload.min_favorites,
     )
     db.add(kg)
     db.flush()
@@ -272,6 +280,10 @@ def patch_keyword_group(kg_id: int, payload: KeywordGroupUpdateIn, _: Admin, db:
         kg.description = payload.description
     if payload.enabled is not None:
         kg.enabled = payload.enabled
+    if payload.min_likes is not None:
+        kg.min_likes = payload.min_likes
+    if payload.min_favorites is not None:
+        kg.min_favorites = payload.min_favorites
     db.commit()
     db.refresh(kg)
     return {"code": 200, "message": "success", "data": _dump_keyword_group(db, kg)}
