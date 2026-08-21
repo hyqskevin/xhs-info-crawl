@@ -10,7 +10,7 @@
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -26,6 +26,8 @@ class KeywordGroup(Base):
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     enabled: Mapped[bool] = mapped_column(default=True)
+    min_likes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    min_favorites: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # 排除词：抓取后命中任一关键词，但内容含任一排除词的笔记会被过滤（JSON list of str）
     excluded_words_json: Mapped[str | None] = mapped_column(Text, nullable=True, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
