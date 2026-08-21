@@ -21,6 +21,8 @@ from app.models.keyword_group import KeywordGroup, KeywordGroupCity, KeywordGrou
 class CrawlScope:
     keywords: list[str]
     bloggers: list[Blogger]
+    min_likes: int = 0
+    min_favorites: int = 0
 
 
 def _resolve_from_keyword_groups(
@@ -178,8 +180,36 @@ def resolve_effective_bloggers(db: Session, city: City | None, task_params: dict
     return list(db.scalars(stmt).all())
 
 
+def _resolve_max_engagement(
+    db: Session, field: str,
+    keyword_group_ids: list[int], blogger_group_ids: list[int],
+) -> int:
+    """同类取 max、跨类同时生效；不含组 → 0。
+
+    `field` ∈ {"min_likes", "min_favorites"}。
+    """
+    candidates: list[int] = []
+    if keyword_group_ids:
+        rows = db.scalars(
+            select(getattr(KeywordGroup, field))
+            .where(KeywordGroup.id.in_(keyword_group_ids), KeywordGroup.enabled.is_(True))
+        ).all()
+        candidates.extend(int(v) for v in rows if v is not None)
+    if blogger_group_ids:
+        rows = db.scalars(
+            select(getattr(BloggerGroup, field))
+            .where(BloggerGroup.id.in_(blogger_group_ids), BloggerGroup.enabled.is_(True))
+        ).all()
+        candidates.extend(int(v) for v in rows if v is not None)
+    return max(candidates) if candidates else 0
+
+
 def resolve_crawl_scope(db: Session, city: City | None, task_params: dict) -> CrawlScope:
+    kg_ids = list(task_params.get("keyword_group_ids") or [])
+    bg_ids = list(task_params.get("blogger_group_ids") or [])
     return CrawlScope(
         keywords=resolve_effective_keywords(db, city, task_params),
         bloggers=resolve_effective_bloggers(db, city, task_params),
+        min_likes=_resolve_max_engagement(db, "min_likes", kg_ids, bg_ids),
+        min_favorites=_resolve_max_engagement(db, "min_favorites", kg_ids, bg_ids),
     )
