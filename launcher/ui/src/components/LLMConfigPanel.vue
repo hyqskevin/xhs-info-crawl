@@ -47,7 +47,8 @@ async function handleSave() {
     }
     const resp = await saveSystemConfig(payload as Partial<SystemConfig>)
     ElMessage.success(
-      `配置已保存(${resp.saved_keys.length} 项),api/worker 已自动重启`,
+      `配置已保存(${resp.saved_keys.length} 项),api/worker 已自动重启；`
+      + `用户配置已写入 DATA_DIR/.env,迁移时跟着 DATA_DIR 一起拷贝`,
     )
     emit('saved', resp)
     await loadConfig()
@@ -57,6 +58,24 @@ async function handleSave() {
     ElMessage.error(`保存失败: ${detail}`)
   } finally {
     saving.value = false
+  }
+}
+
+// 改动 5:OCR 开关实时同步(无需用户点保存)。
+// 关联 spec: docs/superpowers/specs/2026-08-21-packaging-ocr-llm-flow-fix-design.md § 改动 5
+// 关联设计: docs/packaging-design.md §3.7
+// 用户多次反馈"拨了 OCR 开关但 .env 不更新",是因为旧实现只改前端 v-model,
+// 必须点保存按钮才 PUT。本回调在 @change 触发瞬间就 PUT 单字段,
+// 把 OCR 开关变成"实时同步"控件,避免误操作导致开关与 .env 不一致。
+async function handleOcrEnabledChange(val: string | number | boolean) {
+  try {
+    await saveSystemConfig({ ocr_enabled: String(val) } as Partial<SystemConfig>)
+    ElMessage.success(val === 'true' ? 'OCR 已启用' : 'OCR 已停用')
+    await loadConfig()
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { detail?: string } } }
+    const detail = err?.response?.data?.detail || (e as Error).message
+    ElMessage.error(`OCR 状态同步失败: ${detail}`)
   }
 }
 
@@ -177,6 +196,7 @@ onMounted(loadConfig)
                 v-model="config.ocr_enabled"
                 active-value="true"
                 inactive-value="false"
+                @change="handleOcrEnabledChange"
                 data-test="ocr-enabled"
               />
             </el-form-item>

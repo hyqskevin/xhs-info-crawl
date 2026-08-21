@@ -117,13 +117,13 @@ $PKG_DIR/runtime/venv/bin/pip install --upgrade pip
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/backend/requirements-runtime.txt
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/launcher/requirements.txt
 
-# 2.1 安装 OCR 依赖(paddleocr + paddlepaddle)
-# OCR 增强包(模型权重)在 launcher UI 第一次点"下载安装 OCR"时按需下载到
-# $DATA_DIR/paddlex/ (~/.xhs-info-crawl/paddlex/),所以不在打包里;
-# 但 paddleocr / paddlepaddle 包本身是 Python 包,必须在 venv 里。
-# 关联 spec: docs/superpowers/specs/2026-08-17-launcher-ocr-direct-design.md
-echo "==> 安装 OCR 依赖(paddleocr + paddlepaddle)..."
-$PKG_DIR/runtime/venv/bin/pip install paddleocr paddlepaddle
+# 注意:paddleocr / paddlepaddle **不**在 venv 里强制装(v0.6.0 的回归)。
+# 它们属于 OCR Python 包,体积约 840M(paddlepaddle 429M + opencv 171M + ...),
+# 强行装会让 .app 从 400M 涨到 1.1G,zip 从 280M 涨到 338M。
+# 正确路径:用户点 launcher UI "下载安装 OCR" 时,launcher.ocr_installer
+# 按需把 paddleocr+models 装到 DATA_DIR/paddlex/,不走 venv。
+# 关联 spec: docs/superpowers/specs/2026-08-21-packaging-ocr-llm-flow-fix-design.md § 改动 1
+# 关联设计: docs/packaging-design.md §2.1 问题 ①
 
 # 修复 venv 缺少 libpython3.11.dylib 问题:
 # python-build-standalone 解压后创建的 venv/lib 下没有 libpython,

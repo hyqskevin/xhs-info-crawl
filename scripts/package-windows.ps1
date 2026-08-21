@@ -60,6 +60,28 @@ $VenvPip = Join-Path $PkgDir "runtime\venv\Scripts\pip.exe"
 & $VenvPip install -r (Join-Path $RootDir "backend\requirements-runtime.txt")
 & $VenvPip install -r (Join-Path $RootDir "launcher\requirements.txt")
 
+# 修复 venv/pyvenv.cfg 烧了 CI runner 绝对路径 的问题:
+# CPython 创建 venv 时会在 pyvenv.cfg 里写 `home = <创建时 base python 的绝对路径>`。
+# 打包脚本运行在 GitHub Actions runner 上,pyvenv.cfg 里的 home 烧的是
+# runner 的 workspace 路径(如 D:\a\xhs-info-crawl\xhs-info-crawl\dist\build\xhs-info-crawl\runtime\python)。
+# 打包成 zip 发给用户后,用户在 C:\Users\wpx\Downloads\xhs-info-crawl\ 解压,
+# 启动 venv 的 python.exe 时 CPython 按 home 找 base python 找不到
+# → 报错 `No Python at '<runner 路径>'`,用户 2026-08-21 实测。
+# 修复方案:patch pyvenv.cfg 的 home 为相对路径 ..\python(相对 venv 自身),
+# CPython 接受相对 home,实测见 macOS 实验 (相对路径 ../python/bin 被接受,不再报 No Python at)。
+# 关联 spec: docs/superpowers/specs/2026-08-21-windows-packaging-pyvenv-relocatable-design.md
+Write-Host "==> patch pyvenv.cfg 的 home 为相对路径(避免烧 CI runner 路径)..."
+$PyvenvCfg = Join-Path $PkgDir "runtime\venv\pyvenv.cfg"
+if (Test-Path $PyvenvCfg) {
+    $CfgContent = Get-Content $PyvenvCfg -Raw
+    # 用正则替换 `home = ...` 这一行为相对路径(无论原始是绝对还是相对)
+    $CfgContent = $CfgContent -replace 'home\s*=\s*.*', 'home = ..\python'
+    # include-system-site-packages 设成 false(默认就是,但保险)
+    Set-Content -Path $PyvenvCfg -Value $CfgContent -Encoding UTF8 -NoNewline
+} else {
+    Write-Host "    警告: $PyvenvCfg 不存在,跳过 patch"
+}
+
 # 修复 venv 可能缺少 python3XY.dll 问题:
 # python-build-standalone 创建 venv 后,venv 目录下可能缺 dll,导致 python.exe 启动失败。
 # 解决:把 base python 的 dll 复制到 venv 根目录(Windows 通常不需要,但保险起见)
@@ -161,6 +183,36 @@ if errorlevel 1 (
 )
 "@
 Set-Content -Path (Join-Path $PkgDir "start.bat") -Value $startBatContent -Encoding UTF8
+
+# 创建 start.vbs (终端用户首选入口,不弹 cmd 黑窗口)
+# Windows 没有像 macOS 那样把目录包装成 .app 的概念,正确入口是 .vbs (隐藏 cmd 窗口)。
+# start.bat 给高级用户调试用(失败时 pause);start.vbs 给终端用户(双击静默启动)。
+#
+# 实现:
+# - 取本 vbs 自身的目录 → 用 start.bat 的绝对路径 → 用 WScript.Shell.Run 启动
+# - WindowStyle=0 (HideWindow) → 子进程不弹 cmd 黑窗口
+# - WaitOnReturn=False → vbs 不阻塞,不等 launcher 退出
+#
+# 关联 spec: docs/superpowers/specs/2026-08-21-windows-packaging-pyvenv-relocatable-design.md § 2.1
+# 关联设计: docs/packaging-design.md §2.11 问题 ㉘
+Write-Host "==> 创建 start.vbs (静默入口,不弹 cmd 窗口)..."
+# 单引号 here-string (@'...'@) 不会做 PS 转义,内容字面输出。
+# 收尾的 '@  必须新行起 (PS 规则);中间行不能包含 '@ 全文。
+$startVbsContent = @'
+' start.vbs - 静默启动入口,不弹 cmd 黑窗口
+' 双击此处启动 launcher,日志会写到 data\logs\launcher.log(由 start.bat 重定向)
+Dim fso, scriptPath, scriptDir, batPath, WshShell
+Set fso = CreateObject("Scripting.FileSystemObject")
+scriptPath = WScript.ScriptFullName
+scriptDir = fso.GetParentFolderName(scriptPath)
+batPath = scriptDir & "\start.bat"
+Set WshShell = CreateObject("WScript.Shell")
+' Run with WindowStyle=0 (HideWindow), WaitOnReturn=False (do not block)
+WshShell.Run """" & batPath & """", 0, False
+Set WshShell = Nothing
+Set fso = Nothing
+'@
+Set-Content -Path (Join-Path $PkgDir "start.vbs") -Value $startVbsContent -NoNewline -Encoding UTF8
 
 # 9. 压缩
 Write-Host "==> 压缩产物..."

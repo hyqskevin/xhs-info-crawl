@@ -23,10 +23,25 @@ def probe_ocr(settings: Settings) -> dict[str, Any]:
 
     返回:
         - ok=true: {"ok": true, "text": "...", "latency_ms": 123}
-        - ok=false: {"ok": false, "reason": "ocr_disabled"|"paddleocr_not_installed"|"model_not_found"|"inference_failed"|"test_image_missing"}
+        - ok=false: {"ok": false, "reason": "ocr_disabled_in_config"|"ocr_not_installed"|"paddleocr_not_installed"|"model_not_found"|"inference_failed"|"test_image_missing"}
+
+    四象限区分(关联 spec docs/superpowers/specs/2026-08-21-packaging-ocr-llm-flow-fix-design.md § 改动 4):
+    - ocr_enabled=False + paddleocr 已装 → ocr_disabled_in_config
+      (引导用户去系统配置打开 OCR_ENABLED)
+    - ocr_enabled=False + paddleocr 未装 → ocr_not_installed
+      (引导用户先安装 OCR)
+    - ocr_enabled=True + paddleocr 未装 → paddleocr_not_installed (原有路径,由 PaddleOCREngine 抛 RuntimeError 触发)
     """
     if not settings.ocr_enabled:
-        return {"ok": False, "reason": "ocr_disabled"}
+        # 区分"包没装"和"包已装只是开关没开"
+        try:
+            import paddleocr  # noqa: F401
+            installed = True
+        except ImportError:
+            installed = False
+        if installed:
+            return {"ok": False, "reason": "ocr_disabled_in_config"}
+        return {"ok": False, "reason": "ocr_not_installed"}
 
     # 检查测试图存在
     if not OCR_TEST_IMAGE.exists():
