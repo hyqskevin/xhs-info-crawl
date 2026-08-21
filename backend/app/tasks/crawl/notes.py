@@ -367,7 +367,8 @@ def extract_and_save(db, task: CrawlTask, run_token: str, staged: StagedNote, ex
     assert_execution_active(db, task.id, run_token)
     create_note_duplicate_candidates(db, note)
     folder = archive_task_folder(settings.archive_dir, started_at, task.id, city)
-    shutil.rmtree(folder / ".downloads", ignore_errors=True)
+    # 仅删除当前笔记的下载子目录，避免误删同任务其他笔记已下载的源图
+    shutil.rmtree(folder / ".downloads" / note.platform_note_id, ignore_errors=True)
     note.status = "PROCESSED"
     task.extracted_notes += 1
     task.success_notes = task.extracted_notes

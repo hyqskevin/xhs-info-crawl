@@ -1,11 +1,22 @@
 # v0.6.0 - Launcher UI Hardening & Storage Base-Dir Mode
 
-**Release date:** 2026-08-18
+**Release date:** 2026-08-21
 **Predecessor:** v0.5.7 (launcher 子进程清理;v0.5.0 ~ v0.5.7 累计: 18 commits,见 git log v0.3.0..v0.5.7)
+**Tag retag:** 本地 `v0.6.0` tag 原本指向 commit `ca67b1c` (2026-08-18),落后 HEAD 5 个 commit;本次重新打 `v0.6.0` 到 HEAD (force-push),把 5 个未推送的 hardening commit + `.downloads` 修复 + 节奏测试 fixture 修复 一起并入 v0.6.0 发布。
 
 ## Highlights
 
 This release hardens the launcher UI (relative-path asset bundling, status-port resolution, base-dir storage mode) and the packaging pipeline (OCR deps bundled, fixture copy, build pre/post checks, release-check script). Users who only want to relocate data now edit a single `DATA_DIR` field instead of nine separate path variables.
+
+Beyond the v0.6.0 base that originally shipped, this v0.6.0 tag consolidates the in-flight hardening batch that landed before packaging:
+
+- **Scheduled-crawl circuit breaker** — long-running schedules that hit a streak of login/rate-limit failures now cool down for a configurable interval and auto-resume via a Celery beat retry task. Per-schedule override fields (limit + interval) on the 定时任务 page; null = global default.
+- **Account auto-switch on auth failure** — `OpenCLIAdapter.logout` + `wait_for_login` + `/xhs-accounts/{id}/logout` endpoint close the loop: one account fails → log out → open next account's login page → wait for scan code → resume. Combined with auto-reading `USER_INFO.userId` from `creator.xiaohongshu.com`, scan-code → automatic ID capture → automatic account rotation.
+- **Chrome binary auto-detect** — `Settings.chrome_bin` now falls back to `glob /Applications/Google\ Chrome*` (and `/Applications/Chromium*`) on macOS when no override is set, eliminating the "Chrome 实例启动失败: chrome 二进制不存在" failure for default installs.
+- **Stop-signal watchdog thread** — crawl tasks now spawn a watchdog that pokes `stop_event` if an in-process blocking call (opencli download/note/search) doesn't honor it. Prevents zombie tasks that ignore the user's "停止" button.
+- **Dashboard / reports follow-ups** — 抓取日志 table gains a `schedule_name` column; dashboard gains a "继续抓取" button on stopped/cancelled schedules; report preview now concatenates `baseURL` + paths and the Markdown download is a zipped folder with cover images.
+- **Multi-note `.downloads` cleanup fix** — `extract_and_save` previously deleted the *entire* `.downloads` directory after archiving each note, wiping the source images of subsequent notes in the same task and causing `[Errno 2] No such file or directory` on `copy2`. Now only the current note's subdirectory is removed; later notes retain their downloaded source images.
+- **Throttle test fixture fix** — `_make_staged_note` in `test_crawl_empty_detail_throttle.py` previously omitted `platform_note_id` from its `SimpleNamespace` note stub, hiding an `AttributeError` once the stage-2 archive path exercised the field. Test stub now mirrors the Note model.
 
 ## New Features
 
