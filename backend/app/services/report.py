@@ -179,34 +179,49 @@ def build_report_zip(report_name: str, week: str, cities: list[str], entries: li
     return buffer.getvalue()
 
 
-def _maybe_resize_cover_image(local_path: Path, max_bytes: int = 2 * 1024 * 1024) -> bytes:
-    """若图片 > max_bytes 且 PIL 可用则缩放到最长边 ≤ 1024px；否则原样返回 bytes。
+class _CoverImageUnusable(Exception):
+    """封面图无法为 xlsx 嵌入归一化(Pillow 不可用 / 解码失败 / 文件失踪)。
 
-    缺 PIL → 记录 WARNING 后直接返回原文件 bytes（不阻塞导出）。
+    调用方应降级为单元格写"—" + WARNING 日志, **不得**把原字节喂给 openpyxl——
+    否则 .webp 等不常见扩展名可能在打包版精简 runtime 触发
+    `mimetypes.types_map[True][ext]` KeyError, 让 /download?format=xlsx 直接 500
+    (2026-08-22 周报 id=8 现场根因)。
+    """
+
+
+def _maybe_resize_cover_image(local_path: Path, max_bytes: int = 2 * 1024 * 1024) -> bytes:
+    """读图 → 缩放 → **统一归一化为 PNG bytes**, 保证 openpyxl 嵌入时扩展名为 .png。
+
+    失败 (Pillow 缺失 / 解码失败 / 文件失踪) → 抛 `_CoverImageUnusable`,
+    让调用方走"—" + WARNING 兜底, 不再像旧实现那样把原字节(含 .webp)直接给 openpyxl。
+
+    关联 spec: docs/superpowers/specs/2026-08-22-weekly-report-xlsx-webp-design.md
     """
     raw = local_path.read_bytes()
-    if len(raw) <= max_bytes:
-        return raw
     try:
         from io import BytesIO as _BIO
         from PIL import Image as PILImage  # type: ignore[import-not-found]
+    except ImportError as exc:
+        logger.warning("Pillow 未安装, 封面图 %s 降级写「—」: %s", local_path, exc)
+        raise _CoverImageUnusable("Pillow not installed") from exc
 
+    try:
         with PILImage.open(_BIO(raw)) as img:
             img = img.convert("RGB")
-            longest = max(img.size)
-            if longest > 1024:
-                scale = 1024 / longest
-                new_size = (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale)))
-                img = img.resize(new_size, PILImage.LANCZOS)
+            if len(raw) > max_bytes:
+                longest = max(img.size)
+                if longest > 1024:
+                    scale = 1024 / longest
+                    new_size = (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale)))
+                    img = img.resize(new_size, PILImage.LANCZOS)
             out = _BIO()
-            img.save(out, format="JPEG", quality=85, optimize=True)
+            # 统一编码 PNG(无损,体积可控,openpyxl 100% 识别)。
+            # 即使源是 JPEG / WEBP / 其他,都吃进 RGB 再吐 PNG,不再保留原扩展名。
+            img.save(out, format="PNG")
             return out.getvalue()
-    except ImportError:
-        logger.warning("Pillow 未安装，封面图 %s 大小 %d bytes 仍按原图嵌入", local_path, len(raw))
-        return raw
-    except Exception as exc:  # pragma: no cover - PIL 解码失败等异常
-        logger.warning("封面图缩放失败 %s: %s", local_path, exc)
-        return raw
+    except Exception as exc:
+        logger.warning("封面图归一化失败 %s: %s — 该列降级写「—」", local_path, exc)
+        raise _CoverImageUnusable(str(exc)) from exc
 
 
 def generate_note_xlsx_with_cover(entries: list[NoteReportEntry], data_root: Path) -> bytes:
@@ -229,7 +244,18 @@ def generate_note_xlsx_with_cover(entries: list[NoteReportEntry], data_root: Pat
             local_path = _resolve_local_image(image, data_root)
             if local_path is None:
                 continue
-            img_bytes = _maybe_resize_cover_image(local_path)
+            try:
+                img_bytes = _maybe_resize_cover_image(local_path)
+            except _CoverImageUnusable as exc:
+                # 关联 spec: docs/superpowers/specs/2026-08-22-weekly-report-xlsx-webp-design.md
+                # PIL 不可用 / 图片解码失败 / 文件失踪 → 该列降级写「—」,
+                # 不可把原字节(含 .webp) 喂给 openpyxl —— 否则打包版精简
+                # runtime 会触发 mimetypes.types_map[True][ext] KeyError → 500
+                logger.warning(
+                    "封面图不可用 note_id=%s path=%s reason=%s — 该列写「—」",
+                    note.id, local_path, exc,
+                )
+                break
             cover_cell = sheet.cell(row=row_index, column=9)
             try:
                 xlsx_image = XlsxImage(BytesIO(img_bytes))
