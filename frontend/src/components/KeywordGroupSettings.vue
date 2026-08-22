@@ -19,7 +19,7 @@ const {
 } = usePagination(() => rows.value, { defaultSize: 20 })
 const dialog = ref(false)
 const editingId = ref<number | null>(null)
-const form = reactive<any>({ name: '', description: '', city_codes: [], words: [], enabled: true })
+const form = reactive<any>({ name: '', description: '', city_codes: [], words: [], enabled: true, min_likes: 0, min_favorites: 0 })
 const newWord = ref('')
 
 async function load() {
@@ -34,7 +34,7 @@ async function load() {
 
 function resetForm() {
   Object.keys(form).forEach((key) => delete form[key])
-  Object.assign(form, { name: '', description: '', city_codes: [], words: [], enabled: true })
+  Object.assign(form, { name: '', description: '', city_codes: [], words: [], enabled: true, min_likes: 0, min_favorites: 0 })
 }
 
 function openCreate() {
@@ -52,6 +52,8 @@ function openEdit(row: any) {
     city_codes: [...(row.city_codes || [])],
     words: [...(row.words || [])],
     enabled: row.enabled,
+    min_likes: row.min_likes ?? 0,
+    min_favorites: row.min_favorites ?? 0,
   })
   dialog.value = true
 }
@@ -66,6 +68,8 @@ async function save() {
       name: form.name.trim(),
       description: form.description?.trim() || null,
       enabled: form.enabled,
+      min_likes: form.min_likes,
+      min_favorites: form.min_favorites,
     })
     await api.updateKeywordGroupCities(editingId.value, form.city_codes)
     await api.updateKeywordGroupWords(editingId.value, form.words)
@@ -77,6 +81,8 @@ async function save() {
       city_codes: form.city_codes,
       words: form.words,
       enabled: form.enabled,
+      min_likes: form.min_likes,
+      min_favorites: form.min_favorites,
     })
     ElMessage.success('已创建')
   }
@@ -166,6 +172,12 @@ onMounted(load)
           <ElTag :type="scope.row.enabled ? 'success' : 'info'">{{ scope.row.enabled ? '启用' : '停用' }}</ElTag>
         </template>
       </ElTableColumn>
+      <ElTableColumn label="互动阈值" width="180">
+        <template #default="scope">
+          <span v-if="scope.row.min_likes === 0 && scope.row.min_favorites === 0">不限</span>
+          <span v-else>点赞 ≥ {{ scope.row.min_likes }} / 收藏 ≥ {{ scope.row.min_favorites }}</span>
+        </template>
+      </ElTableColumn>
       <ElTableColumn label="操作" min-width="200" class-name="action-column">
         <template #default="scope">
           <ElButton text type="primary" :icon="Edit" @click="openEdit(scope.row)">编辑</ElButton>
@@ -217,6 +229,12 @@ onMounted(load)
           >
             <ElOption v-for="city in props.cities" :key="city.code" :label="city.name" :value="city.code" />
           </ElSelect>
+        </ElFormItem>
+        <ElFormItem label="最低点赞数">
+          <ElInputNumber v-model="form.min_likes" :min="0" :step="50" style="width: 100%" aria-label="最低点赞数" />
+        </ElFormItem>
+        <ElFormItem label="最低收藏数">
+          <ElInputNumber v-model="form.min_favorites" :min="0" :step="50" style="width: 100%" aria-label="最低收藏数" />
         </ElFormItem>
       </ElForm>
       <template #footer>
