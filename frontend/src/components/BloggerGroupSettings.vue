@@ -56,6 +56,12 @@ async function save() {
     return
   }
   if (editingId.value) {
+    await api.patchBloggerGroup(editingId.value, {
+      description: form.description?.trim() || null,
+      min_likes: form.min_likes,
+      min_favorites: form.min_favorites,
+      enabled: form.enabled,
+    })
     await api.updateBloggerGroupMembers(editingId.value, form.blogger_ids)
     ElMessage.success('已更新')
   } else {
@@ -64,6 +70,8 @@ async function save() {
       description: form.description?.trim() || null,
       blogger_ids: form.blogger_ids,
       enabled: form.enabled,
+      min_likes: form.min_likes,
+      min_favorites: form.min_favorites,
     })
     ElMessage.success('已创建')
   }
@@ -127,6 +135,12 @@ onMounted(load)
           <ElTag :type="scope.row.enabled ? 'success' : 'info'">{{ scope.row.enabled ? '启用' : '停用' }}</ElTag>
         </template>
       </ElTableColumn>
+      <ElTableColumn label="互动阈值" width="180">
+        <template #default="scope">
+          <span v-if="scope.row.min_likes === 0 && scope.row.min_favorites === 0">不限</span>
+          <span v-else>点赞 ≥ {{ scope.row.min_likes }} / 收藏 ≥ {{ scope.row.min_favorites }}</span>
+        </template>
+      </ElTableColumn>
       <ElTableColumn label="操作" min-width="200" class-name="action-column">
         <template #default="scope">
           <ElButton text type="primary" :icon="Edit" @click="openEdit(scope.row)">编辑</ElButton>
@@ -161,6 +175,12 @@ onMounted(load)
         </ElFormItem>
         <ElFormItem label="启用">
           <ElSwitch v-model="form.enabled" />
+        </ElFormItem>
+        <ElFormItem label="最低点赞数">
+          <ElInputNumber v-model="form.min_likes" :min="0" :step="50" style="width: 100%" aria-label="最低点赞数" />
+        </ElFormItem>
+        <ElFormItem label="最低收藏数">
+          <ElInputNumber v-model="form.min_favorites" :min="0" :step="50" style="width: 100%" aria-label="最低收藏数" />
         </ElFormItem>
       </ElForm>
       <template #footer>
