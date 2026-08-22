@@ -1,11 +1,16 @@
 import os
 from collections.abc import Generator
+from pathlib import Path
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import Settings, get_settings
+
+
+# alembic migrations 目录:打包版与 dev 模式都从这里读 migration 脚本
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
 
 class Base(DeclarativeBase):
@@ -147,9 +152,38 @@ def init_database(app_settings: Settings | None = None) -> None:
     with selected_engine.begin() as connection:
         connection.execute(text("SELECT 1"))
     Base.metadata.create_all(selected_engine)
+    upgrade_migrations_to_head(selected_engine, selected_settings)
     seed_default_admin(selected_engine)
     if app_settings is not None:
         selected_engine.dispose()
+
+
+def upgrade_migrations_to_head(engine: Engine, target_settings: Settings | None = None) -> None:
+    """启动时把 DB schema 推到 alembic head。
+
+    行为:
+    - Base.metadata.create_all 已在上一步跑过(对已存在表不会补列,这是 SQLAlchemy 历史行为)
+    - 本函数调 alembic.command.upgrade(cfg, "head") 跑所有 pending migrations,
+      把 schema 增量同步到 head(包括 0026/0027 之类的新列)
+    - 跑完后用 alembic.command.stamp(cfg, "head") 强制把 alembic_version 设为 head
+      (项目历史 0001-0024 用 Base.metadata.create_all,不会更新 alembic_version,
+      本函数 stamp 兜底,避免下次启动重跑相同 migration)
+    - 失败时**直接抛异常**,lifespan 收到后让 uvicorn 退出非零,launcher 弹"启动失败"
+      (设计见 docs/superpowers/specs/2026-08-21-package-startup-auto-migrate-design.md §2.3)
+
+    关联 spec: docs/superpowers/specs/2026-08-21-package-startup-auto-migrate-design.md
+    """
+    from alembic import command as alembic_command
+    from alembic.config import Config as AlembicConfig
+
+    cfg_settings = target_settings or settings
+    cfg = AlembicConfig()
+    cfg.set_main_option("script_location", str(_MIGRATIONS_DIR))
+    cfg.set_main_option("sqlalchemy.url", cfg_settings.effective_database_url)
+    # 跑 pending migrations(从当前 alembic_version 到 head)
+    alembic_command.upgrade(cfg, "head")
+    # stamp 兜底:把 alembic_version 设为 head,避免下次启动再跑一遍
+    alembic_command.stamp(cfg, "head")
 
 
 def get_db() -> Generator[Session, None, None]:
