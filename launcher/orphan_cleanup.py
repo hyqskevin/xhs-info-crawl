@@ -103,12 +103,19 @@ def _wait_pid_gone(pid: int, timeout: float) -> bool:
 
 
 def _write_log(log_path: Path, fields: dict[str, Any]) -> None:
-    """追加一行结构化日志(ISO 时间戳 + key=value 字段)。"""
+    """追加一行结构化日志(ISO 时间戳 + key=value 字段)。
+
+    写日志失败不影响主流程(spec §4.4「不阻断启动」)。
+    """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + f",{int(time.time()*1000)%1000:03d}"
     parts = [ts, "INFO"] + [f"{k}={v}" for k, v in fields.items()]
-    with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(" ".join(parts) + "\n")
+    try:
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(" ".join(parts) + "\n")
+    except OSError as exc:
+        # 日志写失败不应阻断 cleanup 主流程
+        logger.warning("写清理日志失败 (path=%s): %s", log_path, exc)
 
 
 def cleanup_orphan_celery(
@@ -120,6 +127,7 @@ def cleanup_orphan_celery(
 
     返回 {"terminated":[...], "killed":[...]}。
     """
+    start_mono = time.monotonic()
     self_pid = os.getpid()
     matched = _list_matching_pids(role)
     targets = [p for p in matched if p != self_pid]
@@ -166,7 +174,7 @@ def cleanup_orphan_celery(
         "role": role,
         "terminated": terminated,
         "killed": killed,
-        "duration_ms": int(time.time() * 1000),
+        "duration_ms": int((time.monotonic() - start_mono) * 1000),
     })
     return {"terminated": terminated, "killed": killed}
 
