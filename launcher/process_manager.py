@@ -222,7 +222,6 @@ class ProcessManager:
 
     def _cleanup_orphan_celery(self, role: str) -> None:
         """调 launcher.orphan_cleanup 清理残留的 celery worker/beat。失败不阻断启动。"""
-        import sys
         log_file = self._logs_dir / f"{role}-cleanup.log"
         try:
             subprocess.run(
