@@ -65,9 +65,12 @@ def mount_static_frontend_if_exists(app: FastAPI, dist_path: Path) -> None:
     # SPA fallback:未匹配的路由回退到 index.html(让前端路由处理)
     @app.get("/{full_path:path}")
     async def spa_fallback(full_path: str):
-        # 优先返回对应的静态文件
-        file_path = dist_path / full_path
-        if full_path and file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
-        # 否则回退到 index.html
+        # 防路径穿越：拒绝前导 / / \\ 与任何含 .. 的路径片段。
+        # 注：FastAPI 的 {full_path:path} 不做 normalize，".." 片段会原样落到 full_path。
+        if not full_path or full_path.startswith(("/", "\\")) or ".." in Path(full_path).parts:
+            return FileResponse(index_html)
+        candidate = (dist_path / full_path).resolve(strict=False)
+        # 仅允许落在 dist_path 解析后的子路径内（含 dist_path 本身）
+        if candidate.is_file() and (dist_path.resolve() in candidate.parents or candidate == dist_path.resolve()):
+            return FileResponse(candidate)
         return FileResponse(index_html)
