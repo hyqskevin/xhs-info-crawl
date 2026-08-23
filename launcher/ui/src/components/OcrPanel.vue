@@ -64,7 +64,7 @@ function chipText(): string {
         data-test="install-ocr-btn"
         @click="emit('install')"
       >
-        {{ installing ? '安装中...' : '下载安装 OCR' }}
+        {{ installing ? '下载中...' : '下载 OCR 模型' }}
       </el-button>
       <el-button
         :disabled="testing || status.status !== 'installed'"

@@ -108,22 +108,28 @@ mkdir -p $PKG_DIR/runtime
 mv "$PYTHON_SRC" $PKG_DIR/runtime/python
 rm -f $PYTHON_TGZ
 
-# 2. 创建 venv 并安装依赖(不含 ocr extra)
+# 2. 创建 venv 并安装依赖(含 OCR 三件套:v0.7.0 恢复)
 echo "==> 创建 venv 并安装依赖..."
 # 不用 --copies:python-build-standalone 的 ensurepip 在 --copies 模式下 SIGABRT。
 # 默认创建 symlink,然后第 8 步 mv 之后我们手动把 symlink 替换为真实 copy。
 $PKG_DIR/runtime/python/bin/python3 -m venv $PKG_DIR/runtime/venv
+
+# pip 源配置(国内清华源默认,CI runner 海外可 unset PIP_INDEX_URL 走 PyPI.org)
+# 关联 spec: docs/superpowers/specs/2026-08-21-ocr-packaging-v0.7-design.md § 改动 2 + § 7
+export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+
 $PKG_DIR/runtime/venv/bin/pip install --upgrade pip
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/backend/requirements-runtime.txt
 $PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/launcher/requirements.txt
 
-# 注意:paddleocr / paddlepaddle **不**在 venv 里强制装(v0.6.0 的回归)。
-# 它们属于 OCR Python 包,体积约 840M(paddlepaddle 429M + opencv 171M + ...),
-# 强行装会让 .app 从 400M 涨到 1.1G,zip 从 280M 涨到 338M。
-# 正确路径:用户点 launcher UI "下载安装 OCR" 时,launcher.ocr_installer
-# 按需把 paddleocr+models 装到 DATA_DIR/paddlex/,不走 venv。
-# 关联 spec: docs/superpowers/specs/2026-08-21-packaging-ocr-llm-flow-fix-design.md § 改动 1
-# 关联设计: docs/packaging-design.md §2.1 问题 ①
+# v0.7.0 修复:paddleocr / paddlepaddle / paddlex 是 .app 运行时依赖,
+# 必须打进 .app/runtime/venv/lib/python3.11/site-packages/。
+# v0.6.1 错误设计(把它们移到 ocr extra,让用户在线拉 ocr-addon zip →
+# 404 找不到 release)已撤销。
+# 关联 spec: docs/superpowers/specs/2026-08-21-ocr-packaging-v0.7-design.md § 改动 1+2
+# 关联设计: docs/packaging-design.md §2.1 问题 ① v0.7.0 修复
+# 注意:依赖在 backend/requirements-runtime.txt 里,这里**不**显式 pip install paddleocr
+# (避免重复安装 + 版本不一致),由 requirements 文件统一来源。
 
 # 修复 venv 缺少 libpython3.11.dylib 问题:
 # python-build-standalone 解压后创建的 venv/lib 下没有 libpython,
@@ -258,31 +264,37 @@ echo "==> 校验 .app 内 OCR 依赖..."
 APP_CHECK_DIR="$BUILD_DIR/xhs-info-crawl.app/Contents/Resources/xhs-info-crawl"
 CHECK_FAILED=0
 if [ ! -d "$APP_CHECK_DIR/runtime/venv/lib/python3.11/site-packages/paddleocr" ]; then
-    echo "  ✗ paddleocr 包缺失(OCR 增强不可用)"
+    echo "  ✗ paddleocr 包缺失(OCR 增强不可用)" >&2
     CHECK_FAILED=1
 fi
-if [ ! -d "$APP_CHECK_DIR/runtime/venv/lib/python3.11/site-packages/paddlepaddle" ]; then
-    echo "  ✗ paddlepaddle 包缺失(OCR 推理失败)"
+# paddlepaddle 3.x wheel 的 top_level 是 paddle/ 不是 paddlepaddle/(dist-info 用 paddlepaddle 名)
+# 关联 spec: docs/superpowers/specs/2026-08-21-ocr-packaging-v0.7-design.md § 改动 3
+if [ ! -d "$APP_CHECK_DIR/runtime/venv/lib/python3.11/site-packages/paddle" ]; then
+    echo "  ✗ paddlepaddle 包缺失(OCR 推理失败)" >&2
     CHECK_FAILED=1
 fi
 if [ ! -f "$APP_CHECK_DIR/app/backend/tests/fixtures/ocr_test.png" ]; then
-    echo "  ✗ OCR 测试图缺失(launcher '测试 OCR' 会返回 test_image_missing)"
+    echo "  ✗ OCR 测试图缺失(launcher '测试 OCR' 会返回 test_image_missing)" >&2
     CHECK_FAILED=1
 fi
 # index.html 不能含绝对路径 /assets/
 if /usr/bin/grep -qE 'src="/assets/|href="/assets/' "$APP_CHECK_DIR/launcher/ui/dist/index.html"; then
-    echo "  ✗ launcher ui 含绝对路径 /assets/(白屏)"
+    echo "  ✗ launcher ui 含绝对路径 /assets/(白屏)" >&2
     CHECK_FAILED=1
 fi
 if /usr/bin/grep -qE 'src="/assets/|href="/assets/' "$APP_CHECK_DIR/app/frontend/dist/index.html"; then
-    echo "  ✗ frontend 含绝对路径 /assets/(子路由加载失败)"
+    echo "  ✗ frontend 含绝对路径 /assets/(子路由加载失败)" >&2
     CHECK_FAILED=1
 fi
-if [ $CHECK_FAILED -eq 1 ]; then
-    echo ""
-    echo "错误: 打包校验失败 — 上面列了缺失/异常文件"
-    echo "zip 已生成但 .app 不能直接给用户使用。请修复后重打包。"
-    # 不 exit 1 让 zip 仍然生成,便于人工核对 — 但要醒目提示
+if [ $CHECK_FAILED -ne 0 ]; then
+    echo "" >&2
+    echo "错误: 打包校验失败 — 上面列了缺失/异常文件" >&2
+    echo "已删除 .app 防止发出不可用产物,请修复后重打包。" >&2
+    rm -rf "$BUILD_DIR/xhs-info-crawl.app"
+    # v0.7.0 fail-fast:不允许 zip 生成(.app 缺 OCR 依赖 → 用户不能用)
+    # v0.6.1 之前是"提示但放行"导致用户拿到 .app 但 OCR 不可用
+    # 关联 spec: docs/superpowers/specs/2026-08-21-ocr-packaging-v0.7-design.md § 改动 3
+    exit 1
 fi
 echo "==> .app 校验完毕"
 

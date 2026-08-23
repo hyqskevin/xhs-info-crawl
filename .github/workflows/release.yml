@@ -102,9 +102,69 @@ jobs:
           name: windows-zip
           path: dist/build/xhs-info-crawl-${{ steps.version.outputs.VERSION }}-windows.zip
 
+  # v0.7.0 新增:每个平台产 OCR 模型 zip(PP-OCRv6_medium det+rec ~50M),
+  # 上传到 GitHub Release,供 launcher UI "下载 OCR 模型"按钮拉取。
+  # paddleocr / paddlepaddle / paddlex 本身已打进 .app venv(关联 spec:
+  # docs/superpowers/specs/2026-08-21-ocr-packaging-v0.7-design.md § 改动 8)
+  build-ocr-models:
+    name: Build OCR Models (${{ matrix.target }})
+    needs: build-macos-arm64
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-arm64
+            os: macos-latest
+            arch: arm64
+          - target: macos-x86_64
+            os: macos-13
+            arch: x86_64
+          - target: windows-x64
+            os: windows-latest
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          {python-version: '3.11'}
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download PP-OCRv6_medium models via paddleocr
+        run: |
+          mkdir -p $RUNNER_TEMP/paddlex
+          pip install paddleocr==3.7.0 -i https://pypi.tuna.tsinghua.edu.cn/simple
+          PADDLE_PDX_CACHE_HOME=$RUNNER_TEMP/paddlex python -c "
+          from paddleocr import PaddleOCR
+          PaddleOCR(lang='ch', use_doc_orientation_classify=False,
+                    use_doc_unwarping=False, use_textline_orientation=False)
+          print('OCR models downloaded to', '$RUNNER_TEMP/paddlex')
+          "
+
+      - name: Zip official_models/
+        shell: bash
+        run: |
+          cd $RUNNER_TEMP/paddlex/official_models
+          zip -r $GITHUB_WORKSPACE/ocr-models-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ocr-models-${{ matrix.target }}
+          path: ocr-models-${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.zip
+
   release:
     name: Create GitHub Release
-    needs: [build-macos-arm64, build-windows]
+    needs: [build-macos-arm64, build-windows, build-ocr-models]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -130,6 +190,13 @@ jobs:
           name: windows-zip
           path: artifacts
 
+      - name: Download OCR models artifacts (v0.7.0)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ocr-models-*
+          path: artifacts
+          merge-multiple: true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -138,4 +205,7 @@ jobs:
           files: |
             artifacts/xhs-info-crawl-${{ steps.version.outputs.VERSION }}-macos-arm64.zip
             artifacts/xhs-info-crawl-${{ steps.version.outputs.VERSION }}-windows.zip
+            artifacts/ocr-models-${{ steps.version.outputs.VERSION }}-macos-arm64.zip
+            artifacts/ocr-models-${{ steps.version.outputs.VERSION }}-macos-x86_64.zip
+            artifacts/ocr-models-${{ steps.version.outputs.VERSION }}-windows-x64.zip
           generate_release_notes: true

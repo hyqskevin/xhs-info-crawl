@@ -50,15 +50,26 @@ New-Item -ItemType Directory -Force -Path (Split-Path $PythonDest) | Out-Null
 Move-Item $PythonDir $PythonDest
 Remove-Item $PythonTgz -Force
 
-# 2. 创建 venv 并安装依赖(不含 ocr extra)
+# 2. 创建 venv 并安装依赖(含 OCR 三件套:v0.7.0 恢复)
 Write-Host "==> 创建 venv 并安装依赖..."
 $VenvPython = Join-Path $PkgDir "runtime\python\python.exe"
 # 默认模式即可(Windows 默认 copy,MacOS 默认 symlink,MacOS 我们手动替换)
 & $VenvPython -m venv (Join-Path $PkgDir "runtime\venv")
 $VenvPip = Join-Path $PkgDir "runtime\venv\Scripts\pip.exe"
+
+# pip 源配置(国内清华源默认,CI runner 海外可 unset PIP_INDEX_URL 走 PyPI.org)
+# 关联 spec: docs/superpowers/specs/2026-08-21-ocr-packaging-v0.7-design.md § 改动 4 + § 7
+if (-not $env:PIP_INDEX_URL) {
+    $env:PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
+}
+
 # 不强制升级 pip,避免 Windows 编码问题;venv 自带 pip 足够
 & $VenvPip install -r (Join-Path $RootDir "backend\requirements-runtime.txt")
 & $VenvPip install -r (Join-Path $RootDir "launcher\requirements.txt")
+
+# v0.7.0 修复:paddleocr / paddlepaddle / paddlex 是 .app 运行时依赖,
+# 必须打进 .app/runtime/venv/Lib/site-packages/。v0.6.1 错误设计已撤销。
+# 关联 spec: docs/superpowers/specs/2026-08-21-ocr-packaging-v0.7-design.md § 改动 1+4
 
 # 修复 venv/pyvenv.cfg 烧了 CI runner 绝对路径 的问题:
 # CPython 创建 venv 时会在 pyvenv.cfg 里写 `home = <创建时 base python 的绝对路径>`。

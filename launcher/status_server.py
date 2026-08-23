@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from launcher.opencli_checker import check_opencli, OPENCLI_DOWNLOAD_URL, OpenCLIResult
-from launcher.ocr_installer import get_ocr_status, download_and_install, OcrInstallResult
+from launcher.ocr_installer import get_ocr_status, download_models, OcrInstallResult
 from launcher.process_manager import ProcessManager
 from launcher.env_bootstrap import update_env_value
 
@@ -479,17 +479,17 @@ class StatusServer:
                 return {"ok": False, "message": "已有安装任务在运行"}
             os_name = "macos" if platform.system() == "Darwin" else "windows"
             arch = "arm64" if platform.machine() in ("arm64", "aarch64") else "x64"
-            version = "3.7.0"
 
             def run_install():
                 self._install_progress = {"active": True, "percent": 0, "message": "下载中"}
                 try:
-                    result: OcrInstallResult = download_and_install(
+                    # v0.7.0:paddleocr/paddlepaddle/paddlex 已打进 .app venv,
+                    # 这里只下载模型 PP-OCRv6_medium det+rec,不再走 wheels。
+                    # 关联 spec: docs/superpowers/specs/2026-08-21-ocr-packaging-v0.7-design.md § 改动 5+6
+                    result: OcrInstallResult = download_models(
                         project_root=self.project_root,
                         os_name=os_name,
                         arch=arch,
-                        version=version,
-                        venv_python=self.venv_python,
                     )
                     self._install_progress = {
                         "active": False,
@@ -501,7 +501,7 @@ class StatusServer:
                     self._install_progress = {
                         "active": False,
                         "percent": 0,
-                        "message": f"安装失败: {exc}",
+                        "message": f"下载失败: {exc}",
                         "ok": False,
                     }
 
