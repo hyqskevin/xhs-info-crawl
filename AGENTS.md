@@ -119,6 +119,20 @@ cd frontend && npm run test -- --run  # 前端
 
 **凡涉及模型/迁移/schema 的 TODO，验收项必须包含"重启 worker"**。Agent 完成迁移后应提示用户重启 worker，而不是默认用户会处理。
 
+### 启动 worker/beat 前的孤儿清理
+
+`scripts/dev-worker.sh` / `dev-beat.sh` 和 `launcher.process_manager.ProcessManager.start_service("worker"|"beat")` 在拉起新 worker/beat 之前会自动清理同名残留进程（命令行精确匹配 `celery.*-A app.tasks.celery_app.*(worker|beat)`，SIGTERM → 5s 超时 → SIGKILL 兜底）。覆盖 .app 强杀 / 崩溃场景。
+
+清理日志固定写到：
+
+| 入口 | 日志路径 |
+|---|---|
+| dev-worker.sh | `data/logs/dev-worker-cleanup.log` |
+| dev-beat.sh | `data/logs/dev-beat-cleanup.log` |
+| launcher .app | `data/logs/worker-cleanup.log` / `data/logs/beat-cleanup.log` |
+
+如果日志里出现 `terminated=[PID]` 或 `killed=[PID]`，说明本次清理了 N 个孤儿。如需定位残留来源，`ps -o pid,ppid,command` 查这些 PID 的 PPID（启动者）和命令行（哪个项目/分支启动）。
+
 ## 提交约定
 
 - 改动经过 spec + TDD + 测试通过后才能提交；持续授权不降低这些质量门槛
