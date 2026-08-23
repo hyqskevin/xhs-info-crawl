@@ -1,7 +1,7 @@
 """测试 launcher.orphan_cleanup。
 
 测试策略：用 subprocess.Popen 启动 sleep 60 的子进程,然后用 os.execvp 或
-`/bin/sh -c "exec -a 'fake-cmdline' sleep 60"` 改它的命令行显示(伪 celery 命令行)。
+`/bin/bash -c "exec -a 'fake-cmdline' sleep 60"` 改它的命令行显示(伪 celery 命令行)。
 这样 cleanup_orphan_celery 通过 ps 看到的命令行就是预期的,杀的是子进程本身。
 
 cleanup_orphan_celery 必须:
@@ -35,10 +35,10 @@ def _spawn_fake_worker(role: str, pgid: int | None = None) -> int:
     pgid: 若指定则把子进程放到新的进程组(setpgid),模拟 launcher start_new_session=True。
     """
     cmdline_marker = f"celery -A app.tasks.celery_app {role}"
-    # /bin/sh -c "exec -a 'fake cmdline' sleep 60"
+    # /bin/bash -c "exec -a 'fake cmdline' sleep 60"
     # exec -a 让 ps 显示的命令行变成 fake cmdline
     pid = subprocess.Popen(
-        ["/bin/sh", "-c", f"exec -a {cmdline_marker!r} sleep 60"],
+        ["/bin/bash", "-c", f"exec -a {cmdline_marker!r} sleep 60"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         preexec_fn=os.setsid if pgid is not None else None,
@@ -115,7 +115,7 @@ def test_timeout_triggers_sigkill(log_path: Path) -> None:
     """trap SIGTERM 不退出的进程 → 5s 超时后被 SIGKILL,归类为 killed。"""
     # trap SIGTERM 的进程:收到 SIGTERM 不退出
     proc = subprocess.Popen(
-        ["/bin/sh", "-c",
+        ["/bin/bash", "-c",
          f"trap '' TERM; exec -a 'celery -A app.tasks.celery_app worker' sleep 60"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
