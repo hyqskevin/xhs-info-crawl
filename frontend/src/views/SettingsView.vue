@@ -60,6 +60,17 @@ async function load() {
       return
     }
     if (tab.value === 'keyword-groups' || tab.value === 'blogger-groups') {
+      // 子组件 (KeywordGroupSettings / BloggerGroupSettings) 各自 onMounted 时
+      // 自己调 api.keywordGroups / api.bloggerGroups 拉 rows。这里只负责预加载 cities
+      // 给子组件编辑对话框的"挂载城市"下拉用。
+      // spec: docs/superpowers/specs/2026-08-22-settings-cities-preload-design.md
+      if (cities.value.length === 0) {
+        try {
+          cities.value = (await api.settings('cities')).data.data || []
+        } catch {
+          cities.value = []
+        }
+      }
       return
     }
     if (tab.value === 'xhs-accounts') {
@@ -77,7 +88,9 @@ async function load() {
     }
     if (tab.value === 'cities') {
       cities.value = rows.value
-    } else {
+    } else if (cities.value.length === 0) {
+      // 博主列表(tab=bloggers)表格也用 cities.find() 渲染城市 tag
+      // spec: docs/superpowers/specs/2026-08-22-settings-cities-preload-design.md
       try {
         cities.value = (await api.settings('cities')).data.data || []
       } catch {
