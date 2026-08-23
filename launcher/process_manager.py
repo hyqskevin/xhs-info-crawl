@@ -102,6 +102,11 @@ class ProcessManager:
         if not cmd:
             return False
 
+        # 启动前清理上次残留的同类 celery 进程(.app 强杀 / 崩溃场景)。
+        # 关联 spec: docs/superpowers/specs/2026-08-22-worker-cleanup-on-startup-design.md §4.2
+        if name in ("worker", "beat"):
+            self._cleanup_orphan_celery(name)
+
         log_file = self._logs_dir / f"{name}.log"
         # 写入启动分隔符,方便 log tail 时定位本次启动的输出
         # 关联 spec: docs/superpowers/specs/2026-08-23-migration-0028-sqlite-current-timestamp-binding-design.md §3.1
@@ -214,6 +219,22 @@ class ProcessManager:
             os.killpg(pgid, signal.SIGKILL)  # type: ignore[attr-defined]
         except (ProcessLookupError, PermissionError, OSError) as exc:
             logger.warning("killpg(%d) 失败: %s", pgid, exc)
+
+    def _cleanup_orphan_celery(self, role: str) -> None:
+        """调 launcher.orphan_cleanup 清理残留的 celery worker/beat。失败不阻断启动。"""
+        import sys
+        log_file = self._logs_dir / f"{role}-cleanup.log"
+        try:
+            subprocess.run(
+                [str(self.venv_python), "-m", "launcher.orphan_cleanup",
+                 "--role", role, "--log", str(log_file), "--timeout", "5.0"],
+                cwd=str(self.project_root),
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            logger.warning("orphan_cleanup(%s) 调用失败: %s", role, exc)
 
     def restart_service(self, name: str) -> bool:
         """重启指定服务。"""
