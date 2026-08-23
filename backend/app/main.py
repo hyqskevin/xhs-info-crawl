@@ -69,8 +69,9 @@ def mount_static_frontend_if_exists(app: FastAPI, dist_path: Path) -> None:
         # 注：FastAPI 的 {full_path:path} 不做 normalize，".." 片段会原样落到 full_path。
         if not full_path or full_path.startswith(("/", "\\")) or ".." in Path(full_path).parts:
             return FileResponse(index_html)
+        dist_resolved = dist_path.resolve()
         candidate = (dist_path / full_path).resolve(strict=False)
         # 仅允许落在 dist_path 解析后的子路径内（含 dist_path 本身）
-        if candidate.is_file() and (dist_path.resolve() in candidate.parents or candidate == dist_path.resolve()):
+        if candidate.is_file() and (dist_resolved in candidate.parents or candidate == dist_resolved):
             return FileResponse(candidate)
         return FileResponse(index_html)
