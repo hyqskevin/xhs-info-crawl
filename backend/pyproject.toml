@@ -8,19 +8,23 @@ dependencies = [
   "celery>=5.4,<6",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
+  # OCR(v0.7.0: 从 optional 移到 required,因为 paddleocr/paddlepaddle/paddlex
+  # 应当打进 .app venv 而不是走 OCR 增强包,关联 spec
+  # docs/superpowers/specs/2026-08-21-ocr-packaging-v0.7-design.md § 改动 1)
+  "opencv-contrib-python>=4.10,<5",
   "openpyxl>=3.1,<4",
+  "paddleocr>=3.7.0,<4",
+  "paddlepaddle>=3.3.1,<4",
+  "paddlex>=3.7.0,<4",
   "pwdlib[argon2]>=0.2,<1",
   "pyjwt>=2.10,<3",
   "pydantic-settings>=2.7,<3",
+  "python-multipart>=0.0.9,<1",
   "sqlalchemy>=2.0,<3",
   "uvicorn[standard]>=0.34,<1",
 ]
 
-[project.optional-dependencies]
-ocr = [
-    "paddleocr>=3.7.0",
-    "paddlepaddle>=3.3.1",
-]
+# v0.7.0 删除 [project.optional-dependencies].ocr —— paddleocr 直接进 dependencies。
 
 [dependency-groups]
 dev = [

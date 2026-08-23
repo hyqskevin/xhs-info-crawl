@@ -1,10 +1,17 @@
-# 后端运行时依赖(不含 ocr extra,OCR 走增强包)
-# 从 pyproject.toml [project.dependencies] 提取
+# 后端运行时依赖(含 OCR 三件套)
+# 从 pyproject.toml [project.dependencies] 提取(2026-08-21 v0.7.0 调整:OCR 不再走增强包,直接进运行时)
+# 关联 spec: docs/superpowers/specs/2026-08-21-ocr-packaging-v0.7-design.md § 改动 1
 alembic>=1.14,<2
 celery>=5.4,<6
 fastapi>=0.115,<1
 httpx>=0.28,<1
+# OCR 三件套(paddleocr 3.7+ / paddlepaddle 3.3+ / paddlex 3.7+);
+# paddleocr 强制依赖 paddlex;实际打包时 paddleocr 会一并装 opencv-contrib-python + pandas 等。
+opencv-contrib-python>=4.10,<5
 openpyxl>=3.1,<4
+paddleocr>=3.7.0,<4
+paddlepaddle>=3.3.1,<4
+paddlex>=3.7.0,<4
 pwdlib[argon2]>=0.2,<1
 pyjwt>=2.10,<3
 python-multipart>=0.0.9,<1
