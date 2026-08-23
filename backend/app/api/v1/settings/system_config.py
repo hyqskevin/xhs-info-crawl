@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.browser_launcher import BrowserLaunchError, open_xhs_login, open_xhs_login_via_opencli
 from app.services.opencli_adapter import OpenCLIAdapter
@@ -72,6 +72,9 @@ def open_login(_: Admin):
 
 # env 字段名 → Settings 属性名映射
 _ENV_KEY_MAP: dict[str, str] = {
+    # 定时任务熔断全局默认(覆盖每条 schedule 字段的''空时回退)
+    "schedule_consecutive_fail_limit": "SCHEDULE_CONSECUTIVE_FAIL_LIMIT",
+    "schedule_retry_interval_minutes": "SCHEDULE_RETRY_INTERVAL_MINUTES",
     "minimax_api_key": "MINIMAX_API_KEY",
     "minimax_base_url": "MINIMAX_BASE_URL",
     "minimax_model": "MINIMAX_MODEL",
@@ -111,6 +114,9 @@ _ENV_KEY_MAP: dict[str, str] = {
 class SystemConfigIn(BaseModel):
     """系统配置更新请求，所有字段可选。"""
 
+    # 定时任务熔断全局默认(覆盖每条 schedule 的覆盖值)
+    schedule_consecutive_fail_limit: int | None = Field(default=None, ge=1)
+    schedule_retry_interval_minutes: int | None = Field(default=None, ge=1)
     minimax_api_key: str | None = None
     minimax_base_url: str | None = None
     minimax_model: str | None = None

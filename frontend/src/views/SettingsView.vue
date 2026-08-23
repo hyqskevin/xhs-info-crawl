@@ -472,6 +472,30 @@ onMounted(load)
         </div>
 
         <div class="config-group">
+          <h4 class="config-group-title">定时任务熔断（全局）</h4>
+          <ElFormItem label="连续失败阈值（次）">
+            <ElInputNumber
+              v-model="systemConfig.schedule_consecutive_fail_limit"
+              :min="1"
+              :max="50"
+              :step="1"
+              style="width: 100%"
+            />
+            <span class="form-hint">同一 schedule 连续 N 次失败后进入冷却。覆盖默认值；schedule 单条为空则用全局。</span>
+          </ElFormItem>
+          <ElFormItem label="冷却重启间隔（分钟）">
+            <ElInputNumber
+              v-model="systemConfig.schedule_retry_interval_minutes"
+              :min="1"
+              :max="1440"
+              :step="5"
+              style="width: 100%"
+            />
+            <span class="form-hint">冷却到期后自动重启一次抓取；覆盖默认值。</span>
+          </ElFormItem>
+        </div>
+
+        <div class="config-group">
           <h4 class="config-group-title">抓取工具</h4>
           <ElFormItem label="opencli 路径">
             <ElInput
