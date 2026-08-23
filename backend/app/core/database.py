@@ -47,21 +47,25 @@ def seed_default_iam(db_engine: Engine) -> None:
     """幂等 seed 默认 IAM(用户/组/权限/绑定)。
 
     - 内置 admin/Admin@123 用户(已有则不覆盖密码)
-    - 10 条权限码(9 条具体 + 1 条 '*' 通配)
-    - 2 个内置组:Administrators(绑全部 10 条) + Viewers(仅 users:read)
-    - role='admin' 用户批量入 Administrators(幂等)
+    - 10 条权限码(9 条具体 + 1 条 '*' 通配),已存在则跳过
+    - 2 个内置组:Administrators(绑全部 10 条 含 '*') + Viewers(仅 users:read)
+      **幂等补齐**:即便 Administrators/Viewers 已存在(老 v0.5.x 现场),
+      本函数也会补上缺失的权限绑(含 '*');不会移除用户手动加的额外绑。
+    - role='admin' 用户批量入 Administrators(幂等:user_groups 已存在则跳过)
 
     关联 spec:
     - docs/superpowers/specs/2026-08-16-packaged-default-login-and-mainthread-window-design.md
     - docs/superpowers/specs/2026-08-16-packaged-admin-permissions-design.md
+    - docs/superpowers/specs/2026-08-22-permission-rebind-admin-groups-design.md (老组重绑)
 
     打包版从不执行 alembic 迁移,所有 IAM 表都空,必须由本函数兜底 seed;
     否则 admin 登录后 token permissions=[] → 所有 require_admin 端点 403。
+    老 v0.5.x 用户升级后,本函数自动给老 Administrators 组补齐 '*' + 新 9 条 → 菜单/权限回齐。
     """
     from sqlalchemy.orm import Session
 
     from app.core.security import hash_password
-    from app.models.group import Group, GroupPermission, Permission, UserGroup
+    from app.models.group import Group, Permission, UserGroup
     from app.models.user import User
 
     password = os.environ.get("INITIAL_ADMIN_PASSWORD") or "Admin@123"
@@ -89,7 +93,7 @@ def seed_default_iam(db_engine: Engine) -> None:
             )
         session.flush()
 
-        # 3. Administrators 组(绑全部 10 条),幂等
+        # 3. Administrators 组——创建或补全
         admins = session.query(Group).filter(Group.name == "Administrators").first()
         if admins is None:
             admins = Group(
@@ -99,11 +103,9 @@ def seed_default_iam(db_engine: Engine) -> None:
             )
             session.add(admins)
             session.flush()
-            all_perm_ids = [p.id for p in session.query(Permission).all()]
-            for pid in all_perm_ids:
-                session.add(GroupPermission(group_id=admins.id, permission_id=pid))
+        _ensure_group_has_all_permissions(session, admins, include_wildcard=True)
 
-        # 4. Viewers 组(仅 users:read),幂等
+        # 4. Viewers 组——创建或补全
         viewers = session.query(Group).filter(Group.name == "Viewers").first()
         if viewers is None:
             viewers = Group(
@@ -113,8 +115,7 @@ def seed_default_iam(db_engine: Engine) -> None:
             )
             session.add(viewers)
             session.flush()
-            read_perm = session.query(Permission).filter(Permission.code == "users:read").one()
-            session.add(GroupPermission(group_id=viewers.id, permission_id=read_perm.id))
+        _ensure_group_has_minimum_permission(session, viewers, "users:read")
 
         # 5. role='admin' 用户批量入 Administrators(幂等:user_groups 已存在则跳过)
         existing_links = {
@@ -132,6 +133,60 @@ def seed_default_iam(db_engine: Engine) -> None:
             session.add(UserGroup(user_id=uid, group_id=admins.id))
 
         session.commit()
+
+
+def _ensure_group_has_all_permissions(session, group, *, include_wildcard: bool) -> None:
+    """幂等补齐组绑全部权限码。
+
+    - 行为:查询当前组已绑 permission_ids,与全表 Permission.id 取差集,缺的批量插入。
+    - 不删除任何已有绑——用户手动加的非标准码会被保留。
+    - 单次数据库读:SELECT id FROM permissions;SELECT permission_id FROM group_permissions WHERE group_id=?
+    - 单次数据库写:仅缺时 INSERT GROUP_PERMISSIONS (group_id, permission_id) ...;不进 SELECT/不重复 INSERT。
+    - 性能:启动期对内置组 (Administrators/Viewers) 各调一次;全 IAM 启动期 < 5 ms。
+
+    关联 spec: docs/superpowers/specs/2026-08-22-permission-rebind-admin-groups-design.md
+    """
+    from app.models.group import GroupPermission, Permission as _Perm  # 局部 import 避免循环依赖
+
+    perm_query = session.query(_Perm)
+    if not include_wildcard:
+        perm_query = perm_query.filter(_Perm.code != "*")
+    all_perms = perm_query.all()
+    target_ids = {p.id for p in all_perms}
+    if not target_ids:
+        return
+
+    bound_ids = {
+        row.permission_id
+        for row in session.query(GroupPermission.permission_id)
+        .filter(GroupPermission.group_id == group.id)
+        .all()
+    }
+    missing_ids = target_ids - bound_ids
+    if not missing_ids:
+        return
+    for pid in missing_ids:
+        session.add(GroupPermission(group_id=group.id, permission_id=pid))
+    session.flush()
+
+
+def _ensure_group_has_minimum_permission(session, group, code: str) -> None:
+    """幂等保证组至少绑一条 code(Viewers 必 users:read)。
+
+    - 行为:Users 手动删了那条绑也会自动补回。
+    - 不删除其它绑。
+
+    关联 spec: docs/superpowers/specs/2026-08-22-permission-rebind-admin-groups-design.md
+    """
+    from app.models.group import GroupPermission, Permission as _Perm
+
+    perm = session.query(_Perm).filter(_Perm.code == code).one()
+    exists = session.query(GroupPermission).filter_by(
+        group_id=group.id, permission_id=perm.id
+    ).first()
+    if exists is None:
+        session.add(GroupPermission(group_id=group.id, permission_id=perm.id))
+        session.flush()
 
 
 # 向后兼容别名(老 spec 仍引用 seed_default_admin)
