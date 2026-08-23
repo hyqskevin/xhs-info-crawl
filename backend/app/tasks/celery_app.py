@@ -31,6 +31,11 @@ def create_celery_app(settings: Settings) -> Celery:
                 "task": "app.tasks.crawl_task.retry_failed_schedules",
                 "schedule": crontab(minute="*"),
             },
+            # spec: docs/superpowers/specs/2026-08-22-stop-stuck-recovery-design.md
+            "recover-stuck-stop-requests": {
+                "task": "app.tasks.crawl_task.recover_stuck_stop_requests",
+                "schedule": 60.0,  # 每 60s 一次
+            },
         },
     )
     return app

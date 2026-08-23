@@ -145,6 +145,22 @@ def _find_latest_paused_for_schedule(db, schedule_id: int) -> CrawlTask | None:
     )
 
 
+@celery_app.task(name="app.tasks.crawl_task.recover_stuck_stop_requests")
+def recover_stuck_stop_requests() -> int:
+    """每 60s 由 beat 触发：强制落 STOPPED 给卡在 STOP_REQUESTED > STUCK_THRESHOLD_SECONDS 的 task。
+
+    spec: docs/superpowers/specs/2026-08-22-stop-stuck-recovery-design.md
+    - watchdog（spec 2026-08-19）覆盖 Event 兜底，但 worker 卡在 MiniMax HTTP / PaddleOCR /
+      opencli 子进程时主线程完全不去 assert_execution_active，watchdog set event 后
+      仍要等当前调用超时（默认 60s/180s）才会感知。用户感受"卡正在停止很久"。
+    - 本 task 是 DB 兜底：周期性扫描 → UPDATE status=STOPPED + 写 WARNING task_log。
+    - 返回恢复的 task 数（便于 beat 日志观测）。
+    """
+    from app.services.stop_recovery import recover_stuck_stop_requests as _recover
+
+    return _recover()
+
+
 def _restart_existing_paused_task(db, task: CrawlTask) -> None:
     """把现有 PAUSED task 状态翻 PENDING + 新 run_token + 清空运行态字段,然后 run_crawl.delay。
 
