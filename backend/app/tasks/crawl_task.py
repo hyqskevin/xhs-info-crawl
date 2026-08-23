@@ -22,9 +22,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from uuid import uuid4
 import logging
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 
 # 第三方依赖
 from app.core.config import get_settings  # noqa: F401  (re-exported for tests)
@@ -78,7 +80,7 @@ from app.tasks.celery_app import celery_app
 
 # 其他 imports（任务主体用）
 from app.models.schedule import ScheduledCrawl
-from app.models.task import CrawlTask
+from app.models.task import CrawlTask, TaskLog
 from app.services.crawler import AuthenticationRequired, CrawlHalted, VerificationRequired
 from app.services.schedule_service import record_schedule_failure, record_schedule_success
 from app.services.chrome_pool import ChromeLaunchError
@@ -114,6 +116,79 @@ def _passes_min_engagement(
 # ============================================================
 
 
+def _has_active_task_for_schedule(db, schedule_id: int) -> bool:
+    """判断该 schedule 是否有任何活跃 scheduled task(手动/mixed 类型不算)。
+
+    行为 A 应用层判重(`crawl_tasks` 上还有 partial unique index 0028 兜底)。
+    spec: docs/superpowers/specs/2026-08-22-schedule-unique-active-and-paused-restart-design.md §2
+    """
+    return bool(db.scalar(
+        select(func.count()).select_from(CrawlTask).where(
+            CrawlTask.status.in_(_BUSY_STATUSES),
+            CrawlTask.params["type"].as_string() == "scheduled",
+            CrawlTask.params["schedule_id"].as_integer() == schedule_id,
+        )
+    ))
+
+
+def _find_latest_paused_for_schedule(db, schedule_id: int) -> CrawlTask | None:
+    """找该 schedule 最近一条 PAUSED 任务(行为 C:多 schedule 出错时按 schedule_id 精确匹配)。
+
+    spec: docs/superpowers/specs/2026-08-22-schedule-unique-active-and-paused-restart-design.md §3
+    """
+    return db.scalar(
+        select(CrawlTask).where(
+            CrawlTask.status == "PAUSED",
+            CrawlTask.params["type"].as_string() == "scheduled",
+            CrawlTask.params["schedule_id"].as_integer() == schedule_id,
+        ).order_by(CrawlTask.id.desc()).limit(1)
+    )
+
+
+def _restart_existing_paused_task(db, task: CrawlTask) -> None:
+    """把现有 PAUSED task 状态翻 PENDING + 新 run_token + 清空运行态字段,然后 run_crawl.delay。
+
+    注意:
+    - 复用同一 task.id(spec 行为 B 核心)
+    - schedule_id 从 task.params 读取并清对应 schedule 的 cooldown_until
+    - 等价于 `POST /tasks/{id}/restart` 的 PAUSED → PENDING 分支,但走批量 worker 路径,不走 API
+
+    spec: docs/superpowers/specs/2026-08-22-schedule-unique-active-and-paused-restart-design.md §3
+    """
+    task.status = "PENDING"
+    task.run_token = str(uuid4())
+    task.error_message = None
+    task.current_stage = None
+    task.current_note = None
+    task.finished_at = None
+    # 不动 started_at(续跑语义,与 /tasks/{id}/restart 的 PAUSED 分支一致)
+    db.add(TaskLog(
+        task_id=task.id,
+        level="INFO",
+        message="熔断冷却到期,自动重新启动原任务",
+        created_at=datetime.now(timezone.utc),
+    ))
+    db.commit()
+
+    schedule_id = (task.params or {}).get("schedule_id")
+    if schedule_id is not None:
+        s = db.get(ScheduledCrawl, schedule_id)
+        if s is not None:
+            s.cooldown_until = None
+            db.commit()
+            logger.info(
+                "retry_failed_schedules: 重启 task id=%s 已清 schedule id=%s 的 cooldown_until",
+                task.id, schedule_id,
+            )
+        else:
+            logger.warning(
+                "retry_failed_schedules: 找不到 schedule id=%s (task id=%s), 跳过清 cooldown",
+                schedule_id, task.id,
+            )
+
+    run_crawl.delay(task.id, task.run_token)
+
+
 @celery_app.task(name="app.tasks.crawl_task.scheduled_dispatch")
 def scheduled_dispatch(now=None) -> None:
     """每分钟由 beat 触发：匹配到点的 enabled 定时任务并创建抓取任务。
@@ -121,6 +196,8 @@ def scheduled_dispatch(now=None) -> None:
     - slot 幂等：last_fired_slot == 当前分钟则跳过（防 beat 重启/重复 tick 重发）；
     - 单任务约束：已有 PENDING/RUNNING/STOP_REQUESTED 任务时跳过本次触发
       （保守语义：定时任务不打断人工任务，与手动 crawl 的"顶替"语义刻意不同）。
+    - v0.7.0+2 (spec §2) 新增 schedule 级 busy 校验:同一 schedule 已有任何活跃任务 → 跳过
+      (避免 #1+#2 同分钟双发);partial unique index 0028 是 DB 层兜底。
     """
     now = (now or datetime.now(_DISPATCH_TZ)).astimezone(_DISPATCH_TZ)
     slot = now.strftime("%Y-%m-%dT%H:%M")
@@ -151,6 +228,12 @@ def scheduled_dispatch(now=None) -> None:
                     "scheduled_dispatch: 任务进行中，跳过 schedule id=%s slot=%s", schedule.id, slot
                 )
                 continue
+            # 行为 A:schedule 级 busy 校验,防止同一 schedule 出现并发抓取
+            if _has_active_task_for_schedule(db, schedule.id):
+                logger.warning(
+                    "scheduled_dispatch: schedule id=%s 已有活跃任务,跳过 slot=%s", schedule.id, slot
+                )
+                continue
             params: dict = {
                 "type": "scheduled",
                 "city": schedule.city_code,
@@ -163,9 +246,17 @@ def scheduled_dispatch(now=None) -> None:
             if schedule.recent_filter:
                 params["recent_filter"] = schedule.recent_filter
             task = CrawlTask(type="scheduled", status="PENDING", params=params)
-            db.add(task)
-            db.commit()
-            db.refresh(task)
+            try:
+                db.add(task)
+                db.commit()
+                db.refresh(task)
+            except IntegrityError as exc:
+                # DB partial unique index 0028 兜底,唯一约束触发 → 跳过本轮
+                db.rollback()
+                logger.warning(
+                    "scheduled_dispatch: schedule id=%s 唯一约束触发,跳过: %s", schedule.id, exc
+                )
+                continue
             schedule.last_fired_slot = slot
             db.commit()
             run_crawl.delay(task.id, task.run_token)
@@ -181,6 +272,12 @@ def retry_failed_schedules(now=None) -> None:
     spec: docs/superpowers/specs/2026-08-19-schedule-circuit-breaker-retry-design.md
     - 冷却到期后无需人工，自动重启（尊重 _BUSY_STATUSES 单任务约束，忙则等下一轮）。
     - params 带 ``restart_after_failure`` 标记，便于追踪/审计是熔断恢复触发。
+
+    spec (v0.7.0+2) 行为 B + 行为 C 改造:
+    - 行为 B:若该 schedule 有 PAUSED task → restart 复用原 task(不清 task,只翻 PENDING + 新 token)
+    - 行为 C:多 schedule 出错各自 restart 各自的,严格按 schedule_id 匹配,不混淆
+    - 兜底:无 PAUSED 且无活跃 → 新建一条 PENDING(沿用旧逻辑,保留审计兼容)
+    - 行为 A:已有活跃任务 → 跳过(防 #1 违例)
     """
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -200,6 +297,19 @@ def retry_failed_schedules(now=None) -> None:
         for s in schedules:
             if busy:
                 continue
+            # 行为 B:先找该 schedule 现有 PAUSED task → restart 复用(spec v0.7.0+2 §3)
+            paused = _find_latest_paused_for_schedule(db, s.id)
+            if paused is not None:
+                _restart_existing_paused_task(db, paused)
+                # 不设 busy=True:复用 task 不"并发新增",每个 schedule 独立 restart 各自的 PAUSED 互不干扰
+                continue
+            # 兜底:schedule 级 busy(用户已手动重启/有活跃任务) → 跳过
+            if _has_active_task_for_schedule(db, s.id):
+                logger.warning(
+                    "retry_failed_schedules: schedule id=%s 已有活跃任务,跳过", s.id
+                )
+                continue
+            # 兜底:无 PAUSED(用户手动删了) → 走新建路径(保留审计兼容)
             params: dict = {
                 "type": "scheduled",
                 "city": s.city_code,
@@ -213,9 +323,17 @@ def retry_failed_schedules(now=None) -> None:
             if s.recent_filter:
                 params["recent_filter"] = s.recent_filter
             task = CrawlTask(type="scheduled", status="PENDING", params=params)
-            db.add(task)
-            db.commit()
-            db.refresh(task)
+            try:
+                db.add(task)
+                db.commit()
+                db.refresh(task)
+            except IntegrityError as exc:
+                # DB partial unique index 0028 兜底
+                db.rollback()
+                logger.warning(
+                    "retry_failed_schedules: schedule id=%s 唯一约束触发: %s", s.id, exc
+                )
+                continue
             s.cooldown_until = None
             db.commit()
             run_crawl.delay(task.id, task.run_token)
