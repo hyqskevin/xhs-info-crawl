@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { StatusResponse, ServiceState } from '@/api/client'
 
 interface Props {
@@ -22,6 +23,17 @@ function stateText(state: ServiceState): string {
   if (state.state === 'crashed') return '异常退出'
   return '已停止'
 }
+
+// v0.7.0+5:crashed 时显示红条"API 启动失败: <last_error 摘要>"
+const crashedSummary = computed<{ name: string; label: string; error: string } | null>(() => {
+  for (const svc of services) {
+    const state = props.status[svc.key]
+    if (state.state === 'crashed' && state.last_error) {
+      return { name: svc.key, label: svc.label, error: state.last_error }
+    }
+  }
+  return null
+})
 </script>
 
 <template>
@@ -34,6 +46,17 @@ function stateText(state: ServiceState): string {
         </el-button>
       </div>
     </template>
+
+    <el-alert
+      v-if="crashedSummary"
+      type="error"
+      :title="`${crashedSummary.label} 启动失败`"
+      :description="crashedSummary.error"
+      show-icon
+      :closable="false"
+      class="crash-alert"
+      data-test="crash-alert"
+    />
 
     <div
       v-for="svc in services"
@@ -115,5 +138,11 @@ function stateText(state: ServiceState): string {
 
 .dot--crashed {
   background: var(--md-sys-color-error);
+}
+
+.crash-alert {
+  margin-bottom: var(--md-sys-spacing-3);
+  white-space: pre-wrap;
+  font: var(--md-sys-typescale-body-small);
 }
 </style>

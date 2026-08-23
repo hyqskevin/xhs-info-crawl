@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,10 @@ class ProcessManager:
         self._commands = self._build_default_commands()
         # cleanup 幂等锁
         self._cleaned = False
+        # 上次启动时间 / 上次失败原因 → 暴露给 StatusPanel 显示
+        # 关联 spec: docs/superpowers/specs/2026-08-23-migration-0028-sqlite-current-timestamp-binding-design.md
+        self._last_launch_at: dict[str, str] = {}
+        self._last_error: dict[str, str] = {}
 
     def _build_default_commands(self) -> dict[str, list[str]]:
         """构建默认的服务启动命令。"""
@@ -98,7 +103,20 @@ class ProcessManager:
             return False
 
         log_file = self._logs_dir / f"{name}.log"
+        # 写入启动分隔符,方便 log tail 时定位本次启动的输出
+        # 关联 spec: docs/superpowers/specs/2026-08-23-migration-0028-sqlite-current-timestamp-binding-design.md §3.1
+        try:
+            with log_file.open("ab") as marker:
+                marker.write(
+                    f"\n=== launched at {datetime.now(timezone.utc).isoformat()} "
+                    f"pid=__PID__ cmd={' '.join(cmd)} ===\n".encode("utf-8")
+                )
+        except OSError:
+            pass  # log 文件不可写不阻断启动
         log_handle = open(log_file, "ab")
+        # 重置 last_error — 新启动视作健康,旧错误不污染新状态
+        self._last_error.pop(name, None)
+        self._last_launch_at[name] = datetime.now(timezone.utc).isoformat()
 
         env = {
             **os.environ,
@@ -123,6 +141,15 @@ class ProcessManager:
             env=env,
             **popen_kwargs,
         )
+        # 把分隔符里的 __PID__ 回填为真实 PID,避免 Popen 阻塞
+        try:
+            with log_file.open("r+b") as patch:
+                data = patch.read()
+                patch.seek(0)
+                patch.write(data.replace(b"pid=__PID__", f"pid={proc.pid}".encode("utf-8")))
+                patch.truncate()
+        except OSError:
+            pass  # log 文件 patch 失败不阻断启动
         self._processes[name] = proc
         logger.info("启动服务 %s (PID %d, 独立进程组)", name, proc.pid)
         return True
@@ -200,34 +227,62 @@ class ProcessManager:
             self.stop_service(name)
 
     def get_status(self) -> dict:
-        """获取所有服务状态。"""
+        """获取所有服务状态。
+
+        返回字段:
+        - state: 'running' / 'crashed' / 'stopped'
+        - pid: 当前 PID(没有则 None)
+        - last_launch_at: 上次启动时间 ISO 字符串
+        - last_error: 上次 crash 时的 stderr 末尾 8 行摘要(没有则 None)
+
+        StatusPanel 用 last_error 给用户弹红条 "API 启动失败: <摘要>",
+        关联 spec: docs/superpowers/specs/2026-08-23-migration-0028-sqlite-current-timestamp-binding-design.md §3.3
+        """
         result = {}
         for name in SERVICE_NAMES:
+            entry: dict = {
+                "state": "stopped",
+                "pid": None,
+                "last_launch_at": self._last_launch_at.get(name),
+                "last_error": self._last_error.get(name),
+            }
             if name not in self._processes:
-                result[name] = {"state": "stopped", "pid": None}
+                result[name] = entry
                 continue
 
             proc = self._processes[name]
             if proc.poll() is None:
-                result[name] = {"state": "running", "pid": proc.pid}
+                entry["state"] = "running"
+                entry["pid"] = proc.pid
             else:
-                result[name] = {"state": "crashed" if proc.returncode != 0 else "stopped", "pid": None}
+                crashed = proc.returncode != 0
+                entry["state"] = "crashed" if crashed else "stopped"
+                if crashed:
+                    # 抽 stderr 末尾 8 行作为 last_error 摘要
+                    tail = self._read_log_tail_lines(name, lines=8)
+                    if tail:
+                        self._last_error[name] = "\n".join(tail)
+                        entry["last_error"] = self._last_error[name]
                 del self._processes[name]
+            result[name] = entry
         return result
+
+    def _read_log_tail_lines(self, name: str, lines: int = 8) -> list[str]:
+        """读指定服务日志最后 N 行(用于 last_error 摘要)。"""
+        log_file = self._logs_dir / f"{name}.log"
+        if not log_file.exists():
+            return []
+        try:
+            content = log_file.read_text(encoding="utf-8", errors="ignore")
+            return content.splitlines()[-lines:]
+        except OSError:
+            return []
 
     def get_logs_tail(self, lines: int = 50) -> list[str]:
         """获取最近日志(所有服务合并)。"""
-        all_lines = []
+        all_lines: list[str] = []
         for name in SERVICE_NAMES:
-            log_file = self._logs_dir / f"{name}.log"
-            if not log_file.exists():
-                continue
-            try:
-                content = log_file.read_text(encoding="utf-8", errors="ignore")
-                file_lines = content.splitlines()[-lines:]
-                all_lines.extend(file_lines)
-            except Exception:
-                continue
+            all_lines.extend(self._read_log_tail_lines(name, lines=lines))
         return all_lines[-lines:]
 
     def cleanup(self) -> None:

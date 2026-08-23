@@ -58,6 +58,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export interface ServiceState {
   state: 'running' | 'stopped' | 'crashed'
   pid: number | null
+  // v0.7.0+5:后端 process_manager 在 crash 时抓 stderr 末尾返回,
+  // StatusPanel 用 last_error 弹红条,用户能看到真错误而不是"API 连不上"
+  last_launch_at?: string | null
+  last_error?: string | null
 }
 
 export interface StatusResponse {

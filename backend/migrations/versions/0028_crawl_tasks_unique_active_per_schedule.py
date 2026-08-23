@@ -54,7 +54,11 @@ def upgrade() -> None:
                 "error_message='迁移 0028:旧现场同 schedule 重复活跃 task,强制 FAILED' "
                 "WHERE id IN :ids"
             ).bindparams(sa.bindparam("ids", expanding=True)),
-            {"now": sa.func.current_timestamp(), "ids": duplicate_ids},
+            # ⚠️ 不要用 sa.func.current_timestamp():sqlite3 stdlib driver 把
+            # CURRENT_TIMESTAMP 当 SQLAlchemy 类型 tag,但它不在 sqlite3 module 的
+            # _sqlite_type_map 内 → `Error binding parameter: type 'current_timestamp' is not supported`。
+            # 字面量字符串让 sqlite 解析为 CURRENT_TIMESTAMP() 函数(同 timestamp 行为)。
+            {"now": "CURRENT_TIMESTAMP", "ids": duplicate_ids},
         )
 
     # 2. 建 partial unique index
