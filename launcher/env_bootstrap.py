@@ -1,6 +1,7 @@
 """env bootstrap:.env 初始化/敏感配置生成/缓存环境变量设置。
 
 关联 spec: docs/superpowers/specs/2026-08-10-one-click-packaging-design.md § 13
+关联 spec: docs/superpowers/specs/2026-08-23-data-dir-absolute-path-launcher-design.md
 """
 from __future__ import annotations
 
@@ -10,6 +11,11 @@ from pathlib import Path
 
 # 占位值,需要替换的
 _SECRET_KEY_PLACEHOLDER = "replace-with-a-random-local-secret"
+
+# macOS 规范的 Application Support 目录,推荐作为默认 DATA_DIR
+# 避免升级 .app 时数据被覆盖,且 Time Machine 自动备份
+# 与 status_server.py::StatusServer.DEFAULT_DATA_DIR 保持一致
+DEFAULT_DATA_DIR = "~/Library/Application Support/com.xhs-info-crawl.local"
 
 
 def generate_secret_key() -> str:
@@ -110,6 +116,45 @@ def _read_env_value(env_path: Path, key: str, default: str) -> str:
         if k.strip() == key:
             return v.strip()
     return default
+
+
+def resolve_data_dir(
+    env_path: Path,
+    *,
+    project_root: Path,
+    default: str | None = None,
+) -> str:
+    """把 .env 里的 DATA_DIR 解析为绝对路径,写入 .env 并返回。
+
+    解析规则:
+    - 缺失 / 空字符串 → 走 `default` 参数(DEFAULT_DATA_DIR 即
+      `~/Library/Application Support/com.xhs-info-crawl.local`),展开 ~ 后返回
+    - `~/xxx` → expanduser 展开
+    - `./xxx` / `xxx`(无 `/` 开头)→ 以 `project_root` 为基准 resolve
+    - 已是绝对路径 → 原样返回
+
+    为什么必须有这层:backend 子进程 launcher 启时 cwd = .app/Contents/Resources/xhs-info-crawl/,
+    相对路径 ./data 会解析成 .app/data/,所有日志/celery/run/全丢。
+    dev 模式下 cwd = backend/,相对路径解析到 backend/data/,看似正常 — 但用户 .env 共用,
+    必须由 launcher 在写入 .env 时强制绝对路径。
+
+    关联 spec: docs/superpowers/specs/2026-08-23-data-dir-absolute-path-launcher-design.md
+    """
+    raw = _read_env_value(env_path, "DATA_DIR", "")
+    if not raw:
+        raw = default or DEFAULT_DATA_DIR
+
+    # 展开 ~/ → 绝对路径
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+    else:
+        # 相对路径(./data / data / foo/bar)→ 以 project_root 为基准
+        resolved = (project_root / candidate).resolve()
+
+    resolved_str = str(resolved)
+    update_env_value(env_path, "DATA_DIR", resolved_str)
+    return resolved_str
 
 
 def build_api_base_url(env_path: Path) -> str:

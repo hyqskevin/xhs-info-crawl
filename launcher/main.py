@@ -18,6 +18,7 @@ from pathlib import Path
 from launcher.env_bootstrap import (
     ensure_env_file,
     force_local_host,
+    resolve_data_dir,
     set_cache_env_vars,
     update_env_value,
 )
@@ -133,13 +134,15 @@ def run_gui_main_thread(url: str, project_root: Path, cleanup, status_port: int 
 
 
 def bootstrap_env(project_root: Path) -> tuple[int, int]:
-    """找端口 + 写 API_BASE_URL,返回 (API 端口, Web 端口)。
+    """找端口 + 写 API_BASE_URL + DATA_DIR 转绝对路径,返回 (API 端口, Web 端口)。
 
     Web 端口从 5173 开始扫描,被占用跳到 5174... 直到 5199。
     如果开发模式下 vite dev 已占 5173,Web 端口会被推到 5174。
 
     注意:.env 的创建/初始化由调用方负责(在 main() 里),
     这样可以拿到 ensure_env_file 的返回值(自动生成的密码)。
+
+    关联 spec: docs/superpowers/specs/2026-08-23-data-dir-absolute-path-launcher-design.md
     """
     env_path = project_root / ".env"
 
@@ -149,15 +152,22 @@ def bootstrap_env(project_root: Path) -> tuple[int, int]:
     # 2. 设置缓存环境变量
     set_cache_env_vars(project_root)
 
-    # 3. 找 API 可用端口
+    # 3. DATA_DIR 转绝对路径(v0.7.0+6 修复老问题)
+    # 之前 launcher 没这步,用户 .env 里 DATA_DIR=./data 时,backend 子进程从 cwd
+    # (即 .app/Contents/Resources/xhs-info-crawl/) 解析 → 所有日志/celery/run/tmp 写到 .app 内,
+    # 用户体感"数据丢失"。
+    resolved_data_dir = resolve_data_dir(env_path, project_root=project_root)
+    logger.info("DATA_DIR 解析: %s", resolved_data_dir)
+
+    # 4. 找 API 可用端口
     api_port = find_available_port(start=8001, end=8020)
     update_env_value(env_path, "API_PORT", str(api_port))
 
-    # 4. 找 Web 可用端口(开发模式 5173 通常已被 vite 占用)
+    # 5. 找 Web 可用端口(开发模式 5173 通常已被 vite 占用)
     web_port = find_available_port(start=5173, end=5199)
     update_env_value(env_path, "WEB_PORT", str(web_port))
 
-    # 5. 写 API_BASE_URL,前端通过 __APP_CONFIG__ 读取
+    # 6. 写 API_BASE_URL,前端通过 __APP_CONFIG__ 读取
     update_env_value(env_path, "API_BASE_URL", f"http://127.0.0.1:{api_port}")
 
     return api_port, web_port
