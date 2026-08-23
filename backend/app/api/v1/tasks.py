@@ -122,6 +122,21 @@ def restart(task_id:int,_:Admin,db:DB):
     task=db.get(CrawlTask,task_id)
     if not task: raise HTTPException(404,'任务不存在')
     if task.status not in ['FAILED','STOPPED','STOP_REQUESTED','PAUSED']: raise HTTPException(409,'仅失败、已停止或等待登录任务可以继续抓取')
+    # v0.7.0+2 spec §4: 先校验 SAME_SCHEDULE 精确忙(含 PAUSED),确保语义一致
+    _SAME_SCHEDULE_ACTIVE = ('PENDING','RUNNING','STOP_REQUESTED','SEARCH_DONE','DOWNLOADING','PROCESSING','DEDUPING','PAUSED')
+    task_params = task.params or {}
+    if task_params.get("type") == "scheduled" and task_params.get("schedule_id") is not None:
+        same_schedule_busy = db.scalar(
+            select(func.count()).select_from(CrawlTask).where(
+                CrawlTask.id != task_id,
+                CrawlTask.status.in_(_SAME_SCHEDULE_ACTIVE),
+                CrawlTask.params["type"].as_string() == "scheduled",
+                CrawlTask.params["schedule_id"].as_integer() == task_params["schedule_id"],
+            )
+        )
+        if same_schedule_busy:
+            raise HTTPException(409, 'SAME_SCHEDULE_IN_PROGRESS')
+    # 兜底:全局有 RUNNING(包含 manual) 就拒绝
     running=db.scalar(select(CrawlTask).where(CrawlTask.id!=task_id,CrawlTask.status.in_(['PENDING','RUNNING','STOP_REQUESTED','SEARCH_DONE','DOWNLOADING','PROCESSING','DEDUPING'])))
     if running: raise HTTPException(409,'TASK_IN_PROGRESS')
     city_code=task.params.get('city')
