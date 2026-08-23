@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     search_interval_max: int = 15
     search_limit: int = 50
     weekly_search_limit: int = 500
-    consecutive_note_failure_limit: int = 3
+    consecutive_note_failure_limit: int = 2  # 2026-08-22 task28 反馈改为 2：SECURITY_BLOCK 连续 2 次即熔断
     # 连续 N 篇 note.content 为空触发 PAUSED；默认 5（防小红书风控静默失败）
     crawl_empty_detail_threshold: int = 5
     # 每抓 N 条调一次 adapter.close_session() 重建 CDP 连接；0 表示禁用

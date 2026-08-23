@@ -26,6 +26,13 @@ _VERIFICATION_SIGNALS = (
     "扫码验证",
     "异常访问验证",
     "risk verification",
+    # 2026-08-22 task28 反馈：opencli SECURITY_BLOCK / 风控 / 访问频繁
+    # 必须被识别为 verification 信号，立即触发 VerificationRequired → 任务熔断
+    "security block",
+    "security_block",
+    "risk control",
+    "访问频繁",
+    "风控",
 )
 
 
