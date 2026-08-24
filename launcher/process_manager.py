@@ -108,11 +108,52 @@ class ProcessManager:
             # launcher 直接 SIGTERM worker main 会留下 grand-children 孤儿
             # solo 模式 worker main 直接执行任务,无 grand-children,可以被干净 kill
             "worker": [python, "-m", "celery", "-A", "app.tasks.crawl_task", "worker", "--pool=solo", "--concurrency=1", "--loglevel=info"],
-            "beat": [python, "-m", "celery", "-A", "app.tasks.crawl_task", "beat", "--loglevel=info"],
+            # beat 的 --schedule 必须显式传绝对路径(v0.7.0+8 修复),
+            # 否则 celery beat 默认写到 worker cwd(=.app/Contents/Resources/xhs-info-crawl/),
+            # .app 升级时 schedule 状态丢失,beat 会重新触发所有到期任务
+            # 关联 spec: docs/superpowers/specs/2026-08-24-celery-beat-schedule-absolute-path-launcher-design.md
+            "beat": [python, "-m", "celery", "-A", "app.tasks.crawl_task", "beat", "--loglevel=info", "--schedule", str(self._resolve_beat_schedule_path())],
             # web 服务:等价 vite preview 行为,python -m http.server 提供静态文件
             # bind 127.0.0.1 仅本机访问;directory 指向 frontend/dist
             "web": [python, "-m", "http.server", str(web_port), "--bind", "127.0.0.1", "--directory", str(frontend_dist)],
         }
+
+    def _resolve_beat_schedule_path(self) -> Path:
+        """从 .env 读 CELERY_FOLDER;缺失时退化到 DATA_DIR/celery;都缺时兜底 project_root/data/celery。
+
+        返回绝对路径,用于 celery beat --schedule 参数。避免 .app 升级丢 schedule 状态。
+        关联 spec: docs/superpowers/specs/2026-08-24-celery-beat-schedule-absolute-path-launcher-design.md
+        """
+        env_path = self.project_root / ".env"
+        raw_celery = ""
+        raw_data = ""
+        if env_path.exists():
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                key = k.strip()
+                if key == "CELERY_FOLDER":
+                    raw_celery = v.strip()
+                elif key == "DATA_DIR":
+                    raw_data = v.strip()
+
+        def _abs(p: Path, base: Path) -> Path:
+            return p.resolve() if p.is_absolute() else (base / p).resolve()
+
+        # CELERY_FOLDER 显式设置 → 尊重用户,绝对路径优先 / 相对路径以 project_root 为基准
+        if raw_celery:
+            celery_dir = _abs(Path(raw_celery).expanduser(), self.project_root)
+            return celery_dir / "celerybeat-schedule"
+
+        # CELERY_FOLDER 缺失 → 退化到 DATA_DIR/celery
+        if raw_data:
+            data_dir = _abs(Path(raw_data).expanduser(), self.project_root)
+            return (data_dir / "celery" / "celerybeat-schedule")
+
+        # 都缺(罕见)→ 兜底原行为
+        return (self.project_root / "data" / "celery" / "celerybeat-schedule").resolve()
 
     def _read_env_int(self, key: str, default: int) -> int:
         """从 .env 读 int 值,找不到或解析失败则用 default。"""
