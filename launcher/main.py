@@ -17,7 +17,10 @@ from pathlib import Path
 
 from launcher.env_bootstrap import (
     _read_env_value,
+    _resolve_data_dir_in_data_dir_env,
+    ensure_data_dir_env,
     ensure_env_file,
+    ensure_secret_key,
     force_local_host,
     resolve_data_dir,
     set_cache_env_vars,
@@ -159,6 +162,31 @@ def bootstrap_env(project_root: Path) -> tuple[int, int]:
     # 用户体感"数据丢失"。
     resolved_data_dir = resolve_data_dir(env_path, project_root=project_root)
     logger.info("DATA_DIR 解析: %s", resolved_data_dir)
+
+    # 3.3 确保 DATA_DIR/.env 存在(v0.7.0+9 新增)
+    # 用户第一次启动:从 .env.example 复制用户配置 key(SECRET_KEY / MINIMAX_* / OPENCLI_BIN 等)
+    # 用户升级:已存在则不动
+    data_dir_path = Path(resolved_data_dir)
+    data_dir_env_path = data_dir_path / ".env"
+    ensure_data_dir_env(data_dir_env_path, project_root / ".env.example")
+    logger.info("DATA_DIR/.env: %s", data_dir_env_path)
+
+    # 3.4 SECRET_KEY 显式写到 DATA_DIR/.env(v0.7.0+9 新增)
+    # 修前:.app/.env 里的 SECRET_KEY 被 DATA_DIR/.env(占位值)覆盖,Settings 拿占位
+    # 修后:launcher 启动时显式保证 DATA_DIR/.env 含有效随机密钥
+    secret_key = ensure_secret_key(data_dir_env_path)
+    logger.info("SECRET_KEY 已确保: 长度=%d", len(secret_key))
+
+    # 3.5 DATA_DIR 同步绝对路径到 DATA_DIR/.env(v0.7.0+9 新增)
+    # 防止 .app/.env 已写绝对路径,但 DATA_DIR/.env 仍是相对路径
+    # Settings 走 DataDir 源时又解析回相对路径(cwd=.app 内部)
+    # fallback_absolute 传 resolved_data_dir,因为 ensure_data_dir_env 把 DATA_DIR
+    # 算作系统 key 跳过了,DATA_DIR/.env 可能根本没有 DATA_DIR 字段
+    _resolve_data_dir_in_data_dir_env(
+        data_dir_env_path,
+        project_root=project_root,
+        fallback_absolute=resolved_data_dir,
+    )
 
     # 3.5 LOG_DIR bootstrap(v0.7.0+7 修复老问题)
     # 之前 process_manager 硬编码 logs_dir = project_root/data/logs,

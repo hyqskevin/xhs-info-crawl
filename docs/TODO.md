@@ -63,6 +63,81 @@
   - spec：[2026-08-22-security-block-fast-halt-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-22-security-block-fast-halt-design.md)
   - commit：待生成。
 
+- [ ] v0.7.0+9 launcher bootstrap_env 不复制用户配置 key 到 .app/.env,只写系统级 key(用户 2026-08-24 反馈"我只能改.xhs-info-crawl/.env,app 内部正常我不改,应该每次 app 启动或者更新时,我的配置不丢,数据不丢,前端页面正常获取我的数据和配置"——当前 .env.example 模板里的用户配置 key(LLM_*/API_KEY 等)被 bootstrap_env 复制到 .app/.env,v0.7.0+7 fix 让 .app/.env 后跑覆盖 DATA_DIR/.env,导致用户改 `~/.xhs-info-crawl/.env` 看不到效果)
+  - 目标:
+    - ①`launcher/env_bootstrap.py` 维护一份**系统级 key 白名单**(`LAUNCHER_SYSTEM_KEYS = {API_HOST, API_PORT, WEB_PORT, API_BASE_URL, LOG_DIR, DATA_DIR, CELERY_FOLDER, CELERY_BEAT_SCHEDULE_PATH, *_CACHE_HOME, ...}`),bootstrap_env 第一次从 .env.example 复制到 .app/.env 时**只复制**白名单内的 key,用户配置 key(LLM_*/API_KEY/SECRET_KEY/ADMIN_PASSWORD 等)不进 .app/.env
+    - ②bootstrap_env 后续启动走 `set_key`/`update_env_value` 风格只 upsert 系统级 key,绝不写用户配置 key 到 .app/.env
+    - ③**同时**让 Settings 加载优先级反过来:dotenv_settings(.app/.env) 排到 _DataDirEnvSource 之前 —— 用户 DATA_DIR/.env 后跑胜出,系统级 key(API_PORT/WEB_PORT)由 .app/.env 提供
+    - ④用户配置 key 缺省走 `field default`,用户改了 `~/.xhs-info-crawl/.env` 后 Settings 直接读出来,不被 .app/.env 覆盖
+    - ⑤v0.7.0+7 已实现的 .app/.env → DATA_DIR/.env 互补逻辑保留(系统级 key 缺哪个从对方补)
+  - 根因:
+    - v0.7.0+7 修复了"启动时加载 .app/.env DATA_DIR 是相对路径"的 bug,实现方式是 resolve_data_dir 写绝对路径
+    - 但 .app/.env 同时承载了用户配置 key(LLM_API_KEY / OPENAI_API_KEY / SECRET_KEY 等),升级 .app 时用户对 .app/.env 改动会丢(虽然这不该是用户改的地方)
+    - 更严重的:`dotenv_settings` 在 pydantic-settings 默认 `settings_customise_sources` 里排在 `_DataDirEnvSource` 之后,但通过 deep_update 语义,后跑的源覆盖前一个源,所以 .app/.env 会**覆盖** `~/.xhs-info-crawl/.env` 同名 key
+    - 用户改 `~/.xhs-info-crawl/.env` 看不到效果 = 配置"丢"(物理在,逻辑被覆盖)
+  - 结果:
+    - `launcher/env_bootstrap.py`:
+      - 新增常量 `LAUNCHER_SYSTEM_KEYS = frozenset({...})` 系统级 key 白名单
+      - 第一次从 .env.example 复制到 .app/.env:用白名单过滤,只复制系统级 key
+      - 后续 `bootstrap_env` 用 `set_key(env_path, key, value)` 单 key 写,key 不在白名单则**跳过**
+      - `resolve_data_dir` / `LOG_DIR` / API_PORT 写入仍然走白名单 key
+    - `backend/app/core/config.py`:
+      - `settings_customise_sources` 调整顺序:`(init_settings, env_settings, dotenv_settings, _DataDirEnvSource, file_secret_settings)` —— DATA_DIR/.env 排最后但通过 `init_settings` 显式注入的 `data_dir_setting` 触发它读对路径
+      - 实际效果:用户配置 key(LLM_*/API_KEY/SECRET_KEY)DATADIR/.env 后跑胜出,系统级 key(API_PORT)dotenv 前置提供
+      - 验证:`tests/test_settings_load_data_dir_env.py` 已覆盖的 7 case 全部要重跑验证新顺序不退化
+    - `launcher/tests/test_bootstrap_env_user_keys.py`(新)5 case:
+      - `test_first_copy_only_includes_system_keys`(从 .env.example 含 LLM_API_KEY,启动后 .app/.env 不含 LLM_API_KEY)
+      - `test_subsequent_writes_only_touch_system_keys`(bootstrap_env 跑两次,用户 key 始终不在 .app/.env)
+      - `test_data_dir_written_as_absolute_path`(回归 v0.7.0+6)
+      - `test_log_dir_written_under_data_dir`(回归 v0.7.0+7)
+      - `test_user_config_key_in_data_dir_env_wins`(e2e: bootstrap_env → Settings 加载 → LLM_API_KEY 来自 DATA_DIR/.env)
+    - `backend/tests/test_settings_load_data_dir_env.py` 调整:验证 dotenv 不再覆盖用户配置 key,但仍能提供系统级 key
+  - 验收:
+    - `launcher/tests/test_bootstrap_env_user_keys.py` 5/5 通过
+    - `backend/tests/test_settings_load_data_dir_env.py` 7/7 仍通过(顺序调整后无回归)
+    - 现场验证:用户在 `~/.xhs-info-crawl/.env` 改 `LLM_API_KEY=xxx` → 重启 .app → `Settings.llm_api_key` 返回新值(不需改 .app/.env)
+  - 部署:改动 launcher + Settings,uvicorn reload + 重打 .app 即可;worker 不需重启
+  - spec:`docs/superpowers/specs/2026-08-24-bootstrap-env-system-keys-only-design.md`(待写)
+  - commit:待生成
+
+- [ ] 数据目录迁移：~/.xhs-info-crawl/ → ~/Library/Application Support/com.xhs-info-crawl.local/（用户 2026-08-24 反馈"Application Support 路径是项目默认推荐，我不需要另外配置路径"——v0.5.x/v0.6.x 时代用户为规避 .app 升级丢数据，把 DATA_DIR 改为自定义 `~/.xhs-info-crawl/`；v0.7.0+6/7 已修相对路径飘数据 bug，launcher 推荐 Application Support 默认值，Time Machine 自动备份、macOS 用户隔离都比 `~/.xhs-info-crawl/` 优；用户从防御性自定义 → 迁回默认）
+  - 目标：
+    - ①数据从 `~/.xhs-info-crawl/`（9MB DB + 262MB chrome-pool + 1.3GB archive + 133MB paddlex + 12K exports + 0B images/logs/celery/tmp + 4K run,共 ~1.7GB）完整 rsync 到 `~/Library/Application Support/com.xhs-info-crawl.local/`
+    - ②脚本**只迁数据**，**不动 launcher 代码、不改 .app/.env 的 DATA_DIR/LOG_DIR**——这些由 launcher `.env` 拆分 spec（`2026-08-24-bootstrap-env-system-keys-only-design`）独立负责
+    - ③脚本内 6 道不变量校验全部通过才输出"迁移成功"：SRC/DEST 总大小（排除 .env）相等 + DB 文件大小相等 + notes/xhs_accounts/scheduled_crawls/alembic_version 行数与值都相等
+    - ④`.app` 服务进程（uvicorn/celery/celery beat）任一在跑 → 脚本拒绝执行，避免 SQLite WAL/SHM 复制不一致
+    - ⑤脚本内自动备份 SRC 的 `.env` 到 `~/.xhs-info-crawl/.env.bak.<时间戳>`（含 LLM API Key 等敏感信息，迁移后保留供临时回滚参考），但**不复制 .env 到 DEST**——避免把失效的 `DATA_DIR=./data` 带过去
+    - ⑥回滚路径独立验证：关 .app → `rm -rf DEST` → UI 改回 `~/.xhs-info-crawl` → 数据完整
+    - ⑦清理 SRC 的 `rm -rf ~/.xhs-info-crawl/` 必须**等端到端验收 + 回滚测试都过了**，用户手动确认后才执行
+  - 根因（用户原话）：
+    - v0.5.x/v0.6.x 时代 launcher 把数据写在 `.app/Contents/Resources/xhs-info-crawl/data/` 内 → 升级 .app 会丢数据
+    - 用户当时为防御改了 DATA_DIR 到 `~/.xhs-info-crawl/`（绝对路径）+ LOG_DIR 同路径
+    - v0.7.0+6 (spec `2026-08-23-data-dir-absolute-path-launcher-design`) 已修"相对路径飘数据"bug，launcher 默认 `~/Library/Application Support/com.xhs-info-crawl.local` 已安全
+    - v0.7.0+7 (spec `2026-08-23-settings-load-data-dir-env-design`) 已统一 LOG_DIR 推导
+    - 用户从未迁回默认 → 错失 Time Machine 自动备份 + macOS 用户隔离
+    - `.app` UI 显示 `.app/data` 是 `LLMConfigPanel.vue::joinDataDir` fallback `~/xhs-info-crawl/${subdir}` 在 config.data_dir 为空时的副作用，不在本 spec 修复范围
+  - 结果：
+    - 新增 `scripts/lib/data_dir_migration.py`（纯 Python helper，pytest 可测）：
+      - `MigrationValidationError` / `AppStillRunningError` 两个 Exception 类
+      - `is_app_running() -> bool`：检测 uvicorn/celery 进程存在
+      - `copy_subdirs_except_env(src, dest)`：rsync 包装
+      - `validate_migration(src, dest) -> ValidationResult`：6 道不变量校验
+      - `run_migration(src, dest, *, dry_run=False)`：串联 + 失败回滚 DEST
+    - 新增 `scripts/migrate-data-dir-to-application-support.sh`（shell wrapper）：调用 helper + 输出下一步指令
+    - 新增 `backend/tests/test_data_dir_migration_script.py` 4 用例（先红后绿）：
+      - `test_migration_copies_all_subdirs_except_env`：fixture SRC 含 `.env`，断言 DEST 含 `chrome-pool`/`archive`/`paddlex`/`exports` 等但**没有** `.env`
+      - `test_migration_validates_db_row_counts`：fixture SRC DB 5 notes / 3 accounts，断言行数不等时抛 `MigrationValidationError`
+      - `test_migration_validates_size_consistency`：mock rsync 失败（DEST 缺子目录），断言抛 `MigrationValidationError` 且 DEST 被回滚
+      - `test_migration_aborts_when_app_running`：fixture 启 dummy uvicorn 进程，断言抛 `AppStillRunningError` 不做 rsync
+  - 验收：
+    - `backend/tests/test_data_dir_migration_script.py` 4/4 通过（先红后绿）
+    - 全量后端 pytest 不退步（除 13 pre-existing failed 与本 spec 无关）
+    - `test_project_internal_writes.py` 静态扫描绿（确认 helper 无 `/tmp` / `Path.home()`）
+    - 端到端：关 .app → 跑脚本 → 所有不变量输出"✓" → 启 .app → UI 数据根目录 = `~/Library/Application Support/com.xhs-info-crawl.local` → 2 账号 / 3 schedule / 840 notes 齐全 → 触发 schedule#2 抓取 → task_logs 增长 + archive 写入新路径 → chrome-pool 复用（cookies 持续） → 回滚测试通过 → 用户确认后 `rm -rf ~/.xhs-info-crawl/`
+  - 部署：本 spec 是**纯数据迁移脚本**——无 migration、无 launcher 代码改动、无 .env 改动、无 worker 重启（用户自己启 .app 时 launcher 自然读新路径）
+  - spec：[2026-08-24-migrate-data-dir-to-application-support-default-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-24-migrate-data-dir-to-application-support-default-design.md)
+  - commit：待生成
+
 - [ ] v0.7.0+1 打包版启动自动跑 alembic upgrade head（用户 2026-08-21 反馈"v0.7.0 升级后定时任务/关键词组/博主组/LLM 配置 4 个列表都没了"——首页 500：`no such column: blogger_groups.min_likes` / `keyword_groups.excluded_words_json` / `scheduled_crawls.consecutive_failures`，现场 DB `alembic_version='0025'` 但代码已 head=0027；alembic 从未被打包版启动过）
   - 目标：
     - ①`app/core/database.py::init_database()` 在 `Base.metadata.create_all` 之后插入 `alembic.command.upgrade(cfg, "head")` —— 启动时把 DB schema 自动推到 alembic head，新部署无 0026/0027 新列会被补齐
