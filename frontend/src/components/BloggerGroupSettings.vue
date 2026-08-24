@@ -19,7 +19,7 @@ const {
 const bloggers = ref<any[]>([])
 const dialog = ref(false)
 const editingId = ref<number | null>(null)
-const form = reactive<any>({ name: '', description: '', blogger_ids: [], enabled: true })
+const form = reactive<any>({ name: '', description: '', blogger_ids: [], enabled: true, min_likes: 0, min_favorites: 0 })
 
 async function load() {
   const [groupsResp, bloggersResp] = await Promise.all([api.bloggerGroups(), api.settings('bloggers')])
@@ -29,7 +29,7 @@ async function load() {
 
 function resetForm() {
   Object.keys(form).forEach((key) => delete form[key])
-  Object.assign(form, { name: '', description: '', blogger_ids: [], enabled: true })
+  Object.assign(form, { name: '', description: '', blogger_ids: [], enabled: true, min_likes: 0, min_favorites: 0 })
 }
 
 function openCreate() {
@@ -46,6 +46,8 @@ function openEdit(row: any) {
     description: row.description || '',
     blogger_ids: [...(row.blogger_ids || [])],
     enabled: row.enabled,
+    min_likes: row.min_likes ?? 0,
+    min_favorites: row.min_favorites ?? 0,
   })
   dialog.value = true
 }
