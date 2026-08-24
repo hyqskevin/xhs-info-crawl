@@ -36,7 +36,11 @@ class ProcessManager:
         self.project_root = project_root
         self.venv_python = venv_python
         self._processes: dict[str, subprocess.Popen] = {}
-        self._logs_dir = project_root / "data" / "logs"
+        # logs_dir 走 DATA_DIR/logs(用户配置主源),不是 .app 内的 project_root/data/logs。
+        # bootstrap_env 会在 ProcessManager 之前把 LOG_DIR 写到 .env(默认 DATA_DIR/logs)。
+        # 兜底逻辑:没 .env / 没 DATA_DIR 时退回 project_root/data/logs(原行为)。
+        # 关联 spec: docs/superpowers/specs/2026-08-23-settings-load-data-dir-env-design.md §修复 2
+        self._logs_dir = self._resolve_logs_dir(project_root)
         self._logs_dir.mkdir(parents=True, exist_ok=True)
         # 默认命令模板(可被 _commands 覆盖,用于测试)
         self._commands = self._build_default_commands()
@@ -46,6 +50,47 @@ class ProcessManager:
         # 关联 spec: docs/superpowers/specs/2026-08-23-migration-0028-sqlite-current-timestamp-binding-design.md
         self._last_launch_at: dict[str, str] = {}
         self._last_error: dict[str, str] = {}
+
+    def _resolve_logs_dir(self, project_root: Path) -> Path:
+        """从 .env 读 LOG_DIR;缺失/空/相对路径时退回 DATA_DIR/logs;DATA_DIR 也缺时兜底 project_root/data/logs。
+
+        关联 spec: docs/superpowers/specs/2026-08-23-settings-load-data-dir-env-design.md §修复 2
+        """
+        env_path = project_root / ".env"
+        # bootstrap_env 已经在 ProcessManager 之前写好了 LOG_DIR 和 DATA_DIR(都是绝对路径)
+        # 这里手动解析,跟 env_bootstrap.resolve_data_dir 同款逻辑
+        raw_log = ""
+        raw_data = ""
+        if env_path.exists():
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                key = k.strip()
+                if key == "LOG_DIR":
+                    raw_log = v.strip()
+                elif key == "DATA_DIR":
+                    raw_data = v.strip()
+
+        # LOG_DIR 显式设置 → 尊重用户,绝对路径优先 / 相对路径以 project_root 为基准
+        if raw_log:
+            candidate = Path(raw_log).expanduser()
+            if candidate.is_absolute():
+                return candidate.resolve()
+            return (project_root / candidate).resolve()
+
+        # LOG_DIR 缺失 → 退化到 DATA_DIR/logs
+        if raw_data:
+            data_dir_candidate = Path(raw_data).expanduser()
+            if data_dir_candidate.is_absolute():
+                data_dir = data_dir_candidate.resolve()
+            else:
+                data_dir = (project_root / data_dir_candidate).resolve()
+            return data_dir / "logs"
+
+        # 都缺(罕见,bootstrap_env 应该已经处理过)→ 兜底原行为
+        return (project_root / "data" / "logs").resolve()
 
     def _build_default_commands(self) -> dict[str, list[str]]:
         """构建默认的服务启动命令。"""

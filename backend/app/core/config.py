@@ -1,9 +1,85 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field, computed_field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+
+
+class _DataDirEnvSource(PydanticBaseSettingsSource):
+    """读 <DATA_DIR>/.env 作为补充源,优先级介于 env_settings 和 dotenv_settings 之间。
+
+    解决 launcher .app 场景:backend 子进程 cwd = .app/Contents/Resources/xhs-info-crawl/,
+    cwd/.env 是打包模板,用户实际配置在 DATA_DIR/.env,必须让 Settings 也能读它。
+
+    优先级(从高到低):init_settings > env_settings(进程 env) > _DataDirEnvSource > dotenv_settings(cwd/.env)
+
+    关联 spec: docs/superpowers/specs/2026-08-23-settings-load-data-dir-env-design.md
+    """
+
+    def __init__(self, settings_cls: type[BaseSettings]) -> None:
+        super().__init__(settings_cls)
+        # 读 cwd 下 .env 拿到 DATA_DIR(还没被 Settings 解析过,只能手解)
+        cwd_env_path = Path.cwd() / ".env"
+        data_dir: Path | None = None
+        if cwd_env_path.exists():
+            for line in cwd_env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                if k.strip() == "DATA_DIR":
+                    raw = v.strip()
+                    if raw:
+                        candidate = Path(raw).expanduser()
+                        if candidate.is_absolute():
+                            data_dir = candidate.resolve()
+                        else:
+                            data_dir = (Path.cwd() / candidate).resolve()
+                    break
+        self._path = data_dir / ".env" if data_dir else None
+
+    def get_field_value(
+        self, field: Any, field_name: str
+    ) -> tuple[Any, str, bool]:
+        if self._path is None or not self._path.exists():
+            return None, field_name, False
+        for line in self._path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            if k.strip().upper() == field_name.upper():
+                return v.strip(), field_name, False
+        return None, field_name, False
+
+    def __call__(self) -> dict[str, Any]:
+        """返回 DATA_DIR/.env 的全部 {key: value}。
+
+        同时提供原 KEY 大写 + 小写字段名,因为 Settings 字段名是 snake_case 小写
+        (无 validation_alias),需要用小写键才能匹配上。dotenv_settings 内部会
+        对环境变量名做 case-insensitive 匹配,但 custom source 不会 — 我们手动
+        两份都写,保证任意字段定义都能命中。
+        """
+        if self._path is None or not self._path.exists():
+            return {}
+        result: dict[str, Any] = {}
+        for line in self._path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            raw_key = k.strip()
+            value = v.strip()
+            result[raw_key] = value
+            result[raw_key.lower()] = value
+        return result
+
+    def prepare_field_value(
+        self, field: Any, value: Any, value_is_complex: bool
+    ) -> Any:
+        return value
 
 
 class Settings(BaseSettings):
@@ -12,6 +88,27 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # pydantic_settings._settings_build_values 用 state = deep_update(source_state, state)
+        # 即累积 state 覆盖新 source_state — **先** 处理的 source 永远赢(不被后处理覆盖)。
+        # 想要:init(代码 init) > env(进程环境) > DATA_DIR/.env > cwd/.env > file_secret
+        # 即按优先级从高到低排列 sources。
+        return (
+            init_settings,
+            env_settings,
+            _DataDirEnvSource(settings_cls),
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     app_name: str = "小红书本地活动信息抓取系统"
     app_env: str = "development"

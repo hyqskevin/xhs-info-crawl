@@ -16,6 +16,7 @@ import uvicorn
 from pathlib import Path
 
 from launcher.env_bootstrap import (
+    _read_env_value,
     ensure_env_file,
     force_local_host,
     resolve_data_dir,
@@ -158,6 +159,27 @@ def bootstrap_env(project_root: Path) -> tuple[int, int]:
     # 用户体感"数据丢失"。
     resolved_data_dir = resolve_data_dir(env_path, project_root=project_root)
     logger.info("DATA_DIR 解析: %s", resolved_data_dir)
+
+    # 3.5 LOG_DIR bootstrap(v0.7.0+7 修复老问题)
+    # 之前 process_manager 硬编码 logs_dir = project_root/data/logs,
+    # .app 内 launcher 启动后 api/worker/beat/web 日志写到 .app/data/logs/,用户看不到。
+    # 现在统一走 DATA_DIR/logs(用户配置主源);已显式设 LOG_DIR 的用户(走 status_server UI)
+    # 不会被覆盖,只在缺失/空时填默认。
+    # 关联 spec: docs/superpowers/specs/2026-08-23-settings-load-data-dir-env-design.md §修复 2
+    existing_log_dir = _read_env_value(env_path, "LOG_DIR", "")
+    if not existing_log_dir:
+        default_log_dir = str(Path(resolved_data_dir) / "logs")
+        update_env_value(env_path, "LOG_DIR", default_log_dir)
+        logger.info("LOG_DIR 默认写入: %s", default_log_dir)
+    else:
+        # 已设的也转绝对路径,避免重蹈 DATA_DIR 覆辙
+        log_candidate = Path(existing_log_dir).expanduser()
+        if log_candidate.is_absolute():
+            absolute_log_dir = log_candidate.resolve()
+        else:
+            absolute_log_dir = (project_root / log_candidate).resolve()
+        update_env_value(env_path, "LOG_DIR", str(absolute_log_dir))
+        logger.info("LOG_DIR 解析: %s", absolute_log_dir)
 
     # 4. 找 API 可用端口
     api_port = find_available_port(start=8001, end=8020)
