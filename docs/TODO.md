@@ -1,0 +1,1053 @@
+# TODO
+
+本文件是项目待办事项的唯一维护入口。新增需求、后续优化和技术债统一记录在这里；风险及应对措施见 [`risks-todos.md`](risks-todos.md)。
+
+## 使用约定
+
+- 使用 `- [ ]` 表示未完成，使用 `- [x]` 表示已完成。
+- 新增事项应写明目标和验收条件，必要时补充关联文档或代码位置。
+- 完成后移入"已完成"章节，不直接删除，便于追踪。
+- 阶段二事项统一放在"阶段二：全量技术栈"章节。
+- 用户已持续授权按本文件顺序自动推进：每项仍需 spec、TDD、验证和独立提交，但无需逐项等待 spec 确认；新增权限、敏感登录、不可逆操作或实质歧义除外。
+
+## 当前待办
+
+> 以下为 2026-07-25 全项目核查新增（证据归档：`docs/superpowers/qa/2026-07-25-project-audit.md`），按列表顺序依次讨论修复。
+
+- [x] 周报 xlsx 下载 500：嵌入本地 .webp 封面图触发 `KeyError: '.webp'`（用户 2026-08-22 反馈"周报没法下载"）
+  - 目标：
+    - ①`POST /api/v1/reports/{id}/download?format=xlsx` 在打包版精简 Python 3.11 runtime 下不再因本地 .webp 封面图 500
+    - ②`generate_note_xlsx_with_cover` 把所有封面图统一**走 PIL 归一化为 PNG bytes**再喂 openpyxl，保证 xlsx zip 内 `xl/media/image*.png` 扩展名固定（不再依赖 mimetypes.types_map[True][ext]）
+    - ③PIL 不可用 / 图片解码失败 / 文件失踪 → 抛 `_CoverImageUnusable`，调用方降级为单元格写"—"+ WARNING 日志，**绝不**返回原 .webp bytes 给 openpyxl
+  - 根因（2026-08-22 现场诊断）：
+    - 用户 curl `GET /api/v1/reports/8/download?format=xlsx` → 500 Internal Server Error
+    - `data/logs/api.log` 完整堆栈：`.../openpyxl/packaging/manifest.py:177 mime = mimetypes.types_map[True][ext] KeyError: '.webp'`
+    - openpyxl `manifest._register_mimetypes` 在打包版精简 Python runtime 的 `mimetypes.types_map[True]` 不含 `.webp`（小红书图片大量是 webp）
+    - 旧 `_maybe_resize_cover_image` 在 PIL `ImportError` / PIL `Image.open` 抛错时 `except: return raw` 把原 .webp bytes 直接给 `XlsxImage(BytesIO(raw))` → openpyxl save 时查 mime 表 → KeyError → 抛到 caller → HTTP 500
+    - dev 端 Python 3.13 的 `mimetypes.types_map` 改成纯 `{'.ext':'mime'}` 字典，openpyxl 的 `types_map[True][ext]` 在 dev 默认抛 `KeyError: True` 但 openpyxl 走的是 lazy init 路径不命中；fix 必须从代码层面消除对 mimetypes.types_map 的依赖
+  - 结果：
+    - 后端 `backend/app/services/report.py` 新增 `_CoverImageUnusable` Exception；`_maybe_resize_cover_image` 重写：缺 PIL → 抛 `_CoverImageUnusable`（不再 return raw）；PIL 解码 / 编码失败 → 抛 `_CoverImageUnusable`（不再 return raw）；图片 >2MB 缩放后统一编码为 PNG（不再 JPEG）
+    - 后端 `backend/app/services/report.py::generate_note_xlsx_with_cover` 增加 try/except `_CoverImageUnusable`，降级为单元格写"—"+ WARNING 日志
+    - 测试 `backend/tests/test_report_xlsx_webp.py`（新）4 用例：TDD 先红后绿
+      - `test_xlsx_cover_normalizes_webp_to_png_inside_xlsx`：本地 webp + 模拟打包版 mimetypes（含 png/jpeg/xml/rels，不含 webp）→ 修复前 KeyError '.webp'，修复后 xlsx 内 zip 含 image1.png 字节头 89504e47…
+      - `test_xlsx_cover_dash_when_pil_missing_for_webp`：`monkeypatch _maybe_resize_cover_image → 抛 _CoverImageUnusable` → 修复前异常冒到 caller，修复后 xlsx 正常生成 + xl/media/ 为空 + WARNING 日志
+      - `test_xlsx_cover_dash_when_decode_fails_for_webp`：同上但桩抛"simulated decode failure"
+      - `test_xlsx_cover_png_still_embedded_as_png`：基线回归，PNG 仍正常嵌入
+    - 端到端 live 验证：`generate xlsx` 端点用 `TestClient` + admin token 跑完整流程 → `download xlsx 200, type=application/vnd.openxmlformats-..., len=6379, media=[xl/media/image1.png], head=89504e470d0a1a0a`（PNG magic bytes）✅
+  - 验收：
+    - `backend/tests/test_report_xlsx_webp.py` 4/4 通过（先红：未修复的 `git stash` 验证 webp KeyError + 异常冒 500 路径重现）
+    - `backend/tests/test_report_zip_and_xlsx.py` 既有用例 5 仍全绿（行为兼容）
+    - 后端 `pytest -q`（排除 pre-existing scripts/ 与 keyword_group endpoint 改名）：992 passed, 1 skipped, 13 pre-existing failed（与本 spec 无关）
+    - 端到端 TestClient：完整 `/generate` → `/download?format=xlsx` → xlsx 内含 `.png` 嵌入图
+  - 部署：
+    - **API 层（uvicorn）必须重启才能加载新 service 代码**；worker / beat 不需重启（与 xlsx 下载无关）；前端 Vite HMR 无依赖改动
+    - 打包版 .app 内 `app/backend/app/services/report.py` 同源修改；下一次 `package-macos.sh` 自动包含。本 spec 注明：环境权限限制，本次未直接改 .app 内代码；用户走 `package-macos.sh` 重打或手动复制覆盖 .app 内对应路径后再重启 uvicorn
+  - spec：[2026-08-22-weekly-report-xlsx-webp-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-22-weekly-report-xlsx-webp-design.md)
+  - commit：待生成。
+
+- [x] SECURITY_BLOCK 风控快速熔断（用户 2026-08-22 反馈任务28：连续触发 xhs security 多次也没自动停，期望连续 2 次就停）
+  - 目标：
+    - ①opencli 输出的 `SECURITY_BLOCK` / `risk control` / `访问频繁`（error_code=300013）/ `风控` 等风控信号必须被 `is_verification_required` 识别为 verification → `OpenCLIAdapter.run` 抛 `VerificationRequired`（而非 OpenCLIError），立即走 PAUSED 熔断
+    - ②`consecutive_note_failure_limit` 默认值 3 → 2：即便信号未命中走 OpenCLIError 进入连续失败计数，连续 2 次也立即 `CrawlHalted` → PAUSED
+  - 根因（2026-08-22 现场诊断）：
+    - task28 13:42（北京时间；05:42 UTC 曾被我误读为清晨）触发 SECURITY_BLOCK×5 未熔断；5 次之间夹有成功/跳过导致 `consecutive_failures` 重置，且旧 `_VERIFICATION_SIGNALS` 不包含 SECURITY_BLOCK / 访问频繁，opencli 输出走 `OpenCLIError` 而非 verification 分支
+  - 结果：
+    - 后端 `backend/app/services/crawler.py` `_VERIFICATION_SIGNALS` 追加 `security block` / `security_block` / `risk control` / `访问频繁` / `风控`
+    - 后端 `backend/app/core/config.py` `consecutive_note_failure_limit` 默认 3→2
+    - 测试 `backend/tests/test_pipeline_services.py` 信号分类 parametrize 已覆盖 SECURITY_BLOCK / 访问频繁 / risk control
+    - 测试 `backend/tests/test_opencli_and_dedup_integration.py` 新增 2 用例：`run` 遇到 SECURITY_BLOCK / 访问频繁 输出 → `VerificationRequired`（先红后绿）
+    - 测试 `backend/tests/test_consecutive_failure_halt.py` 适配默认阈值 2 + 新增 2 用例：连续 2 次 SECURITY_BLOCK → PAUSED / 非连续不熔断
+    - 测试 `backend/tests/test_blogger_circuit_breaker.py::test_blogger_success_resets_failure_counter` 适配默认阈值 2
+  - 验收：`pytest tests/test_consecutive_failure_halt.py tests/test_pipeline_services.py tests/test_opencli_and_dedup_integration.py tests/test_blogger_circuit_breaker.py tests/test_crawl_task_resilience.py -q` 全绿；后端全量 1012 passed、18 failed 均为既有无关（scripts 缺失 / IAM rebind / keyword_group endpoint / scaffold 契约）
+  - 部署：**worker 必须重启**（`crawler.py` / `config.py` 是服务代码，uvicorn reload 不生效）
+  - spec：[2026-08-22-security-block-fast-halt-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-22-security-block-fast-halt-design.md)
+  - commit：待生成。
+
+- [ ] v0.7.0+1 打包版启动自动跑 alembic upgrade head（用户 2026-08-21 反馈"v0.7.0 升级后定时任务/关键词组/博主组/LLM 配置 4 个列表都没了"——首页 500：`no such column: blogger_groups.min_likes` / `keyword_groups.excluded_words_json` / `scheduled_crawls.consecutive_failures`，现场 DB `alembic_version='0025'` 但代码已 head=0027；alembic 从未被打包版启动过）
+  - 目标：
+    - ①`app/core/database.py::init_database()` 在 `Base.metadata.create_all` 之后插入 `alembic.command.upgrade(cfg, "head")` —— 启动时把 DB schema 自动推到 alembic head，新部署无 0026/0027 新列会被补齐
+    - ②`alembic.command.stamp(cfg, "head")` 兜底重置 `alembic_version` 行——项目历史 0001-0024 migration 用 `Base.metadata.create_all` 不更新 `alembic_version`，stamp 防止下次启动重跑相同 migration
+    - ③失败 fail-fast：`upgrade` 抛异常 → 直接透传 → lifespan 让 uvicorn 退出非 0 → launcher 检测启动失败 → UI 弹错；绝不吞异常把缺列 .app 发出去
+    - ④迁移目录走 `_MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"` —— 打包版 .app 内 `backend/Resources/backend/migrations/` 与 dev 模式同一份路径，禁止硬编码 `/tmp` 或 `Path.home()`（AGENTS.md 硬约束）
+    - ⑤5 个 TDD 测试覆盖：old_schema → upgrade head / already_head → no-op / invalid_migrations_dir → raise / migration_failure → 透传 / 不写 `/tmp`
+  - 根因：
+    - v0.6.x 设计"打包版从不执行迁移"（避免 alembic 解析整棵 importtree 拖慢启动），但代码继续迭代加 0026/0027 列 → 部署永远落后 alembic head
+    - `Base.metadata.create_all` 对已存在表**不会补列**，只补新表 → 老用户的旧 DB 永远停在 0025
+    - launcher 没有任何"启动失败"兜底，uvicorn 跑起来了 launcher 就认为成功
+  - 结果：
+    - 后端 `backend/app/core/database.py`：新增常量 `_MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"`；新增 `upgrade_migrations_to_head(engine, target_settings)` 函数（同时调 upgrade + stamp）；`init_database()` 在 `Base.metadata.create_all` 之后 + `seed_default_admin` 之前插入调用
+    - 测试 `backend/tests/test_database_init.py`（新）5 用例：`test_init_database_calls_upgrade_head_when_db_has_old_schema`（bootstrap DB 模拟"v0.5.x 升级现场"，跑 init 后新列补齐 + alembic_version=0027）+ `test_init_database_no_op_when_already_at_head`（已 head 调两次 init 不报错 version 仍 0027）+ `test_upgrade_migrations_to_head_raises_on_invalid_migration_dir`（monkeypatch `_MIGRATIONS_DIR` → pytest.raises）+ `test_init_database_raises_on_migration_failure_does_not_swallow`（mock `alembic_command.upgrade` 抛 RuntimeError → 异常透传）+ `test_init_database_does_not_use_tmpdir`（grep 确认无 `/tmp` / `Path.home()` / `tempfile.gettempdir()`）
+    - 现场救场：手工给 `~/.xhs-info-crawl/app.db` 补 0026/0027 缺列 + alembic_version 设为 0027；sqlalchemy 用 `ALTER TABLE ... DROP COLUMN` 模拟老 ORM 模型现场
+    - 文档 `docs/packaging-design.md` §2.12 新增问题 ㉚（v0.7.0+1）：打包版启动从不跑 alembic 迁移，新部署 / 升 v0.7.0 后业务表缺列导致 500；§7 历史变更加 v0.7.0+1 行
+  - 验收：
+    - `backend/tests/test_database_init.py` 5/5 通过
+    - 全量后端 pytest：`974 passed`（含 5 新）；13 pre-existing failed 与本 spec 无关（scripts/ 目录被 .gitignore + .env.example 格式 + keyword_group endpoint 改名）
+    - `test_project_internal_writes` 静态扫描绿（确认 `database.py` 无 `/tmp` / `Path.home()`）
+    - 现场 `sqlite3 ~/.xhs-info-crawl/app.db "PRAGMA table_info(blogger_groups)"` 含 `min_likes` `min_favorites`；`PRAGMA table_info(scheduled_crawls)` 含 `consecutive_failures`；`SELECT version_num FROM alembic_version` = `0027`
+  - 部署：用户**重启 4 个 .app**（8001/8002/8003/8004 + uvicorn）后 init_database 在 lifespan 自动跑 upgrade head —— 升 v0.7.0 → v0.7.0+1 后缺列用户不需手工跑 alembic；浏览器退出 admin 后重新登录拿新 token（含 11 条 + `*`），4 个列表全回。
+  - spec：[2026-08-21-package-startup-auto-migrate-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-21-package-startup-auto-migrate-design.md)
+  - commit：待生成。
+
+- [x] v0.7.0+2 同一 schedule 任意时刻只挂 1 个活跃 task，熔断重启用原 PAUSED 任务而非新建（用户 2026-08-22 反馈"为什么频繁串讲活动"+"正常应该只会有一个定时任务，不管是否熔断重试"+"因为报错暂停的定时任务，间隔重新启动时，依然启动原任务而不是新建任务"+"如果多个定时任务出错，间隔重启时是否能找到对应的是哪个中止的任务"——现场 #52+#53 同分钟双发宁波活动，retry_failed_schedules 总建新 task 无法审计，多次重启可能张冠李戴）
+  - 目标：
+    - ①任意 schedule 任意时刻最多挂 1 个活跃 task：通过 SQLite **partial unique index** `ux_crawl_tasks_active_per_schedule ON crawl_tasks (json_extract(params,'$.schedule_id')) WHERE type='scheduled' AND status IN ('PENDING','RUNNING','STOP_REQUESTED','PAUSED')` 数据库层硬约束
+    - ②熔断冷却到期后，`retry_failed_schedules` 优先 `_find_latest_paused_for_schedule(db, schedule_id)` 找该 schedule 最近一条 PAUSED task，状态改 PENDING + 新 run_token + 清空运行态字段，等价于 `POST /tasks/{id}/restart` 的 PAUSED 分支；不新建 crawl_task 记录
+    - ③多 schedule 各自独立 restart 各自的 PAUSED：`_restart_existing_paused_task` 不设 `busy = True` 全局标志，每个 schedule 按 `schedule_id` 精确查询，绝不张冠李戴
+    - ④`scheduled_dispatch` 加 schedule 级 busy check + IntegrityError 兜底：发现该 schedule 已有活跃 task（partial unique index 也会兜底报错）就 skip 本次 dispatch
+    - ⑤`POST /tasks/{id}/restart` 加 same_schedule busy check 提前于全局 RUNNING check：同 schedule 还有 RUNNING/PAUSED → 409 `SAME_SCHEDULE_IN_PROGRESS`
+  - 根因：
+    - `_BUSY_STATUSES = ("PENDING", "RUNNING", "STOP_REQUESTED")` 是全局 busy，单任务约束；但 #52+#53 同分钟双发宁波 = scheduled_dispatch 在两个 beat tick 间隔内都看到 `last_fired_slot=None` 都新建 PENDING，partial unique index 落库后第二条直接被拒绝——这才是数据库层的硬约束
+    - `retry_failed_schedules` 原实现每次都 `add(CrawlTask(... status='PENDING' ...))`，PAUSED task 一直挂在表里当"僵尸"，运维无法审计"重启的到底是哪条"
+    - 手动 `POST /tasks/{id}/restart` 复用同 task.id，但 celery `retry_failed_schedules` 走 worker 不走 API，所以两路径无关联
+  - 结果：
+    - `backend/migrations/versions/0028_crawl_tasks_unique_active_per_schedule.py` 新建：migration 前清掉冲突旧活跃 task（按 schedule_id 分组保留最新、旧的强制 FAILED + error_message 注明），再 `CREATE UNIQUE INDEX IF NOT EXISTS`
+    - `backend/app/tasks/crawl_task.py` 新增 3 helper：
+      - `_has_active_task_for_schedule(db, schedule_id)` → bool，按 schedule_id 查 `_BUSY_STATUSES`
+      - `_find_latest_paused_for_schedule(db, schedule_id)` → CrawlTask | None，按 schedule_id + status='PAUSED' 查最新一条
+      - `_restart_existing_paused_task(db, task)` → 把 PAUSED 翻 PENDING + 新 uuid4 run_token + 清 error_message/current_stage/current_note/finished_at + TaskLog + 清 schedule.cooldown_until + `run_crawl.delay(task.id, task.run_token)`
+    - `scheduled_dispatch` 循环内加 `if _has_active_task_for_schedule(db, schedule.id): continue` + try/except IntegrityError 防 partial unique 兜底
+    - `retry_failed_schedules` 循环内先 `paused = _find_latest_paused_for_schedule(db, s.id)`，有则 `_restart_existing_paused_task`（不设 busy=True）；无则 fallback 新建 task（兜底 case）
+    - `backend/app/api/v1/tasks.py` `POST /tasks/{id}/restart` 加 `_SAME_SCHEDULE_ACTIVE` check 提前
+    - `backend/tests/test_database_init.py` 升级到 0028 head
+  - 验收：
+    - `backend/tests/test_schedule_unique_active.py` 7 case：partial unique index 防双发 / COMPLETED 不占 unique / scheduled_dispatch schedule busy / retry restart 复用 PAUSED / retry skip RUNNING busy / retry 无 PAUSED 新建兜底 / **test_two_schedules_restart_each_their_own_paused**（多 schedule 各自找各自 PAUSED 互不混淆）
+    - `backend/tests/test_tasks_api_same_schedule_busy.py` 2 case：POST restart 同 schedule 还有 RUNNING → 409 SAME_SCHEDULE_IN_PROGRESS；同 schedule 没 RUNNING 时 happy path 202
+    - 全量后端 pytest：`991 passed, 19 failed`（19 失败全是 pre-existing，与本 spec 无关：`scripts/dedupe_cities` 路径缺失、`scripts/migrations/split_blogger_cities` 缺失、`_CoverImageUnusable` 缺失、`.env.example` 格式、`opencli` 路径探测）
+    - 现场验证：重启 worker 后 #52+#53 双发不再出现，熔断冷却到期只翻 PENDING 同一 task_id，前端 task 详情可看到 `熔断冷却到期,自动重新启动原任务` TaskLog
+  - 部署：用户**重启 celery worker + beat**（uvicorn reload 不够，因为改了 `app/tasks/crawl_task.py`）—— alembic 0028 在 worker lifespan 自动跑。重启后线上可观察：
+    - 任意 schedule 最多 1 条 `status IN ('PENDING','RUNNING','STOP_REQUESTED','PAUSED')` 的 task
+    - 熔断后冷却到期只翻 PENDING，不新建 task；TaskLog 含"熔断冷却到期,自动重新启动原任务"
+    - 手动 restart 同 schedule 已有 RUNNING → 409 SAME_SCHEDULE_IN_PROGRESS
+  - spec：[2026-08-22-schedule-unique-active-and-paused-restart-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-22-schedule-unique-active-and-paused-restart-design.md)
+  - commit：待生成。
+
+- [x] v0.7.0+2 系统配置页暴露熔断全局配置 `schedule_consecutive_fail_limit` / `schedule_retry_interval_minutes`（用户 2026-08-22 反馈"连续失败熔断，熔断后重启间隔(分钟)的全局配置要展示在系统配置里"——之前这俩只读 .env，运维调参得改文件重启 worker，不顺手）
+  - 目标：
+    - ①`GET /system-config` 返回含 `schedule_consecutive_fail_limit: int` + `schedule_retry_interval_minutes: int`
+    - ②`PUT /system-config` 接受同名字段，写 `.env`（走既有 `_ENV_KEY_MAP` 机制），min=1 防退化
+    - ③前端 `SettingsView.vue` 在"抓取工具" group 前插入"定时任务熔断（全局）" group，ElInputNumber + form-hint 说明语义
+  - 结果：
+    - `backend/app/api/v1/settings/system_config.py`：
+      - `from pydantic import BaseModel, Field`
+      - `_ENV_KEY_MAP` 加 `"schedule_consecutive_fail_limit": "SCHEDULE_CONSECUTIVE_FAIL_LIMIT"` + `"schedule_retry_interval_minutes": "SCHEDULE_RETRY_INTERVAL_MINUTES"`
+      - `SystemConfigIn` 加两个字段：`schedule_consecutive_fail_limit: int | None = Field(default=None, ge=1)` + `schedule_retry_interval_minutes: int | None = Field(default=None, ge=1)`
+    - `frontend/src/views/SettingsView.vue` 在"抓取工具" config-group 前插入新 group，两个 ElInputNumber（max=50 / max=1440）
+    - `frontend/src/views/SettingsView.spec.ts` mock `systemConfig` 加两字段，新增 `shows schedule circuit breaker global inputs and serializes them on save`
+  - 验收：
+    - `backend/tests/test_system_config_exposes_circuit_globals.py` 3 case：GET 返回含熔断字段 / PUT 写 .env / PUT 非法值 422（min=1 校验）
+    - `frontend/src/views/SettingsView.spec.ts` 新增 1 case：表单渲染 + 保存时序列化
+    - `vue-tsc --noEmit`：0 errors
+  - 部署：uvicorn reload + frontend dev 自动加载，无需 worker 重启（system_config 不进 worker 启动读取链路，靠运行时 .env 重读）；重启 launcher 让 .env 改动对新启动的 worker 生效
+  - spec：[2026-08-22-system-config-expose-circuit-global-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-22-system-config-expose-circuit-global-design.md)
+  - commit：待生成。
+
+- [x] v0.7.0+2 启动时幂等重绑内置组权限（用户 2026-08-22 反馈"4 个列表都没了"+ 全勾选 Administrators 21 条权限码保存失败——双重根因：①老 Administrators 组无 `*` → navPermissions 过滤顶级菜单；②system_config LLM tab 入口无权限 → "LLM 不展示"旧问题持续）
+  - 目标：
+    - ①`seed_default_iam` 对老 Administrators 组幂等重绑所有 permissions（含 `*` 通配码）—— 启动时跑一次就够，老现场"无 `*`"问题自动修复
+    - ②`seed_default_iam` 对老 Viewers 组幂等补齐 `users:read` 等关键权限（用户手动移除过 `*` 的现场也能恢复）
+    - ③**不**移除用户手动加到组的 extra permissions（仅补 missing，不删 user_added）
+    - ④**不**移除用户已加入组的 role='admin' users（仅补 missing link，不删 user_added）
+    - ⑤跑 5 次幂等：每次 GroupPermission / UserGroup 总数保持一致，不重复添加
+  - 根因：
+    - 项目历史 0001-0024 migration 用 `Base.metadata.create_all` 创建 groups + permissions + group_permissions，但 seed_default_iam 是按"创建或补全"两阶段执行；老现场的 Administrators 组在 v0.5.x 时只绑了少量权限码，新加的 `*`、`users:read`、`system:read` 等没绑
+    - 前端 `navPermissions` 拿不到 `*` → 顶级菜单（系统配置 / 权限管理）被隐藏 → "4 个列表都没了"
+    - 系统配置 tab 内 "LLM 配置" 入口依赖 `system:read`（**不是** `*`），Administrators 缺 `system:read` 也进不去 → "LLM 不展示"
+  - 结果：
+    - `backend/app/core/database.py` 新增 2 helper：
+      - `_ensure_group_has_all_permissions(session, group, *, include_wildcard: bool)` → 取全量 Permission ids → 与已有 GroupPermission ids 比 → missing 则 INSERT
+      - `_ensure_group_has_minimum_permission(session, group, codes: list[str])` → 按 codes 取 Permission ids → 缺则补齐
+    - `seed_default_iam` 第 92-104 行 Administrators + 第 107-117 行 Viewers 改为"创建或补全"两阶段，调用 helper（`include_wildcard=True` / `include_wildcard=False`）
+    - `from app.models.group import GroupPermission, Permission as _Perm` 在 helper 函数体内局部 import（防循环导入）
+  - 验收：
+    - `backend/tests/test_seed_default_iam_rebind.py` 6 case：老组重绑 `*` / 新码自动绑 / role='admin' user 幂等 / 用户手动加的 extra 不被移除 / Viewers users:read 补回 / 5 次幂等 GroupPermission 总数不变
+    - 全量后端 pytest：6/6 通过
+    - 现场验证：重启 .app → 浏览器退出 admin → 重新登录 → 4 个列表全回（定时任务/关键词组/博主组/LLM 配置）→ Administrators 组"全勾选 21 条权限码"保存成功（无 422/权限冲突）
+  - 部署：uvicorn reload 自动加载（`database.py` 走 lifespan，重启 .app 后 init_database → seed_default_iam → 自动重绑）；worker 不需重启；用户退出 admin 后重登拿新 token（含 `*` + `system:read`）
+  - spec：[2026-08-22-permission-rebind-admin-groups-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-22-permission-rebind-admin-groups-design.md)
+  - commit：待生成。
+
+- [x] v0.7.0+3 init.sh 清掉 `--python 3.11 --extra ocr` 残留 + 补 python-multipart 进 pyproject（用户 2026-08-22 反馈"python 要支持3.11以上版本，不用强制固定"+"ocr还是选装，但是打包成app后是选装额外的ocr模型，ocr的python依赖还是要打包进app里"——首次 `make init` / uvicorn 启动慢 5-15s，原因是 init.sh 残留两个 flag 触发 uv PubGrub 重建）
+  - 目标：
+    - ①`scripts/init.sh` 第 29/31 行删除 `--python 3.11 --extra ocr` 两个 flag，让 uv 用现成 venv（已满足 `>=3.11`）+ 现成 `[project.dependencies]`（已含 paddleocr 三件套）
+    - ②`backend/pyproject.toml` 加 `python-multipart>=0.0.9,<1` 到 dependencies：v0.7.0 把 paddleocr 从 extras 移到 required 后 uv 解依赖树时发现 `python-multipart` 不再被任何包 requires，自动卸载（看 "Uninstalled 1 package: python-multipart==0.0.32"）；fastapi 的 `Form` 解析需要它在，`backend/requirements-runtime.txt:17` 原本列了但 pyproject 没列——uv sync 不读 requirements.txt 只认 pyproject
+    - ③pyproject `requires-python = ">=3.11"` 不动（已正确支持 3.11/3.12/3.13/3.14）；打包 `package-macos.sh` 锁 cpython-3.11.9 不动（paddlepaddle 3.3 wheel 在 3.11 最稳）
+  - 根因：
+    - `--python 3.11` 强制 uv 在 venv 是 3.13 时 PubGrub 解析一轮 → 现场 "Building xhs-info-crawl-backend" + 8 个 `add_decision` 日志
+    - `--extra ocr` 在 v0.7.0 删除 `[project.optional-dependencies].ocr` 后 uv 静默忽略；但**与 `--python` 联用**触发整轮重建
+    - `python-multipart` v0.7.0 之前是 paddleocr extras 间接依赖，现 paddleocr 在 required，paddleocr wheel 树里 multipart 标记可选 → uv 觉得不再需要就卸了
+  - 结果：
+    - `scripts/init.sh:29`：`uv sync --project backend --python 3.11 --extra ocr` → `uv sync --project backend`
+    - `scripts/init.sh:31`：`uv run --project backend --extra ocr python -c "..."` → `uv run --project backend python -c "..."`
+    - `backend/pyproject.toml:21`：新增 `"python-multipart>=0.0.9,<1",`
+    - `uv.lock` 同步更新（uv sync 自动）
+    - `backend/tests/test_init_script_stale_flags.py` 新增 6 case
+  - 验收：
+    - `backend/tests/test_init_script_stale_flags.py` 6/6 通过：test_no_python_flag_in_uv_sync_or_run / test_no_extra_ocr_flag_in_uv_sync_or_run / test_init_script_still_runs_uv_sync_project_backend / test_init_script_still_runs_uv_run_project_backend / **test_uv_sync_does_not_rebuild_venv**（端到端跑 uv sync 不应出现 "Building..." + "Uninstalled/Installed" 段） / test_paddleocr_packages_importable
+    - 全量后端 pytest 相关 29 case（含 v0.7.0+2 + v0.7.0+3）：29/29 通过，零回归
+    - 现场验证：`uv run --project backend uvicorn ... --reload` 启动从 ~5s+ 降到 ~200ms（无 PubGrub 重建）；`curl /api/v1/health` 返回 `{"status":"ok","database":"sqlite"}`；fastapi Form 路径不再 `RuntimeError: Form data requires "python-multipart" to be installed`
+  - 部署：
+    - 本机用户跑 `uv sync --project backend` 一次即可（uv 会自动同步 lock + 装回 python-multipart）
+    - 重打 .app 时 `package-macos.sh` 用 `requirements-runtime.txt`（已含 multipart），不受 pyproject 改动影响——新装的 .app 仍含 multipart
+  - spec：[2026-08-22-init-script-stale-flags-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-22-init-script-stale-flags-design.md)
+  - commit：待生成。
+
+- [x] v0.6.0 .app 1.1G + 启动器 LLM 不展示 + OCR 测试 disabled 三类历史问题修复 + 防回归顶层设计文档（用户 2026-08-21 反馈"三类历史问题不够的，还有之前出现过的好多大包问题都要记录进去"）
+  - 目标：
+    - ①打包体积：移除 venv 内强制装的 paddleocr/paddlepaddle（840M），恢复 v0.5.x ~400M 体积 + OCR 走 ocr_installer 按需下载
+    - ②启动器多路径读 .env：`get /system-config` 合并 project_root + DATA_DIR/.env；用户配置字段 DATA_DIR 优先，bootstrap 字段（data_dir/log_dir）以 project_root 为准，ocr_enabled 由启动器 sync 单方管理
+    - ③OCR_ENABLED 自动同步：检测到 DATA_DIR/paddlex 已装 → 立刻把 OCR_ENABLED=true 写到 project_root/.env（无需用户手动开）
+    - ④OCR probe 区分 disabled vs not installed：probe_ocr 在 ocr_enabled=False 时细分 `ocr_disabled_in_config` (包已装) vs `ocr_not_installed` (包未装)，保留 `paddleocr_not_installed` (原 enabled=True 但包没装的路径)
+    - ⑤DATA_DIR 切换配置跟随：PUT `/system-config` 用户字段双写 project_root + DATA_DIR；bootstrap 字段只写 project_root；UI 保存按钮 toast 告知"配置已写入 DATA_DIR/.env"
+    - ⑥OCR 开关前端实时同步：el-switch 加 `@change="handleOcrEnabledChange"` 自动 PUT 单字段（不依赖保存按钮）
+    - ⑦顶层打包设计文档 `docs/packaging-design.md`：扩充完整历史问题清单（26 条历史 commit 实证从 §2.1 venv/§2.2 启动器配置/§2.3 venv 符号链接/§2.4 macOS AppTranslocation/§2.5 路径/§2.6 Windows/§2.7 SIGPIPE/§2.8 端口子进程/§2.9 UI/§2.10 基础设施）+ 核心不变量 + §4 TDD 清单 + §5 必读文档 + §6 发版流程 + §7 历史变更
+  - 结果：
+    - 后端 `backend/app/services/diagnostics_ocr.py::probe_ocr` 实现 §3.8 四象限表 + 详细 docstring
+    - 启动器 `launcher/status_server.py` 重构 `_read_launcher_system_config` → `_merge_project_and_data_env` + `sync_ocr_enabled_with_installed_state` + PUT 双写（用户字段走 user_field_updates / bootstrap 字段只写 project_root）
+    - 打包 `scripts/package-macos.sh` 第 119-125 行 step 2.1 整段删除，注释指向新 spec 和 design
+    - 前端 `launcher/ui/src/components/LLMConfigPanel.vue` 加 `handleOcrEnabledChange` + `@change` + 保存成功 toast 提示 DATA_DIR/.env
+  - 验收：
+    - `backend/tests/test_packaging_scripts.py::TestPackageMacos::test_script_excludes_paddleocr_optional_dep`（红→绿）
+    - `backend/tests/test_diagnostics_ocr.py`（新，3 case: disabled+installed→disabled_in_config / disabled+missing→not_installed / enabled+missing→paddleocr_not_installed）
+    - `launcher/tests/test_status_server_env_merge.py`（新，9 case: TestReadLauncherSystemConfigEnvMerge 4 + TestPutLauncherSystemConfigDualWrite 2 + TestSyncOcrEnabledWithInstalledState 3）
+    - `launcher/ui/src/components/LLMConfigPanel.spec.ts`（新，3 case: mount + @change 自动 PUT + 不依赖保存按钮）
+    - 后端 OCR/packaging/internal-writes 相关 100 测试全过，970 测试总数（仅 pre-existing 9 个 scripts 缺失失败）
+    - launcher UI 8 文件 / 70 测试全过
+    - vue-tsc 0 errors、`npm run build` 成功
+  - 部署：`scripts/package-macos.sh` + `launcher/status_server.py` + `launcher/ui/*` 改动全部走打包流程；`backend/app/services/diagnostics_ocr.py` 通过 `uvicorn --reload` 自动加载；**worker 不需重启**（不涉及 models/services 改 ORM）；打包后 .app 体积应回到 ~400M。
+  - spec：`docs/superpowers/specs/2026-08-21-packaging-ocr-llm-flow-fix-design.md`（含 6 个改动细节 + 实测现场核查）。
+  - 顶层设计：`docs/packaging-design.md`（§1 定位 / §2 26 条历史问题带 commit hash + 防重犯约束 / §3 配置分层 + 写入/读取语义 + 用户契约 / §4 TDD 清单 / §5 必读文档 / §6 发版流程 / §7 历史变更）。
+  - commit：本次提交。
+
+- [x] v0.6.1+1 Windows 打包启动失败：pyvenv.cfg 烧 CI runner 路径 + 补 start.vbs 入口（用户 2026-08-21 反馈）
+  - 目标：
+    - ①Windows 打包时 patch `runtime\venv\pyvenv.cfg` 的 `home` 字段为相对路径 `..\python`，让 venv 在用户机器上能照相对 base python
+    - ②打包脚本生成 `start.vbs` 作为终端用户首选入口（隐藏 cmd 窗口），start.bat 给高级用户保留
+    - ③记录两条新历史问题到 packaging-design.md §2.11
+  - 根因（Phase 1 现场诊断）：
+    - CPython venv 在创建时把 base python 的**绝对路径**（CI runner 的 `D:\a\xhs-info-crawl\xhs-info-crawl\dist\build\...`）烧进 `pyvenv.cfg` 的 `home` 行；zip 解压到用户机器后 `home` 路径失效；启动 venv python.exe 时报 `No Python at '<runner 路径>'`
+    - 实测验证：在本机把现有 venv 的 home 改成 `../python/bin`（相对），CPython 接受该相对路径，不再报 `No Python at`
+  - 结果：
+    - `scripts/package-windows.ps1` 在 venv 创建步骤后**立刻 patch** pyvenv.cfg 的 home 行为 `..\python`
+    - `scripts/package-windows.ps1` 加 `start.vbs` 生成（单引号 here-string `@'...'@` + 双 quote escape `""`），用 `WScript.Shell.Run "<bat>", 0, False` 隐藏 cmd 窗口
+    - `docs/packaging-design.md` §2.11 加 ㉗（pyvenv.cfg 烧路径）+ ㉘（start.bat 黑窗口+缺入口）两条
+    - `docs/packaging-design.md` §7 加 v0.6.1+1 一行（与 v0.6.1 macOS 修复区分）
+    - DATA_DIR 双写已随 v0.6.1 macOS 修复一并覆盖 Windows（同一份 status_server 代码跨平台）
+  - 验收：
+    - `backend/tests/test_packaging_scripts.py::TestPackageWindows` 新增 3 case：
+      - `test_script_patches_pyvenv_cfg_home_to_relative`（断言脚本含 `pyvenv.cfg` 和 `..\python`）
+      - `test_script_creates_silent_vbs_entry`（断言脚本含 `start.vbs` + `WScript.Shell` + `Run ..., 0,` regex）
+      - `test_pyvenv_patch_runs_after_venv_creation`（断言 patch 在 `-m venv` 之后）
+    - TestPackageWindows 全部 16 测试通过（13 原有 + 3 新增）
+    - 全部相关 backend 套件（packaging + OCR + launcher）共 93 测试通过
+  - spec：`docs/superpowers/specs/2026-08-21-windows-packaging-pyvenv-relocatable-design.md` § 5 列出非范围（不动 macOS、不重构为首次启动重建 venv）
+  - commit：本次提交。
+  - 部署：CI workflow `release.yml` 不需改，重打 `.windows-zip` 走新 package-windows.ps1，自动生产 pyvenv.cfg 修复版 + 含 start.vbs。
+
+- [x] 笔记保存失败：多笔记任务 `.downloads` 误删（用户 2026-08-21 反馈 `[Errno 2] No such file or directory .../.downloads/{id}/{id}/{id}_1.jpg`，并确认归档目录为用户配置、不违反写操作规范）
+  - 目标：多笔记任务中每篇笔记归档后，清理只删除"当前笔记"自己的下载子目录，保留同任务其他笔记已下载的源图；修复后连续保存的多篇笔记不再因源图缺失而失败。
+  - 根因：`extract_and_save` 每篇归档成功后执行 `shutil.rmtree(folder/".downloads")` 删除整个下载目录；多笔记任务里先处理的笔记会连带删掉后续笔记的源图，轮到时 `archive_task_result` 的 `shutil.copy2(source, target)` 抛 `FileNotFoundError [Errno 2]`。
+  - 结果：`backend/app/tasks/crawl/notes.py` 清理改为 `shutil.rmtree(folder / ".downloads" / note.platform_note_id, ignore_errors=True)`，仅删当前笔记下载子目录。
+  - 验收：新增 `tests/test_extract_save_downloads_cleanup.py` 2 用例（① 清理后保留同任务 id_b 源图 ② 连续保存 id_a/id_b 均成功且图片归档 images/）；先红（旧逻辑 `FileNotFoundError`）后绿；与 `test_minimax_parallel_integration.py`、`test_project_internal_writes.py` 同跑 24 passed。
+  - 部署：仅改 task 层源码，`uvicorn --reload` 自动加载；不含模型/schema，worker/beat 不需重启、无 alembic migration。
+  - spec：`docs/superpowers/specs/2026-08-21-note-save-missing-download-design.md`。
+  - 顺手：`tests/test_crawl_empty_detail_throttle.py::_make_staged_note` 漏填 `note.platform_note_id`，导致归档阶段 4 个 pre-existing 用例 (test_non_empty_resets_streak / test_adapter_close_failure_does_not_kill_task / test_token_pool_refresh_on_streak_threshold_minus_2 / 顺带恢复 COMPLETED 状态) 失败；修复后 throttle 8 用例全绿。
+  - 部署：仅改 task 层源码 + 测试 fixture，`uvicorn --reload` 自动加载；不含模型/schema，worker/beat 不需重启、无 alembic migration。
+  - spec：`docs/superpowers/specs/2026-08-21-note-save-missing-download-design.md`。
+  - commit：随 v0.6.0 打包提交（含 RELEASE_NOTES 增补章节）。
+
+- [x] 定时任务连续失败熔断 + 间隔自动重启（用户 2026-08-19 反馈"定时任务需要做到到达连续失败熔断阈值后，主动间隔x分钟自动再开始，这个需要能在定时任务配置页面能配置这个参数，worker 也能够按这个执行"）
+  - 目标：`ScheduledCrawl` 支持记录"连续失败次数 / 连续失败阈值 / 冷却重启间隔"（可空 → 回退全局默认）；定时任务终态为熔断/登录类失败时累计、成功后清零；达阈值进入冷却，冷却到期后由独立恢复任务**自动再触发一次**；阈值与间隔可在配置页编辑、worker 按配置执行。
+  - 结果：
+    - 后端 `backend/app/models/schedule.py` 新增 `consecutive_fail_limit` / `retry_interval_minutes` / `consecutive_failures` / `cooldown_until`；`migrations/versions/0026_schedule_circuit_breaker.py` 迁移（幂等）。
+    - 后端 `backend/app/services/schedule_service.py`（新）`record_schedule_failure` / `record_schedule_success` / `should_record_schedule_failure`：取 `s.consecutive_fail_limit or settings.schedule_consecutive_fail_limit`、`s.retry_interval_minutes or settings.schedule_retry_interval_minutes`；达阈值 `cooldown_until = now + interval`，未达则不阻塞可尽快重跑。
+    - 后端 `backend/app/tasks/crawl_task.py` 失败/成功终态回写计数；新增熔断/登录类失败（`CrawlHalted`/`AuthenticationRequired`）计数；新增 `retry_failed_schedules` 任务，beat 每 1 分钟扫描 `cooldown_until <= now` 且 enabled 的 schedule 自动再发一次抓取（尊重无活跃任务约束）。
+    - 后端 `backend/app/core/config.py` 新增全局默认 `schedule_consecutive_fail_limit=3` / `schedule_retry_interval_minutes=60`；`celery_app.py` beat_schedule 注册 `scheduled-crawl-retry-failed`。
+    - 后端 `backend/app/api/v1/schedules.py` 新增 `consecutive_fail_limit` / `retry_interval_minutes` 配置字段（create/update/_dump 同步，None=跟随全局）。
+    - 前端 `frontend/src/views/SchedulesView.vue` 表单新增"连续失败熔断阈值"与"熔断后重启间隔(分钟)"两数字输入（空 = 跟随全局），编辑时回填，提交携带 null/正整数。
+  - 验收：后端 `tests/test_schedule_service.py`（6 用例，含跨运行累计/达阈值冷却/未达不阻塞/成功清零/全局回退/仅熔断类计数）`tests/test_retry_failed_schedules.py` `tests/test_schedule_circuit_api.py` 全绿；后端全量（排除 pre-existing scripts/环境用例）952 passed 无回归；前端 `SchedulesView.spec.ts` 新增 4 用例（渲染两输入/提交值/提交 null/编辑回填）全绿、前端全量 176 passed 无回归。
+  - 部署：改模型 + worker + beat——**必须重启 worker 与 beat** 使 `retry_failed_schedules` 注册、新字段生效；需 **alembic migration**（新增 4 列）；前端 Vite HMR 已加载。
+  - spec：`docs/superpowers/specs/2026-08-19-schedule-circuit-breaker-retry-design.md`。
+  - commit：`7565694`。`crawl_task.py` 与账号切换功能共用，其账号失效轮换接线随本 commit 一并交付。
+- [x] 小红书账号切换：登出后自动登录下一账号（用户 2026-08-19 反馈"账号切换怎么做，现在能一个账号登出然后自动登录另一个账号吗"）
+  - 目标：一个账号失效/登出后能自动登出当前账号并自动打开并等待登录下一账号，形成账号轮换闭环（配合扫码后自动读取 `platform_user_id`）。
+  - 结果：
+    - 后端 `backend/app/services/opencli_adapter.py` 实现 `logout`（清 localStorage + cookie）；`fetch_my_user_id` 从 creator.xiaohongshu.com 页面读取 userId（扫码后自动落库）。
+    - 后端 `backend/app/tasks/crawl/accounts.py` 实现 `wait_for_login`（轮询登录态，至少检查一次）与 `open_account_login`（打开指定账号登录页）。
+    - 后端 `backend/app/tasks/crawl_task.py` 账号失效处理逻辑改造为：登出 → 打开下一账号登录页 → `wait_for_login` → 继续，形成多账号轮换。
+    - 后端 `backend/app/api/v1/xhs_accounts.py` 新增 `/xhs-accounts/{id}/logout` 端点，支持手动登出并释放 Chrome 实例。
+  - 验收：`tests/test_account_logout.py`、`tests/test_account_login_wait.py`、`tests/test_crawl_account_switch_autologin.py`、`tests/test_check_login_cdp_routing.py`、`tests/test_xhs_accounts.py` 相关用例全绿；后端全量（排除 pre-existing scripts/环境用例）952 passed 无回归；前端全量 176 passed 无回归。
+  - 部署：改 service + task 层，`uvicorn --reload` 自动加载；不含模型/schema 变更，worker/beat 不需重启；无 alembic migration。
+  - spec：`docs/superpowers/specs/2026-08-19-xhs-account-switch-auto-login-design.md`（增量，基线与 `2026-08-10-multi-xhs-account-design.md` 一致）。
+  - commit：`e6ce6e4`（logout + wait_for_login + 登出端点）；`crawl_task.py` 的账号失效轮换接线随 `7565694` 一并交付。
+
+- [x] 修复小红书账号 ID 扫码后未自动读取（用户 2026-08-19 反馈"小红书账号 ID 扫码后没有自动读取"，"你可以从页面上自己拿呀"）
+  - 目标：扫码登录后 `platform_user_id` 能自动落库。根因：`opencli xiaohongshu whoami` 输出只有 `{logged_in, site, username, followers}`，没有 `user_id` 字段，`check_login` 永远写不进 `platform_user_id`。
+  - 结果：
+    - 后端 `backend/app/services/opencli_adapter.py` 新增 `fetch_my_user_id()`：调 `opencli browser <session> eval` 读 `localStorage.USER_INFO.user.value.userId`（来自 creator.xiaohongshu.com/new/home 页面结构）；对执行异常 / 空值 / 非 16-64 位字母数字做启发式校验，非法则返回 `None` 不落库。
+    - 后端 `backend/app/api/v1/xhs_accounts.py` `check_login` 集成：先取 whoami 的 `user_id / userId / id` 字段，取不到再调 `fetch_my_user_id()` 兜底；拿到且 `platform_user_id` 为空才写入。`fetch_my_user_id` 失败静默降级（日志 INFO），不影响登录判断。
+  - 验收：`backend/tests/test_fetch_my_user_id.py` 6 用例（正常返回 / USER_INFO 缺失 None / eval 返回 null None / eval 失败不抛错 None / 非法 payload None / 命令格式为 `browser <session> eval ...USER_INFO...userId`）全绿；`test_xhs_accounts.py` 28 用例 + `test_check_login_cdp_routing.py` 4 用例（含 FakeAdapter 补 `fetch_my_user_id`）全绿；后端全量（排除 pre-existing 环境敏感 / scripts 缺失用例）922 passed + 1 skipped 无回归；前端 `npm run test -- --run` 172 passed 无回归。
+  - 部署：改 API + service 层，`uvicorn --reload` 生效；不含模型/schema 变更，**worker/beat 不需重启**；无 alembic migration。
+  - spec：`docs/superpowers/specs/2026-08-10-multi-xhs-account-design.md`（增量修复）。
+  - commit：待生成。
+- [x] 周报预览图片 + md 改 zip + xlsx 封面图（用户 2026-08-18 反馈"周报的预览，图片链接是半链接，都不会展示的，要调整链接 / 下载时markdown下载要包含md和图片文件夹的合成一份zip包，图片文件夹要按照推文分类不然找不到，excel是表格里要插入图片或者也是要附带图片文件夹"）
+  - 目标：①周报预览图片在 dev + 打包两种模式下都能正常展示（前端用 axios baseURL 拼接 `/api/v1/reports/image/<storage_key>`）；②`/reports/{id}/download?format=md` 产物改为 zip：含 `<sanitized_report_name>.md` + `images/note_<id>/<filename>`（按 note_id 分目录），md 内图片引用改为相对路径；③`/reports/{id}/download?format=xlsx` 新增「封面图」列嵌入 note 第一张本地图（>2MB 用 PIL 缩放到最长边 ≤ 1024px，无图写"—"，行高 96px）；④xlsx 不再附带 zip。
+  - 结果：
+    - 后端 `backend/app/services/report.py` 新增 `_sanitize_zip_filename` / `_resolve_local_image` / `_build_md_for_zip` / `build_report_zip`（zip 内 md 图片引用改为 `images/note_<id>/<filename>` 相对路径；远程图 / 穿越 key / 不存在文件 → 跳过 + WARNING） / `_maybe_resize_cover_image`（PIL 可用 → 缩放到最长边 ≤1024px / JPEG q85；PIL 缺失 → WARNING 后原图嵌入）/ `generate_note_xlsx_with_cover`（xlsx 表头新增「封面图」列，无图写"—"，行高 96px）。
+    - 后端 `backend/app/api/v1/reports.py` `/reports/{id}/download` 改：format=md 返回 `application/zip`（`Content-Disposition` 用 `.zip` 后缀）；format=xlsx 调 `generate_note_xlsx_with_cover(entries, data_root)`。
+    - 前端 `frontend/src/utils/reportPreview.ts` 新增 `resolveReportImageUrls(markdown)`：把所有 `/api/v1/reports/image/<key>` 拼成当前 `http.defaults.baseURL` 下的绝对路径；fallback 到 `/api/v1`；空 baseURL 不重复 `/`。
+    - 前端 `frontend/src/views/ReportsView.vue` `show()` 渲染前调 `resolveReportImageUrls(content)`；"Markdown" 按钮文案改 "周报压缩包(.zip)"（format 参数仍传 `md`，由后端判定 zip）。
+  - 验收：后端 `tests/test_report_zip_and_xlsx.py` 新增 6 用例（zip 含 md+images、远程图跳过、穿越 key 跳过+WARNING、md 下载返回 zip、xlsx 嵌入图+行高、缺图兜底）全绿；`test_reports.py` 删 `test_report_xlsx_has_no_image_column` + `test_report_md_download_strips_images` 改名为 `test_report_md_download_returns_zip_with_images`，`test_download_report_returns_markdown_and_excel` 改 `test_download_report_returns_zip_and_excel`；`test_e2e_workflow.py` 双下载断言同步更新为 zip；后端相关 23 用例全 PASS；前端 `utils/reportPreview.spec.ts` 新增 6 用例 + `ReportsView.spec.ts` 新增 1 用例 + 按钮文案调整 1 用例全绿；前端 `npm run test -- --run` 168 passed、`npm run build` 通过；后端全量（排除 pre-existing 环境敏感用例）856 passed + 1 skipped 无回归。
+  - 部署：仅改 API 层 + 前端，`uvicorn --reload` 自动加载；**worker/beat 不需重启**；前端 Vite HMR 已加载；无 alembic migration。
+  - spec：`docs/superpowers/specs/2026-08-18-weekly-report-images-and-zip-design.md`（本地保留，docs/ 不入库）。
+
+- [ ] v0.5.8 启动器退出清理子进程 + celery worker 不泄漏（用户 2026-08-16 反馈"每次打开端口 +1，原先的没有释放资源"）
+  - 目标：①launcher 任何退出路径（正常退出 / KeyboardInterrupt / SIGTERM / SIGINT / SIGHUP / 未捕获异常）都清理子进程；②子进程脱离 launcher 进程组（`start_new_session=True`），launcher 崩溃不连带半死；③celery worker 不 fork grand-children（`--pool=solo --concurrency=1`）；④stop_service 超时后 SIGKILL 整个进程组（`os.killpg` / Windows `taskkill /T`）；⑤cleanup 幂等（atexit + signal handler + finally 可重复调）。
+  - 结果：`launcher/process_manager.py` worker 命令改 solo pool；`stop_service` 超时改 `_kill_process_group(proc.pid)`；新增 `_kill_process_group`（Unix killpg / Windows taskkill /T）；`launcher/main.py` 注册 SIGTERM/SIGINT/SIGHUP handler + `atexit.register(pm.cleanup)`，`Api.exit()` 改 `os.kill(os.getpid(), SIGTERM)` 触发清理；`test_process_manager.py` 更新超时用例（killpg 断言）+ 新增 `test_kill_process_group_uses_killpg`，11 passed。
+  - 验收：launcher 测试 70 passed（1 pre-existing opencli 环境失败）；后端全量无回归；`backend/tests/test_project_internal_writes.py` 静态扫描合规；打包 `xhs-info-crawl-0.5.8-macos.zip` 后双击 .app → 退出 → 无 uvicorn/celery/http.server 残留 → 再启动端口不 +1。
+  - 部署：仅 launcher + 打包脚本，不打进后端 worker/beat；打包后需重新下载 .app 验证。
+  - spec：`docs/superpowers/specs/2026-08-16-launcher-cleanup-on-exit-design.md`。
+  - commit：待生成。
+
+- [ ] v0.5.9 打包版默认密码登录 + 主线程窗口（用户 2026-08-16 反馈"关闭了进程还是杀不掉 / 登录密码就用默认的呀，不要数据库改来改去 / 怎么没看到 app 启动图标"）
+  - 目标：①后端启动幂等播种默认 admin/Admin@123（打包版从不执行 alembic 迁移，users 表空导致任何密码都 401）；②启动器不再生成随机密码；③`webview.start()` 移回主线程（macOS 硬性要求，daemon 线程抛 `WebViewException: pywebview must be run on a main thread` → 窗口从不显示）；④关窗 / PyWebView 异常 → `pm.cleanup()` 杀全部子进程后退出（不留孤儿）。
+  - 结果：`backend/app/core/database.py::init_database` 新增 `seed_default_admin`（幂等，已有 admin 不覆盖）；`launcher/env_bootstrap.py` 删除 `INITIAL_ADMIN_PASSWORD` 自动生成 + `generate_admin_password()`；`launcher/main.py` 删除 daemon 线程 + `run_main_loop` keep-alive，改主线程 `webview.create_window` + `webview.start()`，`finally: pm.cleanup()`；删除 `launcher/pywebview_safety.py`（run_main_loop / safe_pywebview_start 废弃）。
+  - 验收：后端 `pytest tests/test_database.py` 新增 2 用例绿（播种 admin / 不覆盖已有 admin）+ 全量 919 passed 无回归；launcher 测试全绿（env_bootstrap 删除随机密码相关 4 用例、pywebview_safety 重写为关窗/异常触发 cleanup 2 用例）；打包 .app 实测：窗口显示 → `admin/Admin@123` 登录成功 → 关窗后 uvicorn/celery/http.server 全部退出、8001/5173 端口释放。
+  - 部署：改 backend database.py → **重启 worker 生效**；改 launcher → 重新打包 .app。
+  - spec：`docs/superpowers/specs/2026-08-16-packaged-default-login-and-mainthread-window-design.md`。
+  - commit：待生成。
+
+- [x] 抓取日志页 schedule_name 列 + 仪表盘定时任务列表继续抓取按钮（用户 2026-08-19 反馈"抓取日志id后面再加一列，展示定时任务的名称"、"仪表盘上定时任务展示列表要支持重新抓取，继续抓取按钮"）
+  - 目标：①抓取日志页 `TasksView.vue` "任务 ID" 列后新增"定时任务"列，渲染 `params.schedule_name`（空显示"-"），与原"任务 ID"列同样宽度等级，便于一眼定位调度来源；②仪表盘 `DashboardView.vue` "定时任务状态"卡片表格加"操作"列，仅对 `last_task.status ∈ {FAILED, STOPPED, PAUSED}` 三种状态显示按钮（FAILED/STOPPED 显示"重新抓取"、PAUSED 显示"继续抓取"），点击调用现有 `POST /tasks/{task_id}/restart` 端点；③按钮 disabled 自身 `loading` 状态，按 schedule 行级别独立（多行可并行点击）；④PAUSED 状态点击时复用后端 `restart()` 流程内的 `check_login` + 409 AUTH_REQUIRED 处理，前端弹"尚未检测到小红书登录状态，请登录后重试"。
+  - 结果：
+    - 后端：无 API 变更。`POST /tasks/{task_id}/restart` 端点已存在并支持 `FAILED/STOPPED/STOP_REQUESTED/PAUSED` 四种 status；`GET /dashboard/analytics` 返回的 `schedules[].last_task = {id, status, started_at}` 已含 `id`，前端可直接用。无需新后端测试。
+    - 前端 `TasksView.vue` 在"任务 ID"列后插 `<ElTableColumn label="定时任务" width="140">`，模板 `{{ scope.row.params?.schedule_name || '-' }}`。
+    - 前端 `DashboardView.vue` 改动：①新增 `restartingScheduleId = ref<number | null>(null)`（按 schedule 行级别独立 loading）；②新增 `restartScheduleTask(schedule, task)` 函数（复用 lastTask 卡片 restart 的 ElMessage 成功/错误文案 + `await pollAnalytics()` 刷新列表）；③"定时任务状态"卡片新增 `<ElTableColumn label="操作" min-width="180">` 三档按钮：
+      - FAILED / STOPPED → `<ElButton type="primary" text :icon="RefreshRight" :loading="restartingScheduleId === scope.row.id" @click="restartScheduleTask(scope.row, scope.row.last_task)">重新抓取</ElButton>`
+      - PAUSED → 同模板，文案"继续抓取"
+      - STOP_REQUESTED → disabled "正在停止…"（防止中间态误触）
+      - 其他 status / 无 last_task → 不渲染按钮
+    - 测试：前端 `TasksView.spec.ts` mock 加 `params.schedule_name` 字段 + +1 用例（schedule_name 渲染 + 缺失回退 '-'）；`DashboardView.spec.ts` mock 新增 id=33 PAUSED + id=34 RUNNING schedule + +3 用例（FAILED 显示"重新抓取"触发 restartTask / PAUSED 显示"继续抓取" / RUNNING 不显示按钮），先红后绿。
+  - 验收：① 前端 `npx vitest run` → 26 test files / 172 tests 全绿（TasksView 6 + DashboardView 34，含新增 4 用例）无回归；② `npm run build`（vue-tsc + vite）通过、0 errors；③ 手动验收：admin 登录 → 抓取日志页 assigned task 看得到 schedule_name（scheduled 任务显示名称、manual 任务显示"-"）→ 仪表盘"定时任务状态"卡片：FAILED 行出现"重新抓取"按钮（点击后 toast + 刷新看到 last_task 状态变 PENDING）、PAUSED 行出现"继续抓取"按钮、RUNNING / COMPLETED 行无按钮、从未执行的 schedule 行无按钮。
+  - 部署：仅前端，`uvicorn --reload` 无需重启 worker（API 层未改）；前端 Vite HMR 自动生效；打包版 .app 重新 `package-macos.sh` 后即可生效。
+  - spec：`docs/superpowers/specs/2026-08-19-tasks-and-dashboard-schedule-actions-design.md`。
+  - commit：待生成。
+
+- [x] v0.5.8 打包版前端子路由 404 → 全局统一 hash 路由（用户 2026-08-16 反馈"5173 没法访问 / Error code: 404 File not found"，并决策"开发就应该也用 hash，前端本来就是 vue 嘛"）
+  - 目标：①打包版（生产构建 + `python -m http.server`）打开任意子路由（如 `/dashboard`）不 404；②开发模式与打包版一致统一用 hash 路由（URL 带 `#`）；③登录跳转（logout / axios 401）统一跳 `#/login`。
+  - 结果：`router/index.ts` 改 `createWebHashHistory()`（废弃环境区分方案，不建 `history.ts`，删除 `history.spec.ts`）；新增 `frontend/src/utils/navigation.ts`（`isLoginPage` / `goLogin` hash-only）；`http.ts` 401 拦截器与 `AppLayout.vue` logout 改调工具函数；navigation/http-401/AppLayout-logout 用例改为 hash-only。
+  - 验收：前端 `npm run test -- --run` 全绿（25 files / 161 tests，含 hash-only 的 navigation / http 401 / AppLayout logout 用例）；`npm run build`（vue-tsc + vite build）通过；`python -m http.server` 服务 dist 实测 `GET /` 200，hash 模式下访问子路由只请求 `/` 不再 404；e2e URL 断言（`/xxx$`）兼容 hash 无需改动。
+  - spec：`docs/superpowers/specs/2026-08-16-packaged-spa-hash-router-design.md`。
+  - commit：待生成。
+
+- [x] 仪表盘 4 行布局 + 城市默认空 + 配置中心挂载城市真源修复（用户 2026-08-13 反馈"关键词组另起一行和关键词选择放一排 / 选择关键词组后挂载城市显示 code 不显示 name / 仪表盘城市允许取消"，迭代确认 4 行布局：城市+时间范围｜关键词模式+关键词｜博主模式+博主｜操作账号）
+  - 目标：①仪表盘 4 行布局（Row 1 城市+时间范围，Row 2 关键词模式+关键词/关键词组，Row 3 博主模式+博主/博主组，Row 4 操作账号）；②仪表盘城市默认空（不限城市）；③配置中心关键词组"挂载城市"列从后端 join 真源读 City.name，不显示 code（如 city-99f1e469）。
+  - 结果：
+    - 后端：`backend/app/api/v1/settings.py` `_dump_keyword_group` 与 `_dump_blogger_with_cities` outer join `City.name`，新增 `cities: [{code, name}]` 字段（保留 `city_codes` 兼容旧字段）。脏数据兜底：`name=None` 时前端展示原 code，不崩。
+    - 前端仪表盘：`DashboardView.vue` 4 行 CSS Grid（`grid-template-columns: repeat(2, 1fr)`；Row 1-3 各 span 1；Row 4 操作账号占满整行 `1 / -1`；800px 断点回退单列）；删除 `initialize()` 自动选第一个城市；`cityBloggers` 在 `form.city=''` 时返回全部 enabled 博主。
+    - 前端配置中心：`KeywordGroupSettings.vue` 表格"挂载城市"列改读 `row.cities[].name`，与 props.cities 加载时机解耦；兼容旧 API（无 `cities` 字段时显示"未挂载"）。弹窗内 chips 渲染逻辑未动。
+    - 测试（不入库，按 .gitignore 规则保留工作区）：`backend/tests/test_keyword_group_api.py` +4 用例（关键词组 cities 字段 / 脏数据兜底 / 0 cities / 键名结构）；`backend/tests/test_blogger_batch_import.py` +2 用例；`DashboardView.spec.ts` +3 用例（默认空 / cityBloggers 放宽 / 4 row classes）；`SettingsView.spec.ts` +2 用例（读 `cities[].name` + 兼容缺字段）；e2e `dashboard-city-optional.spec.ts` + `dashboard-grid-rows.spec.ts` 各 1 用例。
+  - 验收：①后端 `pytest tests` → 879+ passed（不引入新回归）；②前端 `npm run build` 通过（vue-tsc 0 errors）；③vitest 新增用例全 PASS；④playwright 2 个 e2e PASS；⑤手动验收：仪表盘城市默认空；切关键词组模式后下拉显示全部 enabled；配置中心关键词组"挂载城市"列显示真实 City.name。
+  - 部署：仅改 API 层 + 前端，**uvicorn --reload 已加载，无需重启 worker**；前端 Vite HMR 已加载。
+  - spec：`docs/superpowers/specs/2026-08-13-dashboard-keyword-row-and-city-optional-design.md`（本地保留，docs/ 不入库）。
+  - commit 序列：① `0763ab1 feat(settings): dump keyword groups with cities[{code,name}]` ② `567bdcc feat(settings): dump bloggers with cities[{code,name}]` ③ `6bf4987 feat(dashboard): four-row grid layout (city+recent / keyword+source / blogger+source / xhs_account), default city empty` ④ `3a9c8ee feat(settings): keyword group table renders city names from joined cities[] field` ⑤ 测试 + e2e + TODO.md 按 .gitignore 规则保留工作区。
+
+- [x] 配置中心 5 tab 批量删除 + 系统配置去分页（用户 2026-08-13 反馈"配置中心几个分页的还要加批量删除 / 系统配置页面不需要分页"）
+  - 目标：①配置中心 cities / bloggers / keyword-groups / blogger-groups / xhs-accounts 5 个分页 tab 各加批量删除（勾选 → 按钮 → ElMessageBox 确认 → 调批量删除端点 → 刷新）；②系统配置 tab 移除分页组件（系统配置为单页表单，无分页语义）。
+  - 结果：
+    - 后端：`backend/app/api/v1/settings.py` 新增 `BatchDeleteIdsIn` / `BatchDeleteOut` 模型 + 4 个端点 `/settings/cities/batch-delete`、`/settings/bloggers/batch-delete`、`/settings/keyword-groups/batch-delete`、`/settings/blogger-groups/batch-delete`，处理关联数据清理（`BloggerCity` / `KeywordGroupCity` / `KeywordKeywordGroup` / `BloggerGroupBlogger` 等）+ `record_audit` 审计日志；`backend/app/api/v1/xhs_accounts.py` 新增 `/xhs-accounts/batch-delete` 端点。5 端点统一规则：空 ids → 400、超 100 条 → 400、部分不存在 → 404 全部取消。
+    - 前端 API：`frontend/src/api/client.ts` 新增 `batchDeleteCities` / `batchDeleteBloggers` / `batchDeleteKeywordGroups` / `batchDeleteBloggerGroups` / `batchDeleteXhsAccounts`。
+    - 前端 UI：`SettingsView.vue` 给 cities / bloggers / xhs-accounts 三个 tab 加 `type="selection"` 列 + `citiesSelectedIds` / `bloggersSelectedIds` / `xhsAccountsSelectedIds` ref + "批量删除 (N)" 危险按钮 + `batchRemove()` 统一处理；`KeywordGroupSettings.vue` / `BloggerGroupSettings.vue` 同模式加选择列 + 批量删除。系统配置 tab 移除 `ElPagination`（系统配置本就只有一张表单，原分页是误加）。
+    - 测试：`backend/tests/test_settings_batch_delete.py` 26 用例（5 端点 × 成功 / 空 ids / 超 100 / 部分不存在 / 权限 / 关联清理）全绿；`frontend/e2e/settings-batch-delete.spec.ts` 5 用例（每个 tab 路由拦截 batch-delete 端点验证 ids 透传 + ElMessageBox 确认）；`frontend/src/views/SettingsView.spec.ts` 18 用例全绿。
+  - 验收：①后端 `pytest tests/test_settings_batch_delete.py` → 26 passed；②前端 `npm run build`（vue-tsc + vite）通过；③前端 `vitest run SettingsView.spec.ts` → 18 passed；④前端 7 个 pre-existing 失败测试（`AppLayout`/`DashboardView`/`AccountsTab`/`AuditLogsTab`/`GroupsTab`/`PermissionsTab`/`SystemAdminGuard`）与本次改动无关，stash 比对未引入新回归。
+  - 部署：本次仅改 API 层 + 前端，**uvicorn --reload 已加载，无需重启 worker**；前端 Vite HMR 已加载。
+  - spec：`docs/superpowers/specs/2026-08-13-settings-batch-delete-design.md`。
+
+- [x] 配置中心表格分页 + 仪表盘抓取输入源多模式（用户 2026-08-13 反馈"配置中心 navbar 表格都要分页 / 关键词组可不配置城市 / 博主组跨多城市"）
+  - 目标：①除"系统配置"外，配置中心各 navbar 表格加分页；②仪表盘支持"自定义关键词 vs 关键词组"切换；③仪表盘支持"博主列表 vs 博主组"切换；④关键词组可不配置城市（不限城市抓取）；⑤博主组跨多城市搜索。
+  - 结果：①`app/services/crawl_scope.py` `_resolve_from_keyword_groups`/`resolve_effective_keywords`/`resolve_effective_bloggers` 支持 `city: City | None`（None 时跳过城市过滤）；②`app/tasks/crawl_task.py` `_expand_blogger_groups` 支持 `city_code: str | None`（None 时返回组内所有 enabled 博主）；新增 `_collect_cities_from_groups` 在 city='' 时从博主组/关键词组挂的城市合并出抓取列表；③抓取循环 `requested_cities` 改为优先级 city > cities > 组挂城市；④前端 `composables/usePagination.ts` 新分页 composable；⑤`SettingsView.vue`/`KeywordGroupSettings.vue`/`BloggerGroupSettings.vue` 接入 ElPagination；⑥`DashboardView.vue` 新增 `keyword_source`/`blogger_source` 两个 RadioGroup + `custom_keywords` 输入框 + 博主组下拉；`form.city` 改为选填（空 = 不限城市）；⑦`start()` 校验改为按源校验；payload 按源动态提交 keywords/keyword_group_ids/blogger_ids/blogger_group_ids；⑧城市可空时 `cityKeywordGroups` 保留所有 enabled 关键词组供选择。
+  - 验收：①新增 `tests/test_crawl_scope_no_city.py` 5 用例（关键词组含/不含城市 city=None/受限城市/排除 disabled/无 keyword_group_ids 返回空），先红后绿；②`tests/test_expand_blogger_groups_no_city.py` 5 用例（city=None 返回组内所有博主/排除 disabled 博主/排除 disabled 组/空 group_ids/兼容旧 city 逻辑），先红后绿；③`tests/test_collect_cities_from_groups.py` 5 用例（博主组/关键词组/混合/排除 disabled 关联/空），先红后绿；④前端 `composables/usePagination.spec.ts` 7 用例（首页/翻页/末页/改页大小/空列表/ensureValidPage/响应式 rows）；⑤vue-tsc 0 errors，build 成功；⑥后端 `861 passed, 1 skipped`（pre-existing 4 failed：opencli 环境差异 + release workflow），**未引入新回归**；⑦前端新增 7 测试通过，pre-existing 14 失败（`AppLayout`/`DashboardView`/`SettingsView` 等的 vitest oxc plugin `as any`/`Record<string,...>` 解析限制，stash 比对验证与本次改动无关）。
+  - 部署：改动 `backend/app/services/crawl_scope.py` + `backend/app/tasks/crawl_task.py` → **worker 必须重启**才能让"不限城市"在抓取流程生效；uvicorn `--reload` 已加载 API 层；前端 Vite HMR 已加载。
+  - spec：`docs/superpowers/specs/2026-08-13-dashboard-scope-and-table-pagination-design.md`。
+
+- [x] 推文 ID 雪花算法服务是什么，整个项目有用到算法的都整理出来写一份文档md
+  - 结果：`docs/superpowers/qa/algorithms.md` 梳理项目所有算法位置（含 XHS 雪花、UUID v4、JWT HS256、Argon2、SequenceMatcher、Celery 文件 broker 等），每一项给出文件 / 触发点 / 入参出参 / 强度评估 / 阶段二待替换路径。
+- [x] 多账号体系 + RBAC（分组 + 权限）
+  - 目标：当前只有 admin。升级为多账号平等（`Administrator` 组默认有全部权限），新增"账号管理"左侧 nav；账号可以分组、分组关联权限集；`sub` 角色划分保留为未来"子账号"扩展。
+  - 验收：新 `users/groups/permissions/group_permissions/user_groups` 表；新 `AccountsView.vue`（左 nav 新增），含账号 / 分组 / 权限 三 tab；后端 `require_permission(code)` 替换 `require_admin`；前端 49+ 测试，build 通过；实操：用 admin 新建 editor 账号 → 限定权限 → editor 登录验证无权页面 403。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-multi-account-rbac-design.md`（已写）；实施 spec `docs/superpowers/specs/2026-08-12-system-admin-design.md`。
+  - 结果：12 个 commit（HEAD = `cd9f61b3`），后端 784 passed / 6 failed（全部 pre-existing WIP）/ 前端 120 passed / 2 failed（pre-existing AppLayout WIP）；build 通过、vue-tsc 0 errors。
+    - `32ab399` feat(models): system admin schema (groups/permissions/audit_logs)
+    - `4fbf963` fix(migration): align 0020_system_admin revision id
+    - `25c4bad` feat(security): require_permission + JWT permissions claim
+    - `33e5635` feat(services): audit log record helper (degrades on failure)
+    - `aeda514` feat(api): /users CRUD with admin-protected delete
+    - `fc3d57e` feat(api): /groups CRUD + /permissions dictionary
+    - `60bbbc0` feat(api): /audit-logs query with pagination + filters
+    - `b17656c` feat(auth): write audit logs on login success/failure
+    - `f372899` test(rbac): admin retains admin-only access; editor gets 403
+    - `4c681f6` feat(frontend): admin API methods + user store with isAdmin getter
+    - `8cd38de` feat(frontend): SystemAdminGuard route guard
+    - `9c97d73` feat(frontend): 4 admin tabs (Accounts/Groups/Permissions/AuditLogs)
+    - `cde66f8` fix(frontend): revert in-flight xhs-accounts label change (keep Task 12 / WIP scope)
+    - `cd9f61b` feat(frontend): system-admin route + navbar submenu
+  - 实测：2026-08-13 生产 DB 实操验收：
+    - `curl GET /api/v1/permissions` → 10 条权限码（users:manage / users:read / settings:write / tasks:crawl / notes:review / reports:generate / notes:edit / activities:edit / duplicates:resolve / notes:delete）
+    - `curl GET /api/v1/groups` → Administrators + Viewers
+    - `curl GET /api/v1/users` → admin + hanamaki（2 个 admin 用户均在 Administrators 组）
+    - `curl GET /api/v1/audit-logs?size=1` → total=185，最新 = `login_success`（Task 7 写的 audit 埋点已生效）
+  - 部署：见 `docs/deployment.md` 新增"系统管理 + 多账号 RBAC 部署（2026-08-13 新增）"章节，含非标准部署路径（生产 DB 已被手工干预时 `_manual_finish_0020.py` 的使用场景）、进程重启顺序、回滚步骤、冒烟测试。
+- [x] 一次性数据库迁移 `seed_admin` 启动后兜底管理员
+  - 目标：当数据库完全为空（首次部署/重置）时，没有 admin 用户无法登录。当前 admin 凭据是手工 sql 新增。
+  - 验收：迁移 `0012_seed_admin.py` 在 upgrade 时若 `users` 表为空则插入 admin 用户；密码来自环境变量 `INITIAL_ADMIN_PASSWORD`，未设置则使用 `Admin@123` 且 WARNING 提示"生产环境必须更改"；脚本幂等：若 admin 已存在则跳过。重置 db（删除数据文件后跑 alembic upgrade head）后能用默认密码登录。
+  - 结果：迁移已实现并跑过真实 DB；实测 `alembic_version = 0012`，`users(1, admin, admin, 97-byte Argon2)`，Argon2.verify("Admin@123") → True。后端 316→321 passed（5 个 case：users 空 seed / 已存在跳过 / env 覆盖密码 / WARNING 日志 / downgrade 删除）。不更新 v0.2.0；累积到下个 release cycle。
+- [x] OPENCLI_BIN 入配置中心「系统配置」tab（用户 2026-08-08 反馈）
+  - 目标：opencli 不在 PATH 时只能在 `.env` 改 `OPENCLI_BIN`，期望配置中心可视化填写自定义绝对路径（已用 nvm 安装：`/Users/kevin_w/.nvm/versions/node/v22.18.0/bin/opencli`）。
+  - 验收：复用 2026-08-03 已实现的 `GET/PUT /settings/system-config` 端点，仅补 `opencli_bin` 一项（`_ENV_KEY_MAP` 与 `SystemConfigIn` 加字段）；`SettingsView.vue` 系统配置 tab 新增「抓取工具」分组（ElInput + ElTooltip "支持绝对路径，留空回退 PATH 解析"）；后端 +1 测试（PUT 写 .env + GET 回读），前端 +1 测试（input 渲染 + 保存回传 payload）；后端全量 / 前端 87+ 测试 / build 全绿；用户实操：登录 → 配置中心 → 系统配置 → 抓取工具 → 填路径 → 保存 → 仪表盘系统状态卡 opencli 探测显示 ✓。
+  - 结果：spec `docs/superpowers/specs/2026-08-08-system-config-opencli-bin-design.md`；后端 `tests/test_system_config_api.py` +1 用例（PUT → 200 → .env 含 `OPENCLI_BIN=/Users/.../bin/opencli` → GET 回读）；前端 `SettingsView.spec.ts` +1 用例（input 渲染 placeholder="opencli" + setValue 后 updateSystemConfig payload 含字段）；前端全量 88 passed、build 通过；生产端点 `GET /settings/system-config` 实测返回 18 字段含 `opencli_bin`；worker / beat 已重启（PID 见 `data/logs/`）。部署：`app/api/v1/*.py` 与 `app/services/*.py` 都需重启 worker 才能让新 `OPENCLI_BIN` 在抓取流程生效。
+- [x] 城市复用 + 关键词组一对多
+  - 目标：城市 DB unique 约束；关键词组 `KeywordGroup` 实体（可挂多个城市、可包含多个关键词）；仪表盘关键词下拉改为多选关键词组；`crawl_scope.resolve_crawl_scope` 改写。
+  - 验收：新 migration `0013_keyword_groups.py`；新 API `settings/keyword-groups` 与 `tasks/crawl {keyword_group_ids}`；旧字段 `keywords` 兼容保留；前端 `SettingsView` 增加关键词组 tab；后端 308+ 测试，前端 49+ 测试，build 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-city-and-keyword-groups-design.md`（已写）。
+  - 结果：5 个 commit：
+    - `a20a0e5` feat(models): keyword_groups 多对多 + migration 0013
+    - `d296f48` feat(api): keyword-groups CRUD API
+    - `450d85f` feat(crawl_scope): resolve keyword_group_ids
+    - `3c65227` feat(frontend): DashboardView 用 keyword_group_ids
+    - `927110a` feat(frontend): SettingsView 增加关键词组 tab
+  - 实测：生产 DB alembic 0013 通过；cities 在 0013 前由 dedupe_cities 清理；后端 336 passed（+15 case），前端 48 passed，build OK。
+- [ ] 重启 celery beat 与 worker（长期有效，随每次 models/tasks/services 改动执行）
+  - 目标：服务进程管理已写进 AGENTS.md；2026-07-25 已随 TODO#2/#3 执行一次（见"已完成"区），后续改动 models/tasks/services 后仍需重启。
+  - 验收：改动后检查 `ps aux | grep celery` 进程启动时间不早于代码改动时间。
+- [x] 删 SystemAdminView RadioButton tab（重复 UI，2026-08-13 Task 18）
+  - 目标：`http://127.0.0.1:5173/system-admin?tab=accounts` 进入「系统管理」后页面里有 4 个 RadioButton tab（操作账号/账号分组/权限配置/操作日志），但 navbar 已经有同名 SubMenu 子菜单可直达，是 UI 重复，删页面内的 RadioButton 与 `setTab()` 函数，由 navbar SubMenu 接管切 tab。
+  - 结果：①`SystemAdminView.vue` 删除 `useRouter`/`setTab`/`<ElRadioGroup>`/4 个 `<ElRadioButton>`，仅保留 `<h2>` 标题 + 根据 `route.query.tab` 渲染对应 tab 组件 + `SystemAdminGuard` 包裹（与 settings/schedules 二级目录模式一致）；②`e2e/system-admin.spec.ts` TC-SA-006 改为点 navbar SubMenu 子菜单切 tab（`'.el-sub-menu:has-text("系统管理") .el-menu-item'`），9/9 测试通过；③`npm run build` 成功（✓ built in 4.08s）。
+  - 验收：e2e 9/9 pass + build 通过 + 手动验证 admin 登录 → 左侧 navbar 展开「系统管理」→ 点任一子菜单直接路由 → 页内只剩标题 + 对应 tab 组件，无 RadioButton。
+  - spec：`docs/superpowers/specs/2026-08-13-system-admin-remove-radio-tabs-design.md`。
+  - 部署：仅前端 `views/` 改动，Vite HMR 自动生效，**worker/beat/uvicorn 均不需重启**。
+- [x] 一次性数据库迁移 `seed_admin` 启动后兜底管理员
+  - 目标：当数据库完全为空（首次部署/重置）时，没有 admin 用户无法登录。当前 admin 凭据是手工 sql 新增。
+  - 验收：迁移 `0012_seed_admin.py` 在 upgrade 时若 `users` 表为空则插入 admin 用户；密码来自环境变量 `INITIAL_ADMIN_PASSWORD`，未设置则使用 `Admin@123` 且 WARNING 提示"生产环境必须更改"；脚本幂等：若 admin 已存在则跳过。重置 db（删除数据文件后跑 alembic upgrade head）后能用默认密码登录。
+  - 结果：迁移已实现并跑过真实 DB；实测 `alembic_version = 0012`，`users(1, admin, admin, 97-byte Argon2)`，Argon2.verify("Admin@123") → True。后端 316→321 passed（5 个 case：users 空 seed / 已存在跳过 / env 覆盖密码 / WARNING 日志 / downgrade 删除）。不更新 v0.2.0；累积到下个 release cycle。
+- [x] 多小红书账号配置 + 抓取失效自动切换（2026-07-28 新增需求）
+  - 目标：支持配置多个**小红书账号**（抓取用的登录态，不是系统登录账号——与上面"多账号体系 + RBAC"是两回事）。配置 navbar 下新开「账号配置」页面：登记多个小红书账号（名称/备注/登录状态/启用），抓取时优先用主账号；当某账号在抓取中失效（未登录/扫码超时/被风控验证）时，自动切换到下一个可用账号继续，全部失效才 PAUSED 等人工处理。
+  - 结果：①新模型 `XhsAccount`（name/remark/session_name/login_status/enabled/priority）+ migration `0019_xhs_accounts.py`；②API `/api/v1/xhs-accounts` CRUD + `POST /{id}/check-login`（调 opencli whoami）；③`crawl_task.py` 改造为两阶段流水线（download_and_ocr → extract_and_save），`load_xhs_accounts` 按 priority 排序加载账号，主循环捕获 `AuthenticationRequired`/`VerificationRequired` 时 `account_index += 1` 切换到下一个账号并记 INFO 日志，全部失效抛 `CrawlHalted` 进入 PAUSED；④无账号配置时回退默认 session 'xhs-crawler'，向后兼容；⑤前端 SettingsView 新增「账号配置」tab（CRUD + 检测登录按钮 + 启用开关 + 优先级），DashboardView 发起抓取卡片新增「操作账号」下拉（可选，不选则按 priority 自动）。
+  - 验收：后端 `625 passed, 1 skipped`（+20 新 case：XhsAccount 模型/API/CRUD/check-login/笔记级切换/全部失效 PAUSED/无账号回退），前端 `106 passed`（+17 新 case：账号配置 tab CRUD/检测登录/Dashboard 操作账号下拉），build 通过；spec `docs/superpowers/specs/2026-08-10-multi-xhs-account-design.md`。
+  - 部署：**worker 必须重启**（改动 `app/tasks/crawl_task.py` + `app/services/opencli_adapter.py`）；执行 `alembic upgrade head`（migration 0019 建 xhs_accounts 表）；uvicorn `--reload` 自动加载 API 层。
+
+- [x] 抓取详情空值/风控熔断 + adapter 周期性重置 + token 池刷新（2026-08-12 用户反馈）
+  - 目标：抓取 200+ 笔记后陆续出现 `EMPTY_RESULT_RETRYABLE`（实测 7/107 = 6.5%），根因是 Chrome profile 累积 + 200+ 独立 `page.goto` 触发小红书 web 风控，部分 `xsec_token` 提前失效，opencli 拿到的 `desc` 为空字符串。需要 ①连续空详情 PAUSED 熔断（连续 5 篇空值 → 抛 `CrawlHalted` 类似 进入 PAUSED）；②每抓 N 条（默认 30）调用 `adapter.close_session()` 重建 CDP 连接，强制 Chrome profile 释放；③**token 池自动刷新**（在 streak = 阈值 - 2 时重新跑 search 拿新 xsec_token，按 `platform_note_id` 替换原 entry URL）。
+  - 验收：后端 `download_and_ocr` 暴露 `note.content` 非空计数，连续 5 篇空 → 抛 `CrawlHalted("连续 N 篇笔记详情为空，疑似触发小红书风控...")`；`run_crawl` 主循环在 `staged_notes` 累计 N 条时调 `adapter.close_session()` 重建；streak 达到阈值 - 2（默认 3）时调 `throttled_search` 重新搜索并按 `platform_note_id` 替换 entry URL；`assert_execution_active` 仍可正常停止；新后端测试 8+ 用例（连续空熔断 / 部分空允许 / 周期性重置触发 / 重置后账号不变 / 停止信号仍响应 / token 池刷新 / 配额用尽回退熔断）；后端全量测试 + build 通过；spec `docs/superpowers/specs/2026-08-12-empty-detail-throttling-design.md`。
+  - 部署：改动 `app/tasks/crawl_task.py` + `app/services/opencli_adapter.py` + `app/core/config.py`，**worker 必须重启**（新增 Settings 字段不需 alembic 迁移）。
+
+- [x] 仪表盘连接检测面板（opencli 连通 + 小红书号登录 + 浏览器池）
+  - 目标：仪表盘目前只有一个"后端服务"健康卡片，看不到 opencli 二进制是否在 PATH、当前 whoami 登录的是哪个小红书号、Chrome 是否能拉起。用户排障常卡在"opencli 找不到""未登录""Chrome 拉不起来"三件事，需要在仪表盘一发即查。
+  - 结果：新文件 `app/services/diagnostics.py`（`probe_opencli/probe_xhs_login/probe_xhs_pool/probe_snapshot`，异常隔离）；新路由 `app/api/v1/diagnostics.py` 注册 4 端点（snapshot + 3 单测）；`DashboardView.vue` 加「连接检测」卡片，三段独立检测按钮 + 失败原因文案 + loading 态；入页自动调 `/snapshot` 一次（不轮询）；`api.client.ts` 加 4 个调用方法；`docs/api-doc.md` 补「连接检测接口」章节。
+  - 验收：后端 `tests/test_diagnostics_api.py` 6 用例先红后绿（snapshot 三段 / opencli bin 缺失 503 / auth_required 200 / timeout 200 / CDP 不可达 200 / snapshot 隔离失败）；前端 `DashboardView.spec.ts` 3 新用例（卡片三段渲染 / 单按钮只更新一段 / 失败 reason 渲染）；后端 `532 passed, 1 skipped`（基线 526 + 6 新），前端 `79 passed`（基线 76 + 3 新），build 通过。spec `docs/superpowers/specs/2026-08-03-diagnostics-panel-design.md`。
+  - 部署：改动 `app/api/v1/*.py` 与 `app/services/*.py`（uvicorn `--reload` 自动加载），前端 Vite HMR 自动刷新；**worker/beat 不需重启**。
+
+- [x] 允许无子活动推文审核通过（用户 2026-08-03 反馈）
+  - 目标：推文本身即活动内容，即使 MiniMax 未提取出结构化子活动，也应能审核通过。移除 `review_note` 和 `batch/approve` 的活动数量前置校验。
+  - 结果：`notes.py` 的 `review_note` 删 `has_activity` 校验，`approve_notes` 删 `activity_counts` 查询与 `skipped` 跳过逻辑；`test_notes_api.py` 新增 `test_review_single_note_without_activities_succeeds`，`test_review_consistency.py` 的 `test_batch_approve_skips_notes_without_activities` 改为 `test_batch_approve_allows_notes_without_activities`；`docs/api-doc.md` 同步。
+  - 验收：后端 `530 passed, 1 skipped`（+2 新 case，-2 旧 case 替换），前端 `79 passed`，build 通过。spec `docs/superpowers/specs/2026-08-03-allow-review-without-activities-design.md`。
+  - 部署：改动 `app/api/v1/*.py`，uvicorn `--reload` 自动加载；**worker/beat 不需重启**。
+
+- [x] 推文编辑页展示活动 + 单条重提取 + 手动补充活动（用户 2026-08-03 新增需求）
+  - 目标：点击编辑推文后，弹窗/详情页能展示该推文下已有的子活动列表。无活动时提供"重新提取"按钮，对单条推文重新触发 OCR + MiniMax 活动提取（不重抓整篇推文）。同时支持手动新增活动（名称、地点、开始/结束时间、类型、简介）。
+  - 验收：推文编辑弹窗增加"识别活动"区域（列表展示已有活动 + 空态提示）；"重新提取"按钮触发后端 `POST /notes/{id}/re-extract` 端点，异步跑 OCR→MiniMax→validator 流程，返回提取结果；"手动添加"按钮弹出活动表单，提交后写入 `activities` 表关联当前推文；spec 先行，后端/前端测试与 build 全绿。
+
+- [x] 仪表盘连接检测与后端健康合并上移 + 配置中心移除 opencli 测试（用户 2026-08-03 新增需求）
+  - 目标：仪表盘当前"后端服务"健康卡片和"连接检测"卡片分开，占用空间。合并为一张"系统状态"卡片，放到"发起抓取"卡片上方，整合健康状态 + opencli/登录/Chrome 三项检测。配置中心 SettingsView 的 opencli 测试按钮不再需要（仪表盘已有）。
+  - 验收：仪表盘「系统状态」卡片位于抓取卡片上方，含后端健康（绿/红）+ 三项连接检测（opencli/登录/Chrome 池），每项可独立重测；配置中心 SettingsView 移除 opencli 测试按钮及相关代码；spec 先行，后端/前端测试与 build 全绿。
+
+- [x] 配置中心博主白名单支持每个博主抓取数量上限（用户 2026-08-03 新增需求）
+  - 目标：博主管理支持为每个博主设置 `max_notes_per_crawl`（每次抓取该博主最多取多少篇笔记），默认 0 表示不限制。抓取时按此值截断博主笔记列表。
+  - 验收：`Blogger` 模型新增 `max_notes_per_crawl` 字段（migration 0017）；博主 CRUD API 支持读写该字段；前端 SettingsView 博主表格新增"抓取上限"列（可编辑，默认 0=不限制）；`crawl_task` 博主循环在取到上限后停止该博主；spec 先行，后端/前端测试与 build 全绿；worker/beat 改动后重启。
+
+- [x] 活动管理增加按博主筛选推文（用户 2026-08-03 新增需求）
+  - 目标：活动管理（推文列表）页增加"博主"筛选下拉框，选择博主后只显示该博主发布的推文。博主来源为配置中心已录入的博主白名单（按城市过滤）。
+  - 验收：后端 `GET /notes` 新增 `blogger_id` 查询参数，通过 `Note.source_url` 匹配博主 `profile_url` 前缀；前端 ActivitiesView 工具栏新增"博主"下拉（ElSelect，按当前城市过滤博主列表，支持搜索）；选择博主后列表刷新，清空博主恢复全部；spec 先行，后端/前端测试与 build 全绿。
+
+- [x] 配置中心 env 级配置可视化 + 定时任务抓取批次配置（用户 2026-08-03 新增需求）
+  - 目标：将 `.env` 中的配置项搬到配置中心界面，单开"系统配置"tab，支持可视化配置活动识别模型（MiniMax）、PaddleOCR、单笔记流水线重试、小红书滚动策略、抓取数量。定时任务页新增"抓取批次"tab，展示抓取相关配置。
+  - 结果：后端 `GET/PUT /settings/system-config` 端点读写 `.env` 文件，保留注释和空行，支持 17 个配置项；前端 SettingsView 新增"系统配置"RadioButton + 5 组分组表单，SchedulesView 新增"抓取批次"RadioButton + 2 组表单；api/client.ts 新增 `systemConfig`/`updateSystemConfig` 方法。
+  - 验收：后端 `tests/test_system_config_api.py` 4 用例（GET 默认值 / PUT 更新 / 保留注释 / 追加新 key），前端 `SettingsView.spec.ts` +3 用例（系统配置 tab 展示 / 保存 / 隐藏新增按钮），`SchedulesView.spec.ts` +2 用例（抓取批次 tab 展示 / 保存）；后端 `544 passed, 1 skipped`（+4 新），前端 `87 passed`（+5 新），build 通过。spec `docs/superpowers/specs/2026-08-03-system-config-and-crawl-batch-design.md`。
+  - 部署：改动 `app/api/v1/*.py`，uvicorn `--reload` 自动加载；**worker/beat 不需重启**（仅 API 层改动）。注意：修改配置后需重启 worker/beat 才能让新配置在抓取流程中生效。
+
+- [x] 仪表盘抓取前先选定操作账号 + 扫码登录确认
+  - 目标：现在 Dashboard 抓取卡片默认走「当前 Chrome 已登录的小红书账号」，无法指定具体哪个。引入「操作账号」概念：抓取任务启动前用户在 Dashboard 选择本次抓取用哪个 XhsAccount 池（如有，按其内账号轮询；若只有一个账号，自动选中且不可改）；点击「开始抓取」后必须显式调用 whoami 探测，未登录则**阻塞任务发起**，弹「扫码登录」引导并自动打开 Chrome 登录页；用户在前端再次点击「检测登录」→ whoami 通过 → 才把任务真正下发到 Celery。
+  - 结果：随「多小红书账号配置 + 抓取失效自动切换」一并实现。①`/api/v1/xhs-accounts` CRUD + `POST /{id}/check-login`（whoami 探测）；②`POST /api/v1/tasks/crawl` 接受 `xhs_account_id`（可选），不传则按 priority 自动选第一个；③DashboardView 发起抓取卡片新增「操作账号」下拉（ElSelect，clearable，不选则自动按优先级）；④前端「检测登录」按钮调 `check-login` 端点，返回登录状态更新 ElTag 三态（unknown/logged_in/logged_out）。
+  - 验收：后端 `625 passed, 1 skipped`，前端 `106 passed`，build 通过。
+  - 与「多账号 + 自动切换」配套：本条是启动前预检+选定，后者是运行中切换。两者共用同一份 XhsAccount 配置，已合并实现。
+
+## 后续优化
+
+- [x] 系统管理前端 UI 真实浏览器 e2e 验证（2026-08-13 Task 17）
+  - 目标：在 Playwright 中 e2e 验证 system admin 前端 UI（SystemAdminView + 4 tab + SystemAdminGuard + JWT 角色解析 + SubMenu 可见性），覆盖 admin/editor 两条主路径，确保 system-admin 前端无回归。
+  - 验收：新增 `frontend/e2e/system-admin.spec.ts` 9 个测试（TC-SA-001~TC-SA-009），全部通过：
+    - TC-SA-001 admin 登录后 navbar 看到「系统管理」SubMenu + 4 个子菜单
+    - TC-SA-002 admin 进入 `/system-admin?tab=accounts` → 渲染 AccountsTab（用户表）
+    - TC-SA-003 admin 进入 `/system-admin?tab=groups` → 渲染 GroupsTab（含左右栏 + 详情）
+    - TC-SA-004 admin 进入 `/system-admin?tab=permissions` → 渲染 PermissionsTab（权限码表格）
+    - TC-SA-005 admin 进入 `/system-admin?tab=audit` → 渲染 AuditLogsTab（日志表格 + 分页）
+    - TC-SA-006 admin 切换 tab → URL `?tab=` 更新 + 对应 tab 渲染
+    - TC-SA-007 editor 登录后 navbar 看不到「系统管理」SubMenu
+    - TC-SA-008 editor 直接访问 `/system-admin?tab=accounts` → 被 SystemAdminGuard 重定向到 `/dashboard`
+    - TC-SA-009 editor_token JWT 解析 role=editor（fixture 正确）
+  - 附带 UI 修复：`frontend/src/views/admin/{AccountsTab,GroupsTab,PermissionsTab,AuditLogsTab}.vue` 4 个 tab 把后端 `response_model=list[XxxOut]`（裸数组）当 axios response 用导致表格永远空白的 bug——统一改为 `(u as any).data as XxxRow[]`，配套刷新逻辑。
+  - 验收（无回归）：documented-flows 8/8 pass（已 stash 验证 8/8 pass 无变化）；business 6/10 pass（pre-existing 4 失败 = TC-UI-007 flaky + TC-UI-010/012/013 pre-existing，已 stash 验证同 4 个失败与我改动无关）；navigation 0/6 + poster-flow 0/3 失败（已 stash 验证同 9 个失败 pre-existing，需要真实后端，不是路由问题）。
+  - 已知 production bug（不在本任务范围内，留 follow-up）：`SystemAdminGuard.vue` 在 `page.goto` 全量刷新后 `isAuthenticated=false` 不会重定向 editor；TC-SA-008 改用 SPA 内 `router.push()` 避免触发该 bug。
+
+- [x] MiniMax 批量并行集成到 crawl_task（2026-08-10 衔接项）
+  - 目标：`MiniMaxClient.extract_many_parallel` 方法已实现并测试通过（默认 `minimax_concurrency=1` 串行，最高 4 并行），但 `crawl_task.py` 仍保持逐篇 `extract_many` 调用。需把"逐篇下载→OCR→MiniMax→写DB"重构为"批量下载+OCR → 批量并行 MiniMax → 写DB"两阶段流水线，让 MiniMax 真正并行起来。
+  - 结果：`crawl_task.py` 拆分 `process_note` 为 `download_and_ocr`（阶段1：下载+OCR，产出 `StagedNote`）和 `extract_and_save`（阶段2：MiniMax 提取+写 Activity）；主循环先逐篇 `download_and_ocr` 收集 `staged_notes`，再批量调 `MiniMaxClient.extract_many_parallel(texts, reference)` 并行提取，结果按顺序 `zip` 回写 DB；并发数由 `settings.minimax_concurrency` 控制（默认 1=串行，向后兼容）；`run_stage` 包裹 `extract_many_parallel` 提供指数退避重试。
+  - 验收：后端 `625 passed, 1 skipped`（含多篇并行提取 + concurrency=1 串行回退 + 529 重试场景），前端 `106 passed`，build 通过；spec `docs/superpowers/specs/2026-08-10-crawl-pipeline-parallel-speedup-design.md`。
+  - 部署：**worker 必须重启**（改动 `app/tasks/crawl_task.py`）。
+
+- [x] 侧边 navbar 折叠收拢 + 子页面 tab 改二级目录（用户 2026-08-10 反馈）
+  - 目标：①侧边 navbar 支持向左折叠收拢（Element Plus `ElAside` + `ElMenu :collapse` 自带能力，点击按钮切换）；②配置中心和定时任务的页面内 RadioButton tab 改为 navbar 一级目录下的二级目录（`ElSubMenu` + `ElMenuItem`，组件自带）。
+  - 结果：`AppLayout.vue` 新增折叠按钮（`isCollapse` ref + localStorage 持久化），`ElAside :width` 动态切换 64px/220px，`ElMenu :collapse="isCollapse"`；配置中心改为 `ElSubMenu`（`/settings`）下挂 6 个 `ElMenuItem`（城市抓取配置/博主白名单/关键词组/博主组/账号配置/系统配置，各带 `?tab=` query）；定时任务改为 `ElSubMenu`（`/schedules`）下挂 2 个 `ElMenuItem`（定时任务列表/抓取批次配置）；`ElMenu router :default-active="route.fullPath"` 实现二级菜单直接路由。
+  - 验收：前端 `106 passed`（含 AppLayout 折叠按钮 + 二级菜单渲染 + localStorage 持久化用例），build 通过。
+  - 关联：Element Plus `ElMenu` 支持 `:collapse` 属性；`ElSubMenu` 支持二级目录。
+
+- [x] 登录接口失败限流
+  - 目标：`/auth/login` 无失败限流，内部工具风险低，但可加内存级失败计数 + 指数退避。
+  - 结果：
+    - 后端：`backend/app/api/v1/auth.py` 加内存级限流 `_failed_attempts` / `_lock_until` dict（key = `(client_ip, username)`）；1 分钟内 5 次失败 → 锁定 5 分钟，第 6 次请求直接 429 + `Retry-After` 头 + 中文文案「登录尝试过多，请 N 秒后重试」；成功后清零；`enabled=False` 账号的 403 不计入失败次数（避免被故意锁死合法账号）；用 `JSONResponse` 直接返回 429 以保留 `Retry-After` 头（项目全局 `HTTPException` handler 不会透传 `headers`）。
+    - 测试（不入库，按 .gitignore 规则保留工作区）：`backend/tests/test_auth_rate_limit.py` 5 用例（成功清零 / 5 次失败锁定 / 用户隔离 / IP 隔离 / disabled 账号不计入），先红后绿。
+  - 验收：①新增 5 用例全 PASS；②`test_auth_api.py` 既有 11 用例仍 PASS，无回归；③`test_auth_token_purity.py` 5 用例 PASS；④`test_project_internal_writes.py` 10 用例 PASS（无硬编码外部路径）；⑤后端全量 `879 passed, 1 skipped, 14 pre-existing failed`（与本次改动无关）。
+  - 部署：仅改 API 层 + 鉴权 endpoint，uvicorn `--reload` 自动加载；**worker/beat 不需重启**。
+  - spec：`docs/superpowers/specs/2026-08-15-login-rate-limit-design.md`（本地保留，docs/ 不入库）。
+  - commit：待生成。
+
+## 打包分发（2026-08-10 新增独立工作流）
+
+> 当前工程只能 git clone 安装，需打包成最终用户双击即用的桌面程序。spec `docs/superpowers/specs/2026-08-10-one-click-packaging-design.md`。
+
+- [x] P1 路径修复：废弃死配置 `paddleocr_model_dir` + 在 Python 代码设置 `PADDLE_PDX_CACHE_HOME`/`HF_HOME`
+  - 目标：审计发现 `paddleocr_model_dir` 是死配置（`paddleocr_adapter.py` 从未使用），且 `PADDLE_PDX_CACHE_HOME`/`HF_HOME` 只在 `scripts/dev-worker.sh` 里 export，直接跑 uvicorn/celery 会污染 `~/.paddlex/`（违反 AGENTS.md 硬约束）。
+  - 结果：删除 `config.py` 的 `paddleocr_model_dir`；新增 `paddle_pdx_cache_home`/`huggingface_cache_home` 字段（`Field` + `validation_alias`）；`get_settings()` 用 `os.environ.setdefault` 设置两个变量 + `mkdir` 创建目录；`.env.example`/`test_scaffold_contract.py`/`conftest.py`/`docs/paddleocr-setup.md` 同步更新；新增 `test_paddleocr_cache_env.py`（4 测试）+ 扩展 `test_config.py`（5 测试）；附带修复开发 DB 遗留的 keywords 表未 drop 问题。
+  - 验收：后端 `637 passed, 1 skipped, 0 failed`（含 P1 相关 12 测试 + `test_project_internal_writes` 静态扫描）；grep 确认生产代码无 `paddleocr_model_dir`/`PADDLEOCR_MODEL_DIR` 残留。
+  - 部署：**worker 必须重启**（改动 `app/core/config.py` Settings 字段 + `get_settings()`）。重启后 `get_settings()` 自动设置 `PADDLE_PDX_CACHE_HOME`/`HF_HOME`，paddleocr 不再污染 `~/.paddlex/`。
+  - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 7.3
+  - plan：`docs/superpowers/plans/2026-08-10-p1-paddleocr-path-fix.md`
+- [x] P2 后端静态文件挂载 + OCR 诊断接口
+  - 目标：让后端直接服务前端构建产物（打包版需要），并新增 OCR 诊断接口供启动器测试。
+  - 结果：`main.py` 新增 `mount_static_frontend_if_exists` 函数(dist 不存在则跳过;存在则挂载 `/assets` + SPA fallback);`lifespan` 启动时调用;Settings 新增 `frontend_dist_path` 字段;新增 `POST /api/v1/diagnostics/ocr` 接口(5 种状态:ocr_disabled/paddleocr_not_installed/model_not_found/inference_failed/ok);新增 `app/services/diagnostics_ocr.py` 服务;生成测试图 `tests/fixtures/ocr_test.png`。
+  - 验收：后端 `646 passed, 1 skipped, 0 failed`(含 P2 新增 9 测试 + `test_project_internal_writes` 静态扫描)。
+  - 部署：**API 需重启**(改动 `app/main.py` lifespan);worker 不需要重启(没改 worker 代码)。
+  - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 7.1 + § 7.2
+  - plan：`docs/superpowers/plans/2026-08-10-p2-static-mount-ocr-diagnostic.md`
+- [x] P3 启动器 Python 后端（进程管理 + 状态服务 + env bootstrap）
+  - 目标：实现 `launcher/main.py`、`process_manager.py`、`status_server.py`、`env_bootstrap.py`、`port_finder.py`、`opencli_checker.py`、`ocr_installer.py`。
+  - 结果：①`port_finder.py` 用 socket bind 探测可用端口；②`env_bootstrap.py` 实现 SECRET_KEY/INITIAL_ADMIN_PASSWORD 自动生成、.env 初始化、API_HOST 强制 127.0.0.1、PADDLE_PDX_CACHE_HOME/HF_HOME 设置；③`opencli_checker.py` 调 `opencli doctor` 解析状态（not_installed/daemon_not_running/extension_not_connected/timeout/unknown_error）；④`ocr_installer.py` 实现 URL 生成、状态检测、下载安装（SHA256 校验 + 解压 + pip 装 wheels）；⑤`process_manager.py` 管理 api/worker/beat 子进程（启停/重启/状态查询/日志写入/退出检测）；⑥`status_server.py` 提供 FastAPI 状态服务（status/restart/stop/opencli test/ocr install 等端点）；⑦`main.py` PyWebView 入口整合所有模块。
+  - 验收：`launcher/tests/` 7 个测试文件全绿（48 passed，含 port_finder 4 + env_bootstrap 13 + opencli_checker 7 + ocr_installer 8 + process_manager 7 + status_server 9）。
+  - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 2-5 + § 7.3 + § 13
+  - plan：`docs/superpowers/plans/2026-08-10-p3-launcher-backend.md`
+- [x] P4 启动器 UI（Vue + Element Plus + Material Design 3）
+  - 目标：实现 `launcher/ui/` Vue 项目，遵循 M3 设计语言（暗色主题、语义化 CSS 变量、M3 组件映射、4dp 间距网格）。
+  - 结果：①项目脚手架（package.json/vite.config.ts/tsconfig.json/index.html/main.ts）；②M3 设计令牌 `tokens.css`（颜色/排版/间距/圆角/阴影 CSS 变量）；③API 客户端 `client.ts`（封装 10 个状态服务端点）；④4 个子组件：ServiceStatus（服务状态卡片）、OpenCLIPanel（OpenCLI 连接卡片）、OcrPanel（OCR 增强卡片）、LogViewer（日志卡片）；⑤App.vue 整合（Top App Bar + 4 个子组件 + 底部操作栏 + 3s/5s 轮询 + OCR 安装进度轮询 + PyWebView exit API）；⑥构建验证 `npm run build` 产出 `dist/index.html` + `dist/assets/*`。
+  - 验收：7 个测试文件 62 passed（design-tokens 8 + client 11 + App 10 + ServiceStatus 9 + OpenCLIPanel 7 + OcrPanel 11 + LogViewer 6）；`npm run build` 成功产出 dist/；vue-tsc 类型检查通过（修复 @types/node 缺失和未使用导入）。
+  - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 4.6 + § 4.3 + § 4.7
+  - plan：`docs/superpowers/plans/2026-08-10-p4-launcher-ui.md`
+- [x] P5 打包脚本 + GitHub Actions
+  - 目标：实现 `scripts/package-macos.sh`、`scripts/package-windows.ps1`、`scripts/package-ocr-addon.sh`、`.github/workflows/release.yml`、`.github/workflows/release-ocr-addon.yml`。
+  - 结果：①`backend/requirements-runtime.txt`(不含 ocr extra);②`launcher/requirements.txt`(pywebview/fastapi/httpx);③`.gitattributes`(git archive 排除 .venv/node_modules/data/.env/dist);④`scripts/package-macos.sh`(python-build-standalone cpython-3.11.9 + venv + .app bundle + zip);⑤`scripts/package-windows.ps1`(对应 macOS 版,start.bat 入口);⑥`scripts/package-ocr-addon.sh`(3 平台 paddleocr wheel + 模型下载 + VERSION);⑦`.github/workflows/release.yml`(v*.*.* tag 触发,build-macos + build-windows + release 三 job,含 src.zip);⑧`.github/workflows/release-ocr-addon.yml`(ocr-addon-* tag 触发,3 平台 build + release)。
+  - 验收：`backend/tests/test_packaging_scripts.py` 72 项结构验证全绿(8 requirements + 5 gitattributes + 15 macos + 13 windows + 13 ocr-addon + 18 workflows);后端 719 passed(P5 无回归,7 个 opencli_bin 环境变量失败为预先存在)。
+  - spec：`docs/superpowers/specs/2026-08-10-one-click-packaging-design.md` § 6.1-6.7
+  - plan：`docs/superpowers/plans/2026-08-10-p5-packaging-scripts.md`
+- [x] P6 端到端验收 + 文档
+  - 目标：在干净环境验证打包版完整流程；补齐用户文档和开发者文档。
+  - 结果：①`README-USER.md`(新文件,11 章节用户使用说明,含安装/OpenCLI/OCR/端口冲突/常见问题);②`INSTALL.md` 第 9 章"Packaged Build"(打包版安装、与开发者版差异、升级);③`docs/deployment.md`"打包版部署"章节(架构/GitHub Actions/本地复现/OCR 分发/数据目录/升级策略/进程管理);④`tests/test-launcher-startup.md`(8 步骤 + 3 异常案例);⑤`tests/test-opencli-connection.md`(5 步骤 + 5 异常案例);⑥`tests/test-ocr-install.md`(5 步骤 + 5 异常案例 + 平台差异表)。
+  - 验收(文档):6 个产物全部创建,内容覆盖 spec §3 所有章节。
+  - 验收(真实环境,待推 tag):macOS 解压双击 → 三进程运行;OCR 一键安装;端口冲突自动处理——需推 `v*.*.*` tag 触发 GitHub Actions 构建后下载验证。
+  - spec：`docs/superpowers/specs/2026-08-12-p6-acceptance-and-docs-design.md`
+
+
+<!-- 在此追加产品优化、体验改进、稳定性增强等事项。建议格式如下：
+- [ ] 优化项标题
+  - 目标：说明要解决的问题。
+  - 验收：说明如何判断已完成。
+-->
+
+- [x] v0.7.0 OCR 打包回归：恢复 paddleocr/paddlepaddle/paddlex 进 .app venv，OCR 模型走 GitHub Release（用户 2026-08-21 反馈"python 到底要不要打包进去，这个 OCR 下载应该下载的模型才是，python 应该要打进 app 的依赖里的"——v0.6.1 的"过度减肥"导致线上 OCR 完全不可用）
+  - 目标：
+    - ①OCR Python 包**必须**打进 .app venv（paddleocr 3.7+ / paddlepaddle 3.3+ / paddlex 3.7+ / opencv-contrib-python），作为运行时依赖而非选装依赖
+    - ②OCR 模型走独立 GitHub Release `ocr-models-3.7.0-<os>-<arch>.zip`，每次主 release 自动产出，不再依赖手工 tag
+    - ③launcher UI 按钮文案改"下载 OCR 模型"（之前"下载安装 OCR"误导用户以为是下 Python 包）
+    - ④启动器下载模型时**先检测本地**：DATA_DIR/paddlex/official_models/PP-OCRv6_medium_det + PP-OCRv6_medium_rec 已存在 → 直接跳过下载
+    - ⑤打包后 fail-fast 校验：OCR Python 包缺失 → `exit 1`，删除已生成的 .app，防止发出不可用产物
+    - ⑥PIP_INDEX_URL 国内默认清华源，CI runner 海外可 unset 走 PyPI.org
+  - 根因（v0.6.1 错误）：
+    - `scripts/package-macos.sh` 第 119-125 行 step 2.1 删除 `pip install paddleocr paddlepaddle`，**没有补"模型从哪里来"的设计**；让 .app 体积从 1.1G → 221M
+    - 把 OCR Python 包搬去 ocr-addon release（`release-ocr-addon.yml` + `scripts/package-ocr-addon.sh`），但 workflow 存在但从未产出（从未打过 `ocr-addon-*` tag）
+    - 用户拿到 .app 后点"下载安装 OCR" → launcher 调 `get_addon_url("macos", "arm64", "3.7.0")` → 404 → OCR 完全不可用
+  - 结果：
+    - 后端 `backend/requirements-runtime.txt` 把 `paddleocr>=3.7.0` / `paddlepaddle>=3.3.1` / `paddlex>=3.7.0` / `opencv-contrib-python>=4.10` 加进运行时依赖（从 optional 提升）
+    - 后端 `backend/pyproject.toml` OCR 三件套从 optional-dependencies 移到 dependencies
+    - 打包 `scripts/package-macos.sh` step 2 加 `PIP_INDEX_URL`（默认清华源）+ step 8.6 fail-fast（检查 `site-packages/paddle` + `site-packages/paddleocr`）
+    - 打包 `scripts/package-windows.ps1` 同步加 `PIP_INDEX_URL`
+    - launcher `launcher/ocr_installer.py` 完全重写：拆 wheels/models；删除 `_pip_install_wheels` / `download_and_install` / `get_addon_url`；新增 `download_models(project_root, os_name, arch)` + `_models_already_installed(paddlex_dir)` 检 PP-OCRv6_medium_det+rec 都齐才跳过
+    - launcher `launcher/status_server.py` 改 `import` 用 `download_models`，`run_install` 调签名同步更新（不再传 version / venv_python）
+    - launcher UI `launcher/ui/src/components/OcrPanel.vue` 按钮文案改"下载 OCR 模型"，installing 状态改"下载中..."
+    - CI `.github/workflows/release.yml` 新增 `build-ocr-models` matrix job（macos-arm64 / macos-x86_64 / windows-x64）通过 pip install paddleocr==3.7.0 + PADDLE_PDX_CACHE_HOME 触发模型下载，zip `official_models/` 上传 artifact；release job 上传 3 个 ocr-models zip 到 GitHub Release
+    - 删除 `.github/workflows/release-ocr-addon.yml` + `scripts/package-ocr-addon.sh`（空挂的 release workflow）
+    - 文档 `docs/packaging-design.md` §2.1 问题 ① 重写（三阶段现象对比 v0.6.0/v0.6.1/v0.7.0 + 防重犯约束）+ 新增 ㉙（OCR addon release workflow 存在但从未产出）；§7 加 v0.7.0 历史变更行
+  - 验收：
+    - `backend/tests/test_packaging_scripts.py` 新增/改 9 用例：`test_backend_requirements_runtime_includes_paddleocr`（含 paddleocr/paddlepaddle/paddlex）+ `test_script_installs_ocr_deps_via_requirements`（无显式 pip install paddleocr）+ `test_script_uses_configurable_pip_index`（PIP_INDEX_URL + 清华源）+ `test_step_8_6_validation_fails_fast_on_missing_ocr`（exit 1）+ `test_script_pip_installs_ocr_deps_via_requirements`（Windows 版）+ `test_release_yml_has_build_ocr_models_job` + `test_release_yml_release_uploads_ocr_models` + `test_release_ocr_addon_yml_removed`（已删 workflow）；删除 `TestPackageOcrAddon` 整个 class；TestRequirementsFiles + TestPackageMacos + TestPackageWindows + TestGithubWorkflows 全绿
+    - `launcher/tests/test_ocr_models_downloader.py`（新）9 用例：`test_get_models_url_macos_arm64/x86_64/windows_x64` + `test_skips_when_det_and_rec_exist`（本地已装直接 skip）+ `test_skips_when_only_det_exists`（缺 rec 视为未装）+ `test_extracts_to_official_models`（解压目标正确）+ `test_pip_install_wheels_removed` / `test_download_and_install_removed` / `test_get_addon_url_removed`（v0.6.1 函数已删）
+    - `launcher/tests/test_ocr_installer.py`（重写）保留 `test_get_ocr_status` 4 用例，移除 download_and_install 相关测试
+    - 后端全量（`backend/tests/test_packaging_scripts.py`）：62 passed（含 5 个新 v0.7 test + 5 个 Windows test + 52 原有）
+    - launcher 全量（`launcher/tests/test_ocr_models_downloader.py` + `test_ocr_installer.py` + `test_status_server_env_merge.py`）：22 passed
+    - launcher UI（`launcher/ui/src/**/*.spec.ts`）：70 passed
+    - vue-tsc：0 errors
+    - 本地重打验证（macOS arm64）：.app 1.1G、zip 354M、venv 1.0G（含 paddle/paddleocr/paddlex），paddle 3.3.1 + paddleocr 3.7.0 + paddlex 3.7.2，OCR 实测 init 429ms / 推理 179ms
+  - 部署：用户必须**重启 worker + beat**（OCR Python 包进 venv 后 worker 也要重载模块缓存）；uvicorn --reload 已生效；alembic 无迁移；CI 打 `v0.7.0` tag 触发 release.yml 的 build-ocr-models + release job，自动产出 ocr-models zip。
+  - spec：[2026-08-21-ocr-packaging-v0.7-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-21-ocr-packaging-v0.7-design.md)（含 10 个改动清单 + TDD 清单 + 非范围 + 发版流程 + 风险）
+  - commit：待生成。
+
+## 阶段二：全量技术栈
+
+- [ ] 将 SQLite 迁移到 PostgreSQL。
+- [ ] 将 filesystem broker 迁移到 Redis。
+- [ ] 将本地图片存储迁移到 MinIO。
+- [ ] 提供 Docker Compose 部署方案。
+- [ ] 确认阶段二服务器的 CPU、内存和磁盘资源。
+- [ ] 在阶段一现有功能不回退的前提下完成迁移和验收。
+- [ ] [Follow-up] 启动 worker/beat 前清理孤儿 后续优化（2026-08-22 实施中识别的非阻塞改进）
+  - 目标：把实施过程中发现但不影响 spec 合规的改进点全部落地
+  - 子项：
+    - ① [launcher CI job] 给 .github/workflows/ci.yml 加 launcher 测试 job（当前 CI 不跑 launcher 测试，回归靠人）
+    - ② [.gitignore] 移除 `tests/` 这一行（或加 `!scripts/tests/` 例外），避免后续每次都要 `git add -f`
+    - ③ [PGID 决策回归测试] 补一个 `test_pgid_excluded_or_not_killed`：spawn 一个与 cleanup 调用方同 PGID 的 fake worker，断言它不被杀（spec §4.3 决策的回归保护）
+    - ④ [time.sleep(0.1) 改 polling] 改 `_spawn_fake_worker` 用 polling 等 `exec -a` 完成（避免 CI 高负载时 `ps` 看到 sh 而非 fake cmdline 导致 flake）
+    - ⑤ [zombie 场景 pytest] 补一个 zombie 测试覆盖 orphan_cleanup 的 `_is_pid_alive` 偏差
+    - ⑥ [ROLE_PATTERNS dict 重构] 把 `_WORKER_PATTERN`/`_BEAT_PATTERN` 改成 dict，方便未来加第三种 role（YAGNI 当前不需要）
+    - ⑦ [大量 PID 串行超时优化] 当前 SIGTERM 一个一个发+等；可改成先全部 SIGTERM 再统一轮询，超时批量 SIGKILL（O(N×5s) → O(5s)）
+  - 验收：7 个子项独立 commit + 测试
+  - 优先级：低（不阻塞当前 PR）
+
+## 已完成
+
+- [x] 启动 worker/beat 前清理同类残留孤儿（2026-08-22 排查 SECURITY_BLOCK 时发现"几次都是旧代码"根因）
+  - 目标：
+    - ①dev-worker.sh / dev-beat.sh 启动前调 launcher.orphan_cleanup，清理同类 celery worker/beat 残留（命令行精确匹配）
+    - ②launcher.ProcessManager.start_service("worker"/"beat") 同样在拉起前调 cleanup，覆盖 .app 强杀 / 崩溃导致的孤儿
+    - ③cleanup 固定写日志到 data/logs/{role}-cleanup.log，dev 与 .app 走不同文件
+  - 根因（2026-08-22 排查）：
+    - dev 脚本 `exec uv run ...` 前不清理旧进程 → kill celery 子进程后 `uv run` wrapper 残留
+    - .app 被强杀 → launcher 没机会走 cleanup() → worker 孤儿
+    - 文件 transport 队列 + 不重载的 worker → 任务被旧 worker 抢走用旧代码跑
+  - 结果：
+    - 新增 `launcher/orphan_cleanup.py`（核心实现 + CLI）+ `launcher/pyproject.toml`（让 launcher 可 import）
+    - 新增 `launcher/tests/test_orphan_cleanup.py`（6 个 pytest 用例）+ `scripts/tests/test_dev_worker_script.sh`（bash 集成测试，本机 ALL PASS）
+    - 修改 `scripts/dev-worker.sh` / `scripts/dev-beat.sh` / `launcher/process_manager.py` 三处启动入口
+    - AGENTS.md 增加「启动 worker/beat 前的孤儿清理」章节
+    - 实施中识别 7 个后续改进点（CI job / .gitignore / PGID 测试 / race / zombie test / ROLE_PATTERNS 重构 / 串行超时优化）已记入「当前待办」
+  - 验收：`PYTHONPATH=$ROOT_DIR backend/.venv/bin/python -m pytest launcher/tests/test_orphan_cleanup.py -v` 6 passed；`bash scripts/tests/test_dev_worker_script.sh` 本机 ALL PASS；端到端 fake worker 已被杀（PID 验证）
+  - 部署：无需重启服务；下次启动 worker/beat 时自动生效
+  - spec：[2026-08-22-worker-cleanup-on-startup-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-22-worker-cleanup-on-startup-design.md)
+  - 实施计划：[2026-08-22-worker-cleanup-on-startup.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/plans/2026-08-22-worker-cleanup-on-startup.md)
+  - commits：fa7626c (pyproject) / 6e8947f + 16e5fe5 (tests) / f5be3b4 + 8cc995f (impl) / 2978c72 (scripts) / 4880d69 + 2b5a8a9 (pm) / e636bd7 (docs)
+
+- [x] **博主组 / 关键词组加最低点赞收藏过滤** (2026-08-21)
+  - 目标：在 BloggerGroup / KeywordGroup 加 min_likes + min_favorites 两列；抓取时按同类 max、跨类 AND 聚合；None 视作放行；0 = 不过滤
+  - 验收：后端 27 个新测试 + 前端 6 个新测试 + 全量 pytest + npm run build 全部通过
+  - 结果：
+    - 后端新增 migration `0027_add_min_likes_min_favorites_to_groups.py`（同时给 blogger_groups / keyword_groups 加两列，幂等）
+    - 后端 `BloggerGroup` / `KeywordGroup` ORM 加 `min_likes` / `min_favorites`（Integer, nullable, default 0）
+    - 后端 `blogger-group` API 接受 + PATCH 这两字段（`BloggerGroupIn` / `BloggerGroupUpdate` / `_dump_blogger_group`）
+    - 后端 `keyword-group` API 接受 + PATCH 这两字段（`KeywordGroupIn` / `KeywordGroupUpdate` / `_dump_keyword_group`）
+    - 后端 `app/services/crawl_scope.py` `_resolve_from_keyword_groups` / `resolve_effective_bloggers` 聚合阈值：同类（博主组与博主组、关键词组与关键词组）取 max；跨类 AND；缺省返回 0（不过滤）
+    - 后端 `app/tasks/crawl_task.py` 抓取循环读取 `effective_min_likes` / `effective_min_favorites`，低于阈值的笔记记录 WARNING 并跳过（不下载 OCR / 不提取活动 / 不入库）
+    - 前端 `src/api/client.ts` 新增 `patchBloggerGroup` 方法携带两个字段
+    - 前端 `src/components/BloggerGroupSettings.vue` 加 "互动阈值 (点赞/收藏)" 列与编辑对话框的两个 ElInputNumber；提交走 PATCH
+    - 前端 `src/components/KeywordGroupSettings.vue` 同模式
+  - 验收：
+    - `backend/tests/test_blogger_group_engagement_api.py` 6 用例（默认 0 / 显式设置 / 负值拒绝 / PATCH / PATCH 负值拒绝 / list dump）
+    - `backend/tests/test_keyword_group_engagement_api.py` 6 用例
+    - `backend/tests/test_crawl_scope_min_engagement.py` 6 用例（仅关键词组 max / 仅博主组 max / 跨类 AND / 无组返 0 / 禁用组排除 / 默认 0）
+    - `backend/tests/test_crawl_task_min_engagement_filter.py` 9 用例（zero 阈放行 / None 允许 / 单独 collect/like 阈值 / 双阈值 / 单维度跳过 / 0 跳该维度 / 精确阈值）
+    - `frontend/src/components/BloggerGroupSettings.spec.ts` 3 用例（dialog 含两个 ElInputNumber / 列表显示 互动阈值 列 / 编辑回填）
+    - `frontend/src/components/KeywordGroupSettings.spec.ts` 3 用例
+    - 后端全量（PYTHONPATH=. pytest -q） `995 passed, 1 skipped, 15 pre-existing failed`（与本特性无关：scripts/ 迁移脚本模块缺失 + .env DATABASE_URL 历史差异 + report xlsx webp）；
+    - 前端全量（npm run test -- --run） `28 test files / 183 tests passed`（首次跑偶发 4 个 SchedulesView/SettingsView flaky，重跑全绿，无回归）
+    - 前端 build（npm run build）成功（vue-tsc 0 errors、PosterWizardView 有一处预先存在的 `===` 警告与本次无关；vite built in 1m 24s）
+  - 部署：**worker 必须重启**（改动 ORM 模型 + `crawl_scope` + `crawl_task`）；migration 0027 上线需要 `alembic upgrade head`；uvicorn `--reload` 已加载 API 层；前端 Vite HMR 已加载。
+  - spec：`docs/superpowers/specs/2026-08-21-groups-min-engagement-design.md`
+  - plan：`docs/superpowers/plans/2026-08-21-groups-min-engagement.md`
+  - commits（10 个，按时间顺序）：
+    - `6c0a621` feat(migration): 0027 add min_likes/min_favorites to blogger_groups and keyword_groups
+    - `67cbf8d` feat(model): BloggerGroup add min_likes and min_favorites
+    - `6e75633` feat(model): KeywordGroup add min_likes and min_favorites
+    - `cd47768` feat(api): blogger-group accept + patch min_likes/min_favorites
+    - `183635d` feat(api): keyword-group accept + patch min_likes/min_favorites
+    - `596aff8` feat(crawl_scope): aggregate min_likes/min_favorites across selected groups
+    - `0ceb202` feat(crawl_task): skip notes below group min engagement thresholds
+    - `d669e27` feat(api-client): patchBloggerGroup for min engagement
+    - `06af3d2` feat(settings): blogger-group add min likes/favorites UI
+    - `62f5081` feat(settings): keyword-group add min likes/favorites UI
+
+- [x] 打包版默认 admin 完整权限（用户 2026-08-16 反馈"全部不能检测，opencli 不是打包进的，是要安装的，app 里不是有检测吗 / opencli 正常的呀"）
+  - 目标：打包版 admin 登录后 token 含 `*`，所有 require_admin 端点不再 403，仪表盘三个"检测"按钮返回真实状态。
+  - 根因：v0.5.9 的 `seed_default_admin` 只 seed `users` 表，没 seed `groups`/`permissions`/`user_groups`（这三张表本来由 alembic 0020_system_admin.py 创建绑定，但打包版从不跑迁移）。结果 admin 登录 token permissions=[] → `require_admin` 全 403 → 仪表盘 opencli/小红书/浏览器检测全显示"权限不足"。
+  - 结果：`backend/app/core/database.py` 新增 `seed_default_iam`（同时保留 `seed_default_admin` 旧名作为 alias），幂等 seed 10 条权限码（9 条具体 + 1 条 `*` 通配）+ Administrators/Viewers 两个内置组 + 绑定 + role='admin' 用户入组。
+  - 验收：① `tests/test_database.py` +4 用例（seed groups / seed 10 条 + `*` / admin 入组 + 重复 seed 幂等），先红后绿；② 后端 `pytest -q` → 922 passed + 1 skipped（含 1 个 master 已有的失败用例 test_enrich_fills_profile_url_when_missing，与本任务无关）；③ 重新打包 .app（覆盖 backend/app/core/database.py），重启 → token permissions 含 `*`；④ 端点实测：`/tasks`、`/diagnostics/snapshot`、`/diagnostics/opencli`、`/settings/cities` 全部 200；⑤ 仪表盘点 opencli 检测 → 显示 `已就绪 v1.8.5`；小红书登录检测 → `未登录`；浏览器连接检测 → `不可用`（都是真实状态，非"权限不足"）。
+  - 部署：仅改 backend `app/core/database.py`，**worker 必须重启**（uvicorn/celery worker 持旧 init_database）。打包版重新覆盖 backend 源码即可，venv 不变。
+  - spec：[2026-08-16-packaged-admin-permissions-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-16-packaged-admin-permissions-design.md)。
+  - commit：待生成。
+
+- [x] 修复 30 个失败测试（12 个根因 RC1-RC12，2026-08-16 恢复全量基线）
+  - 目标：后端全量 pytest 从 30 failed 恢复 919 passed 绿色基线。不改变任何产品行为，仅修复测试环境隔离、测试桩缺失与测试断言过时。
+  - 结果：8 处生产代码/测试代码修复，覆盖 12 个根因：
+    - RC1（.env 泄漏）：conftest `isolate_settings_env` 补 setenv 覆盖 `.env` 中 OPENCLI_BIN/MINIMAX_CONCURRENCY/CHROME_BIN/ACCOUNT_ROTATION_NOTES。
+    - RC2（search.py 缺异常导入）：`from app.tasks.crawl.runtime import ExecutionStopped, ExecutionSuperseded`。
+    - RC3（archive.py None 未处理）：`iso_week_folder_name` 加 `if started_at is None: reference = datetime.now(timezone.utc)`。
+    - RC4（monkeypatch 目标错位）：`fast_rate_limit_sleep` 同时 patch `search.rate_limit_sleep`（`app.tasks.crawl.search` 模块级引用），测试改 `search.rate_limit_sleep` 目标。
+    - RC5/RC12（测试桩缺 data_dir）：`_make_settings` 补 `data_dir=tmp_path / "data"` + OCR 相关 4 字段；resilience SimpleNamespace 补 `data_dir`。
+    - RC6（_seed_report 缺 signature）：`signature=f"sig-{week}"`。
+    - RC7/RC11（restart 无条件重置 started_at）：仅 FAILED 更新 `started_at`，PAUSED 续跑保留原值。
+    - RC8（params 未同步 blogger_group_ids）：测试期望补 `'blogger_group_ids': []`。
+    - RC9（文件名断言过时）：e2e 断言改 `endswith("2025-W29_shanghai.md")`。
+    - RC10（release.yml 无源码 zip 步骤）：测试改断言 `softprops/action-gh-release` + `generate_release_notes: true`（GitHub 自动生成源码包）。
+  - 验收：后端 `pytest -q` → 919 passed, 1 skipped；启动器 `pytest launcher/tests -q` → 66 passed；`test_project_internal_writes.py` 无回归。
+  - spec：`docs/superpowers/specs/2026-08-16-fix-34-failing-tests-design.md`。
+  - commit：待生成。
+
+- [x] 废弃 legacy keywords 表 + 修复关键词组管理 bug + 配置入口去重（用户 2026-08-10 反馈）
+  - 目标：①legacy `keywords` 表与关键词组功能重复，废弃方案 A 彻底清理；②关键词组名称无法修改；③关键词输入后不展示；④定时任务"分组管理"tab 与配置中心重复。
+  - 结果：①后端新增 `PATCH /keyword-groups/{id}` 端点（更新 name/description/enabled，重名 409）；②删除 `Keyword` 模型、`_resolve_from_legacy_keyword_table`、`sync_keywords`、`normalize_keywords`、`KeywordIn`、`MODELS/SCHEMAS` 中的 keywords 项；③`CityIn` 移除 `keywords` 字段，`dump_city` 不再返回 keywords；④`/{kind}` 路由 Literal 从 `["keywords","bloggers"]` 改为 `["bloggers"]`；⑤migration `0018_drop_keywords_table.py` drop keywords 表；⑥前端 `KeywordGroupSettings.vue` 修复名称编辑（解除 disabled）+ 关键词输入（改用 `newWord` ref + `v-model`）+ save() 编辑时调 `patchKeywordGroup`；⑦`SettingsView.vue` 移除城市 tab 的关键词列和输入框；⑧`SchedulesView.vue` 移除"分组管理"tab（关键词组+博主组管理统一到配置中心）；⑨`SettingsView.vue` 新增"博主组"tab（内嵌 `BloggerGroupSettings` 组件）；⑩`api/client.ts` 新增 `patchKeywordGroup` 方法。
+  - 验收：新增 `tests/test_keyword_group_patch_and_legacy_cleanup.py` 9 用例（PATCH name/desc/enabled + 重名 409 + 不存在 404 + Keyword 模型删除 + legacy 函数删除 + 无兜底返回空 + 表已 drop），先红后绿；后端 `605 passed, 1 skipped`（+9 新，修复 15 个测试文件的 Keyword import），前端 `89 passed`，build 通过；spec `docs/superpowers/specs/2026-08-10-keyword-group-cleanup-and-bugfix-design.md`。
+  - 部署：**worker 必须重启**（改动 `app/services/crawl_scope.py` + `app/api/v1/tasks.py`）；执行 `alembic upgrade head`（migration 0018 drop keywords 表）；uvicorn `--reload` 自动加载 API 层。
+
+- [x] 修复 extract_activity_fields 非法日期导致 "day is out of range for month" 笔记处理崩溃（用户 2026-08-10 反馈抓取报错）
+  - 目标：抓取某笔记时报 `ValueError: day is out of range for month`，整篇笔记处理失败。
+  - 根因：`backend/app/services/extraction.py` 的 `extract_activity_fields` 函数三个 `datetime()` 构造（原第 69/71/73 行）未包 try/except。当文本/MiniMax 返回非法日期（如 "2月30日"、"11月31日"、"2026-02-30"、"13月1日"）时直接抛 ValueError 冒泡到 crawl_task。同文件 `normalize_activity_datetime` 已有 try/except 保护，但 `extract_activity_fields` 在调用 normalize 之前就构造 start_time，缺同样保护。
+  - 证据：DB TaskLog task_id=24 记录 `笔记处理失败 [https://...6a72d842000000002500a1de]：day is out of range for month`；复现脚本 `extract_activity_fields("2月30日", now, None)` 直接抛 ValueError。
+  - 结果：三个 datetime 构造分支（iso/cn/short_dot）各包 try/except，非法日期时 `start_time = None`，让后续 normalize 流程正常处理其他字段。
+  - 验收：`tests/test_pipeline_services.py` 新增 13 用例（12 非法日期参数化 + 1 合法日期无回归），先红后绿；后端 `597 passed, 1 skipped`（+13 新）；spec `docs/superpowers/specs/2026-08-10-extract-activity-fields-invalid-date-design.md`。
+  - 部署：改动 `app/services/extraction.py`，**worker 必须重启**才能让修复在抓取流程生效。
+
+- [x] 抓取流水线并行加速：图片并行 OCR + MiniMax 可配置并发（用户 2026-08-10 反馈"如何加快抓取进度"）
+  - 目标：单篇笔记流水线 OCR 串行（18 张图逐张识别）和 MiniMax 串行调用是主要瓶颈。实现笔记内图片并行 OCR（本地 PaddleOCR，不占网络带宽）和 MiniMax 可配置并发调用（默认 1，最高 4）。
+  - 结果：①`Settings` 新增 `ocr_parallel_workers`（默认 2，1-4）和 `minimax_concurrency`（默认 1，1-4）字段；②`OCRService` 新增 `process_batch` 方法（ThreadPoolExecutor 并行 + 子线程内重试，按输入顺序返回结果）；③`MiniMaxClient` 新增 `extract_many_parallel` 方法（并发数由 settings 控制，方法已就绪供后续 crawl_task 批量集成）；④`crawl_task.py` OCR 部分从串行循环改为 `process_batch` 并行调用；⑤系统配置 API `_ENV_KEY_MAP`/`SystemConfigIn` 新增两个字段；⑥`.env.example` 新增 `OCR_PARALLEL_WORKERS`/`MINIMAX_CONCURRENCY`；⑦前端 `SettingsView.vue` 系统配置 tab 新增"并行线程数"和"并发调用数"两个 ElInputNumber。
+  - 验收：新增 `tests/test_crawl_parallel_speedup.py` 11 用例（Settings 字段 4 + MiniMax 并行 3 + OCR 并行 4，先红后绿）；后端 `584 passed, 1 skipped`（+11 新），前端 `90 passed`，build 通过；spec `docs/superpowers/specs/2026-08-10-crawl-pipeline-parallel-speedup-design.md`。
+  - 部署：**worker 必须重启**才能让并行 OCR 在抓取流程生效（改动 `app/tasks/crawl_task.py` + `app/services/ocr.py`）；uvicorn `--reload` 已加载 API 层配置项；MiniMax 并行方法已实现但 crawl_task 暂保持逐篇调用（默认 concurrency=1 串行，后续可重构为两阶段流水线）。
+
+- [x] 所有写操作限制在项目内，不污染项目外部目录（用户 2026-08-10 反馈）
+  - 目标：整个项目写操作、下载的文件操作都只能放在项目内，不能污染项目外部文件目录。
+  - 结果：①`task_registry.py` 从 `/tmp/xhs_task_registry.json` 改为 `Settings.task_registry_path`（默认 `./data/run/task_registry.json`）；②`poster_renderer.py` 从 `tempfile.mkdtemp()` 改为 `Settings.tmp_dir`（默认 `./data/tmp/poster-render-*`）；③`dev-worker.sh` 新增 `HF_HOME=$ROOT_DIR/data/huggingface` 重定向（预防 huggingface_hub 写 `~/.cache/huggingface`）；④测试代码 `test_task_registry.py`/`test_adapter_popen_register.py` 改用 `tmp_path` fixture + monkeypatch；`test_system_config_api.py` 改用 `tmp_path`；⑤测试脚本 `test_poster_*.sh` 从 `/tmp/*` 改为 `$ROOT_DIR/data/tmp/*`；⑥文档 `SPEC.md`/`crawler-design.md` 删除 `$HOME/chrome-debug-profile` 示例；⑦`AGENTS.md` 新增"项目内写操作规范"章节；⑧`.env.example` 新增 `TASK_REGISTRY_PATH`/`TMP_DIR` 配置项。
+  - 验收：新增 `tests/test_project_internal_writes.py` 10 用例（Settings 字段 + task_registry 路径 + 静态扫描无硬编码外部路径）；后端 `573 passed, 1 skipped`（+10 新）；spec `docs/superpowers/specs/2026-08-10-project-internal-writes-only-design.md`。
+  - 部署：重启 worker 后生效（task_registry 路径变更 + HF_HOME 新增）。
+
+- [x] dev-*.sh 不再 source 全部 .env，配置中心改 .env 后进程自动刷新（用户 2026-08-10 反馈"又回去了"）
+  - 目标：配置中心改 OPENCLI_BIN 后，仪表盘先临时生效但 uvicorn --reload 重启后又回退旧值。根因：dev-api/worker/beat/web.sh 用 `set -a; source .env` 全量注入 os.environ，pydantic_settings 优先级 `os.environ > .env`，reload 后新子进程从父进程继承旧 os.environ，.env 新值被覆盖。
+  - 结果：四个 dev 脚本改为 `grep` 只读启动参数（API_HOST/API_PORT/CELERY_*/WEB_*），不 source 全部 .env；pydantic_settings 直接读 .env 文件，不受 os.environ 干扰；`update_system_config` 已有的 `os.environ` 同步 + `cache_clear` 保留，让 API 层立即生效。
+  - 验收：新增 `tests/test_dev_scripts.py` 3 用例（脚本存在 / 不 source .env / 用 grep 读参数），更新 `test_scaffold_contract.py` 旧测试从"应 source"改为"不应 source"；后端 `563 passed, 1 skipped`；实测 uvicorn 重启后 `/diagnostics/opencli` 返回 `ok: true, bin: /Users/hanamaki_mac_mini/.local/bin/opencli`，`/diagnostics/xhs-pool` 返回 `mode: daemon, daemon_running: true, extension_connected: true`。spec `docs/superpowers/specs/2026-08-10-dev-scripts-no-source-env-design.md`。
+  - 部署：重启 uvicorn + worker + beat 后生效。
+
+- [x] 修复同一天合法活动被误判为 `all_before_publish`（用户 2026-08-03 反馈）
+  - 目标：note id 337（"在xhs用这招！机票便宜"）正文含"7月27日起"被 MiniMax 解析为 `2026-07-27T00:00/T10:00`，与 published_at `2026-07-27 19:14:25` 同日但早于发布时分，validator 用 `parsed < published_at` 严格小于直接拒绝并归为 `all_before_publish`。改为按"日期"判断：活动 `start_time` 与 `published_at` 同日或之后即视为合法；仅严格更早的日期（含跨日更早）才拒绝。
+  - 结果：`activity_validator` 的 `validate_activities` 与 `_is_before_publish` 改为 `parsed.date() < published.date()` 判定（先 `.astimezone(UTC)`），`classify_zero_activity` 同步；`all_before_publish` 分支追加一条 INFO 日志列出被拒绝的 `(name, start_time)` 前 5 条 + 总数，便于后续复盘；既有 `test_validate_skips_activity_before_published_at` 行为不变（前一日仍拒绝）。
+  - 验收：`tests/test_activity_validator.py` 新增 6 用例（先红后绿：同日早场接受 / 次日接受 / 前一日拒绝 / 跨时区同日接受 / class 同日早场→ok / class 前一日→all_before_publish）+ `tests/test_activity_window_guard.py` 1 用例（DB fixture 同日早场接受）；后端 `526 passed, 1 skipped`（基线 518 + 7 新），前端 `76 passed`，无回归。spec `docs/superpowers/specs/2026-08-03-same-day-activity-accept-design.md`。
+  - 部署：改动 `app/services/*.py` 与 `app/tasks/*.py`，**worker/beat 必须重启**才能生效。
+
+- [x] 配置中心 env 级配置可视化 + 定时任务抓取批次配置（用户 2026-08-03 新增需求）
+  - 目标：将 `.env` 中的配置项搬到配置中心界面，单开"系统配置"tab，支持可视化配置活动识别模型（MiniMax）、PaddleOCR、单笔记流水线重试、小红书滚动策略、抓取数量。定时任务页新增"抓取批次"tab，展示抓取相关配置。
+  - 结果：后端 `GET/PUT /settings/system-config` 端点读写 `.env` 文件，保留注释和空行，支持 17 个配置项；前端 SettingsView 新增"系统配置"RadioButton + 5 组分组表单，SchedulesView 新增"抓取批次"RadioButton + 2 组表单；api/client.ts 新增 `systemConfig`/`updateSystemConfig` 方法。
+  - 验收：后端 `tests/test_system_config_api.py` 4 用例，前端 `SettingsView.spec.ts` +3 用例，`SchedulesView.spec.ts` +2 用例；后端 `544 passed, 1 skipped`（+4 新），前端 `87 passed`（+5 新），build 通过。spec `docs/superpowers/specs/2026-08-03-system-config-and-crawl-batch-design.md`。
+  - 部署：改动 `app/api/v1/*.py`，uvicorn `--reload` 自动加载；**worker/beat 不需重启**（仅 API 层改动）。注意：修改配置后需重启 worker/beat 才能让新配置在抓取流程中生效。
+
+- [x] 允许无子活动推文审核通过 + 推文编辑页活动展示/重提取/手动补充 + 仪表盘系统状态合并 + 博主抓取上限 + 活动管理博主筛选（用户 2026-08-03 新增需求包）
+  - 目标：①允许无子活动推文审核通过；②推文编辑弹窗展示活动列表 + 单条重提取 + 手动新增活动；③仪表盘"后端服务"和"连接检测"合并为"系统状态"卡片并上移；④配置中心移除 opencli 测试按钮；⑤博主支持 `max_notes_per_crawl` 抓取数量上限；⑥活动管理增加按博主筛选推文。
+  - 结果：①`notes.py` 移除审核活动数量校验；②新增 `POST /notes/{id}/re-extract` 和 `POST /notes/{id}/activities` 端点，前端 ActivitiesView 编辑弹窗增加活动区域；③DashboardView 新增"系统状态"卡片整合后端健康 + opencli/登录/Chrome 检测；④SettingsView 移除 opencli 测试按钮；⑤`Blogger` 模型新增 `max_notes_per_crawl` 字段（migration 0017），`crawl_task` 截断超出上限的笔记，前端 SettingsView 新增"抓取上限"列；⑥`GET /notes` 新增 `blogger_id` 参数，前端 ActivitiesView 新增博主下拉筛选。
+  - 验收：后端 `540 passed, 1 skipped`（+3 新 case），前端 `82 passed`（+3 新 case），build 通过。spec `docs/superpowers/specs/2026-08-03-note-edit-activities-re-extract-design.md`、`docs/superpowers/specs/2026-08-03-allow-review-without-activities-design.md`、`docs/superpowers/specs/2026-08-03-activities-blogger-filter-design.md`、`docs/superpowers/specs/2026-08-03-diagnostics-panel-design.md`。
+
+- [x] 博主层错误纳入抓取熔断（stale page identity 等 CDP 异常自动停）
+  - 目标：博主抓取出现 `Page not found: ... — stale page identity` 等 OpenCLI 异常时，任务不会傻跑下去；按 `consecutive_note_failure_limit` 阈值熔断 PAUSED，提示「CDP session / 浏览器标签页可能已过期」。
+  - 验收：[crawl_task.py](file:///Users/kevin_w/Documents/github/xhs-info-crawl/backend/app/tasks/crawl_task.py) 博主循环把异常计入 `consecutive_failures`，达到阈值抛 `CrawlHalted`；成功时清零；`AuthenticationRequired`/`ExecutionStopped`/`ExecutionSuperseded` 不计入。后端 `518 passed, 1 skipped`（4 新 case：博主连续失败熔断/成功重置/`AuthenticationRequired` 不计入/阈值可配）；worker + beat 已重启（2026-08-03 09:19）。
+  - 关联 spec：[2026-07-30-blogger-circuit-breaker-design.md](file:///Users/kevin_w/Documents/github/xhs-info-crawl/docs/superpowers/specs/2026-07-30-blogger-circuit-breaker-design.md)；测试 [test_blogger_circuit_breaker.py](file:///Users/kevin_w/Documents/github/xhs-info-crawl/backend/tests/test_blogger_circuit_breaker.py)。
+
+- [x] 修复仪表盘与去重审核列表候选数不一致
+  - 目标：`/api/v1/dashboard/summary` 的 `pending_duplicates` 与 `/api/v1/duplicates` 列表对得上；避免悬空 pending 候选（指向已 DELETED/MERGED 推文）让前端 `Promise.all` 整体 reject 导致列表空白。
+  - 验收：后端 `/duplicates` 默认 join 过滤两侧 Note 可见（DELETED/MERGED）；`dashboard.summary.pending_duplicates` 同步同口径；新增 `scripts/prune_orphan_duplicates.py` 一次性脚本（已对生产 DB 跑：`scanned=4 pruned=1 kept=3`）；前端 `DuplicatesView.vue` 改用 `Promise.allSettled`，单侧 404 跳过本条而不是全失败；后端 514 passed / 1 skipped，前端 15 文件 / 76 tests。
+  - 关联 spec：`docs/superpowers/specs/2026-07-30-duplicates-orphan-candidates-design.md`。
+  - 实现：`backend/app/api/v1/duplicates.py`、`backend/app/api/v1/dashboard.py`、`backend/app/services/prune_orphan_duplicates.py`、`backend/scripts/prune_orphan_duplicates.py`、`frontend/src/views/DuplicatesView.vue`。
+  - 测试：`backend/tests/test_duplicates_orphan.py`（4 case）、`backend/tests/test_prune_orphan_duplicates.py`（5 case）、`frontend/src/views/DuplicatesView.spec.ts` 加 "skips orphan pair without dropping the rest"。
+
+- [x] 日志时间东八区显示 + 笔记连续失败熔断（2026-07-28 用户反馈）
+  - 目标：①仪表盘「最近任务日志」、抓取日志页创建时间、日志抽屉时间显示的是 UTC（差 8h），要按东八区显示；②笔记处理连续失败时系统只记日志继续跑，要捕获这类系统性问题并把「扫码 / 中止」决策权交给用户。
+  - 结果：①根因为 `created_at`/`started_at` 是 UTC naive 而前端直接渲染原始字符串；新增 `frontend/src/utils/datetime.ts formatUtcAsShanghai`（无 Z 按 UTC 解析 → Intl 转 Asia/Shanghai 墙钟），应用到仪表盘日志、TasksView 创建时间列、日志抽屉 timestamp、抓取趋势图 x 轴（原 `new Date(value)` 把 UTC 数字当本地时间，同样差 8h）；存储口径不变，`docs/database-design.md` 时间口径章节补显示侧约定。②新异常 `CrawlHalted`；`run_crawl` 主循环连续失败计数（成功含跳过即清零），达阈值 `consecutive_note_failure_limit`（env 可配，默认 3）熔断：任务 PAUSED + error_message 指引「检测登录并继续 / 结束抓取」+ 自动打开登录页（与未登录 PAUSED 同路径）；仪表盘 PAUSED 状态新增「结束抓取」按钮；`.env.example` 同步。
+  - 验收：后端 `tests/test_consecutive_failure_halt.py` 4 用例先红后绿（熔断 PAUSED/计数清零/阈值可配/熔断后可停止）；前端 +7 用例（datetime 工具 4、TasksView 时间 2、DashboardView PAUSED 结束按钮 + 日志时间转换）；后端 505 passed、前端 75 passed、build 通过；commit `2e18c09`；spec `docs/superpowers/specs/2026-07-28-log-timezone-and-consecutive-failure-halt-design.md`。
+  - 部署：改动 `app/tasks`/`app/services`/config，worker/beat 已于 2026-07-28 09:02 重启（确认无进行中任务后执行）。
+- [x] 仪表盘与周报需求偏差对齐（原待办 #11，用户拍板方案 A 轻量版）
+  - 目标：仪表盘补本周统计卡片（修正 `weekly_notes_count`/`weekly_activities_count` 口径为本周）+ 最近 5 条任务日志；周报补 `DELETE /reports/{id}` 与 Markdown 渲染预览。4 周趋势明确不做（与现有抓取折线图重合）。
+  - 结果：`dashboard.py` summary 加 `_iso_week_start_utc_naive()`（北京周一 00:00 换算 UTC naive），两个 weekly 计数从全量改为 `created_at >= week_start`（原名不副实）；新增 `recent_logs`（TaskLog id desc 取 5）。`reports.py` 新增 `DELETE /{report_id}`（不存在 404，周报无磁盘文件只删 DB 行）。前端：DashboardView 三张统计卡片（本周抓取笔记/本周生成活动/待审核去重）+「最近任务日志」卡片（级别标签+点击跳任务日志页，空态占位）；ReportsView 操作列加删除按钮（ElMessageBox 二次确认）、预览从纯文本改为 marked+DOMPurify 渲染 HTML（`{ async: false }` 同步解析 + sanitize）；新依赖 marked/dompurify/@types/dompurify。
+  - 验收：后端 `test_dashboard_alignment.py` 3 用例先红后绿（周口径分流/recent_logs 最新 5 条/DELETE 200→404 幂等）；前端 +4 用例（ReportsView 删除+预览渲染、DashboardView 统计卡片+日志导航+空日志占位）；后端 501 passed、前端 68 passed、build 通过；commit `55d3679`；spec `docs/superpowers/specs/2026-07-27-dashboard-and-report-alignment-design.md`。
+- [x] TODO/文档卫生（原待办 #12，含「城市去重」条目核实）
+  - 目标：`docs/api-doc.md` 补 keyword-groups、poster、notes 系列端点；`dedupe_cities.py` 位置与 spec 对齐并核实"城市去重"条目的勾选状态。
+  - 结果：以 `app.openapi()` 枚举 59 端点做差集，api-doc 补齐 dashboard/analytics、health、tasks/batch DELETE、keyword-groups×6、blogger-groups×5、博主导入/enrich×3、opencli/config、poster-templates×6、poster-tasks×8、posters 图片×2、schedules×4、notes reprocess、settings/{kind} 泛型说明；修正不存在的 `GET/PUT /settings/opencli` 为 `/opencli/config`；`batch/approve`（skipped 明细）与 `merge`（409）语义同步 TODO#7 实现。dedupe spec 位置行更正为 `backend/app/scripts/dedupe_cities.py`（改文档不改码）。「城市去重」条目核实达标并打勾：0013 上线前已跑脚本、生产库重名数 0、`ix_cities_name_unique` 唯一索引（模型层自 #9 同步声明）使重名不可能再产生；`test_dedupe_cities_script.py` 7 用例绿。
+  - 验收：覆盖自查脚本确认 59 端点全部可检索（4 个初始缺失中 2 个为 `:id`/`{id}` 归一化误报、已补泛型说明）；后端 498 passed（文档改动无回归）；commit `55b0487`；spec `docs/superpowers/specs/2026-07-27-docs-hygiene-design.md`。
+- [x] 测试脆弱性修复（原待办 #10）
+  - 目标：`test_render_with_mocked_opencli` 补 mock `shutil.which`（无 opencli 机器不再 503）；`PostersListView.spec` 修 router mock 未捕获错误。
+  - 结果：后端用例 `opencli` 返回假路径、`python3` 等透传真实 which（Popen http.server 仍需真解释器），长期唯一失败用例转绿；前端 `factory()` 注入 `$router.push` spy，「navigates to wizard」断言 `push('/posters/new')`，Vitest `Errors 1` 归零。
+  - 验收：后端全量 **498 passed 零失败**（该 poster 用例首次不再占坑）；前端 64 passed 零未捕获错误；commit `82a9ec9`；spec `docs/superpowers/specs/2026-07-27-test-fragility-fixes-design.md`。
+- [x] 配置与迁移盲区（原待办 #9）
+  - 目标：`.env.example` 补 `INITIAL_ADMIN_PASSWORD`、`MINIMAX_VISION_MODEL`；`alembic env.py` 与 `init_database` 的 models import 补 `keyword_group`、`blogger_city`、`poster`。
+  - 结果：①`.env.example` 补两项，`ADMIN_USERNAME`/`ADMIN_PASSWORD` 过期条目（全仓库无消费）替换为 `INITIAL_ADMIN_PASSWORD` 说明；②`init_database` import 对齐 env.py 全量 13 模块（env.py 本就完整，TODO 该项过时）；③**测试实证新发现**：0001 用 `Base.metadata.create_all` 按运行时当前模型建表，空库 upgrade head 在 0002 撞列崩溃——0002–0016 全部加幂等守卫（0008 回填 UPDATE / 0011 删 status 列 / 0013 数据迁移按旧 schema 条件执行）；④**autogenerate 实证新发现**：`cities.name` 唯一索引（0013 建、生产库在）模型未声明，`City.__table_args__` 补 `Index("ix_cities_name_unique", unique=True)` 后零 diff；dedupe_cities 测试加 DROP INDEX fixture 模拟旧 schema。
+  - 验收：`tests/test_config_migration_blindspots.py` 3 用例先红后绿（子进程裸 init_database 全表 / env 覆盖 / upgrade head 全表）；`alembic revision --autogenerate` 实测 `upgrade(): pass` 零 diff；全量 497 passed（仅剩已知 poster 环境用例）；commit `16cfe7e`；spec `docs/superpowers/specs/2026-07-27-config-and-migration-blindspots-design.md`。
+- [x] poster 图片路径校验统一 + notes 列表异常吞噬（原待办 #8）
+  - 目标：`poster_tasks.py note_image_by_id` 的 `str.startswith` 校验可被同前缀兄弟目录绕过，统一改 `Path.is_relative_to`；`notes.py` OCR 聚合 try/except 吞异常改为记 WARNING 日志。
+  - 结果：`note_image_by_id` 改 `target.is_relative_to(base)`（与 `get_note_image` 口径一致），`/data-evil` 类同前缀逃逸返回 404；OCR 聚合失败记 `logger.warning`（含 note_ids 与异常），响应仍降级 200 不拖垮列表。
+  - 验收：`tests/test_poster_path_and_ocr_logging.py` 3 用例（路径穿越 + OCR 日志 2 个先红后绿，正常文件回归 1 个直接绿）；全量 494 passed（仅剩已知 poster 环境用例）；commit `c7b7d1c`；spec `docs/superpowers/specs/2026-07-27-poster-path-and-ocr-logging-design.md`。
+- [x] 审核规则/幂等/关联清理一致性修复包（原待办 #7）
+  - 目标：①`/notes/batch/approve` 与单条 review 一样校验至少 1 条有效子活动；②`/duplicates/{id}/merge` 对非 pending 候选返回 409；③删除 Blogger 清理 `blogger_cities`、删除 City 清理 `blogger_cities`/`keyword_group_cities`；④统一 `Activity.start_time` 与 `published_at` 时区口径（二选一，写进 `docs/database-design.md`）。
+  - 结果：①批量审核按单条同规则校验，无有效子活动的 id 跳过并在响应新增 `skipped` 明细（WARNING 日志），不整批 422；②merge 入口非 pending 即 409「该候选已处理，不能重复合并」；③`delete_city` 级联清 `Keyword`+`BloggerCity`+`KeywordGroupCity`，`delete_setting(bloggers)` 级联清 `BloggerCity`+`BloggerGroupMember`，同事务回滚；④口径定为**北京墙钟 naive**——经任务 #19 真实数据与 SQLite 绑定行为实证：SQLite DateTime 存取均丢 tzinfo 只留墙钟数字，真 bug 只有 DOM 解析路径 `.astimezone(utc)` 落库比雪花路径晚 8h；`parse_published_at` 各分支与 `note_id_published_at` 改返回 Asia/Shanghai（落库值不变，零迁移），`week_bounds` 与 notes/activities 日期过滤边界去 tzinfo 改 naive，口径写入 `docs/database-design.md`「2026-07-27 时间口径约定」。
+  - 验收：`tests/test_review_consistency.py` 11 用例（9 先红后绿 + 2 过滤回归）；`test_published_at_parser.py`/`test_note_id_published_at.py` 预期按新口径更新；全量 491 passed（仅剩已知 poster 环境用例，TODO#10 登记）；commit `7d56681`；spec `docs/superpowers/specs/2026-07-27-review-consistency-fixes-design.md`。
+- [x] 活动级 `duplicate_candidates` 死数据处置（原待办 #5，方案 A：停写+清理）
+  - 目标：`create_duplicate_candidates` 每次抓取写入活动级候选（生产库 1160 行），无任何 API/UI 消费。去重已收敛推文维度，用户 2026-07-27 拍板方案 A：停写 + 一次性清空存量。
+  - 结果：crawl_task 删除写入调用；dedup.py 删 `create_duplicate_candidates` 及专用导入；推文级 `create_note_duplicate_candidates` 不变；幂等脚本 `scripts/cleanup_duplicate_candidates.py`；模型与空表保留（避免破坏性迁移，过期活动清理联动仍有效）。
+  - 验收：`tests/test_duplicate_candidates_stop.py` 3 用例先红后绿；全量 480 passed；生产库备份 `data/backups/app-20260727-184934.db` 后清零（1160→0），note 级 4 行保留；worker/beat 已重启（18:49）；commit `eeb7482`；spec `docs/superpowers/specs/2026-07-27-stop-activity-duplicate-candidates-design.md`。
+- [x] 死代码清理（原待办 #6，含一个潜在 NameError）
+  - 目标：清理 `services/crawler.py` 旧函数式实现、`services/report.py` 旧活动级导出（含 `generate_markdown:39` 未导入 `datetime` 的 NameError 地雷）、`pipeline.process_with_isolation`、`services/task_lock.py`、`reports.py select_activities`、未使用导入、`poster_tasks.py` 空 `pass` 块、`tasks.py` 不可达分支、`notes.py` 重复 import；引用它们的测试随之迁移或删除。
+  - 结果：crawler.py 仅保留 4 异常类 + `is_verification_required`；pipeline 删 `process_with_isolation`；task_lock.py 整模块删除；report.py 删 `generate_markdown`/`generate_xlsx`/`visible_activities`（保留被 note 级引用的 `format_activity_markdown`/`_activity_lines`，删码阶段实证修正边界）；reports.py 删 `select_activities`；清理 7 处未使用导入 + 3 处杂项；测试删 13 个死代码用例，新增 `test_dead_code_cleanup.py` 静态断言 10 项（先红后绿）。
+  - 验收：后端全量 479 passed（仅剩已知 poster 环境用例）；纯删除无行为变化；commit `cee2281`；spec `docs/superpowers/specs/2026-07-27-dead-code-cleanup-design.md`。
+  - 部署：worker/beat 已随提交后重启生效。
+- [x] 未登录识别 + 任务启动登录预检（原待办 #13）
+  - 目标：未扫码登录时 whoami 挂起 60s 被误记为博主抓取失败（任务 #19 实证）。改为：`check_login` 把 whoami 超时归类为 `AuthenticationRequired`；任务启动做真实登录预检，未登录直接 PAUSED 并提示扫码；PAUSED 时自动打开登录页。
+  - 结果：`OpenCLIAdapter.check_login` 捕获 `OpenCLITimeout` 改抛 `AuthenticationRequired`（含「扫码」指引）；`crawl_task` 启动真实预检（替换假日志），未登录零发现损耗直接 PAUSED；PAUSED 分支对全部 `AuthenticationRequired` 统一 `open_xhs_login` 自动打开登录页；12 个 FakeAdapter 补 `check_login`。
+  - 验收：`tests/test_login_preflight.py` 4 用例先红后绿；后端 479 passed（仅剩已知 poster 环境失败）；commit `91923f3`；spec `docs/superpowers/specs/2026-07-27-login-preflight-auth-pause-design.md`。
+  - 部署：2026-07-27 17:43 随 #14 手动执行完成，worker/beat 已重启（新 PID 9839/9840），登录预检已生效。
+- [x] 博主链接发布时间解析错误修复（原待办 #14，取了用户 ID 而非笔记 ID）
+  - 目标：`note_id_published_at` 对 `/user/profile/<uid>/<noteid>` 链接取第一个 24hex（用户 ID），解出的是博主注册时间（任务 #19 实证：15 篇全是 2021-09-18）。改为取路径中最后一个 24hex（笔记 ID）；存量数据写幂等脚本矫正。
+  - 结果：函数剥离 query 后只在 path 中匹配并取最后一个 24hex；新增 profile URL / query 干扰两个定向用例（先红后绿，共 7 用例）；幂等矫正脚本 `scripts/fix_published_at_profile_url.py`（dry-run 66 行待矫正，其余 147 行历史值本就正确）。
+  - 验收：后端 481 passed（仅剩已知 poster 环境失败）；commit `4b03d56`；spec `docs/superpowers/specs/2026-07-27-note-id-published-at-profile-url-design.md`。
+  - 部署：2026-07-27 17:43 手动执行完成——任务 #19 STOPPED → 备份 `data/backups/app-20260727-174239.db` → worker/beat 重启（新 PID 9839/9840）→ 矫正 104 行（dry-run 与正式一致）→ 验证通过。剩余 3 篇 <2026 为笔记 ID 解码证实的真老笔记（2024-10/2025-08/2025-11），非漏网。守望定时任务 `automation_90d49c7b` 已禁用（用途由手动执行替代）。
+- [x] OPENCLI_BIN 配置化 + 任务启动预检（根治 opencli PATH 依赖）
+  - 目标：适配器硬编码 'opencli' 依赖 worker PATH；2026-07-27 定时任务因 worker 重启环境缺 nvm bin 导致 17 个博主全部 Errno 2。加 `opencli_bin` 配置、Popen FileNotFoundError 转可读 OpenCLIError、run_crawl 启动预检 fail-fast。
+  - 结果：`Settings.opencli_bin`（env `OPENCLI_BIN`，默认 "opencli"）；适配器用 `self._bin` 调 Popen，FileNotFoundError 转成含 bin 路径与修复指引的 `OpenCLIError`；`run_crawl` claim 后预检 `find_opencli`（shutil.which 薄封装），找不到直接 FAILED + 指引报文 + ERROR 日志，不进搜索循环、不消耗配额；conftest 新增 autouse fake 预检 fixture；本机 `.env` 已配置 nvm 绝对路径，此后任何 shell 重启 worker 均可解析。
+  - 验收：`tests/test_opencli_bin.py` 5 用例先红后绿；后端 475 passed（仅剩已知 poster 环境失败）；`.env.example` 与 `docs/crawler-design.md` 同步；worker/beat 已重启（PID 93778/93783）。
+  - 关联：spec `docs/superpowers/specs/2026-07-27-opencli-bin-config-and-preflight-design.md`。
+  - 附带处置：重启时误中断真实任务 #19（RUNNING 孤儿），已标记 STOPPED 并写 WARNING 日志，可在仪表盘"继续抓取"恢复；其博主报错 `user store was not found` 是 opencli 搜不到对应账号的数据问题，与环境无关，待逐个人工核实账号名。
+- [x] 4. 抓取频率控制落地（SPEC P1）
+  - 目标：`search_interval_min/max`（10-15s）与 `weekly_search_limit`（500/周）配置存在但零引用。关键词搜索之间按随机间隔 sleep；周搜索量超限记录 WARNING 并跳过。
+  - 结果：新服务 `app/services/search_rate_limit.py`（`SearchRateLimiter` 任务内首次不等、之后 uniform(min,max)；`iso_week_key` Asia/Shanghai ISO 周；`weekly_search_count`/`increment_weekly_search`）；新表 `search_usage`（migration `0016`，week_key unique 全局跨任务累计，每次 search_recent 成功后 +1）；`crawl_task.rate_limit_sleep` 0.5s 分片可中断（每片过执行栅栏，stop 0.5s 内响应）；`run_crawl` 两个关键词循环统一走 `throttled_search` 闸门：超限 WARNING + 跳过剩余搜索、任务仍 COMPLETED，博主抓取不受限；conftest 新增 autouse fixture 默认把 rate_limit_sleep 置 no-op（既有测试不被真实 sleep 拖慢）；`.env.example` 注释与 `docs/crawler-design.md` 同步语义。
+  - 验收：`tests/test_search_rate_limit.py` 5 个 + `tests/test_crawl_rate_limit.py` 3 个（先红后绿）；migration 0016 临时库 upgrade/downgrade 通过；后端 470 passed（仅剩已知 opencli 环境敏感失败）；生产库 stamp 0016（uvicorn create_all 已先行建表）。
+  - 关联：spec `docs/superpowers/specs/2026-07-25-crawl-rate-limit-design.md`。
+  - 注意：改动 `app/tasks/*.py`、`app/services/*.py` 与 models，worker/beat 已于 2026-07-27 重启（同时修复 opencli PATH 问题）。
+- [x] 重启 celery beat 与 worker 加载新代码
+  - 目标：beat PID 11974 是 7/17 启动持有旧任务调度；worker PID 50229 是 7/20 启动，早于 0013/0014 迁移（关键词组、海报模型）。服务进程管理已写进 AGENTS.md，beat/worker 都要遵循。
+  - 结果（2026-07-25）：确认无进行中任务后停掉旧进程（11970/11974、50225/50229），以相同命令后台重启（日志 `data/logs/celery-worker.log`、`celery-beat.log`）；生产库因 uvicorn create_all 已先行建表，`alembic stamp 0015` 对齐版本；实测 beat 日志 `Scheduler: Sending due task scheduled-crawl-dispatch`、worker 接收并 succeeded。
+  - 验收：两进程启动时间为今日；beat 使用最新 dispatcher 代码路径。
+- [x] 2. 定时任务调度页 + 博主分组（吸收原"Beat 每周定时抓取真正生效"）
+  - 目标：左侧 nav 新增"定时任务"页。子栏位一：定时任务 CRUD——每周几+时间、城市、关键词组、白名单（博主）组；语义：有关键词抓关键词、有白名单抓白名单、都有都抓。子栏位二：关键词组与博主组的配置（博主组为新实体），可被栏位一选择。Beat 由静态 ping 改为 DB 驱动的每分钟 dispatcher。
+  - 结果：migration `0015_scheduled_crawls_and_blogger_groups` 建 `blogger_groups`/`blogger_group_members`/`scheduled_crawls`（upgrade/downgrade/re-upgrade 验证通过）；新模型 `models/schedule.py`、`models/blogger_group.py`；`/settings/blogger-groups` CRUD（重名 409、成员全量替换、删除级联）；`/schedules` CRUD（day_of_week 1-7/hour 0-23/minute 0-59 越界 422、城市与组校验、两组皆空 422「请至少选择一个关键词组或博主组」）；`app.tasks.crawl_task.scheduled_dispatch` 每分钟由 beat `scheduled-crawl-dispatch` 触发：slot（%Y-%m-%dT%H:%M）幂等、有 PENDING/RUNNING/STOP_REQUESTED 任务跳过、博主组展开为组内 enabled 博主 ∩ 城市 enabled 博主、recent_filter 缺省回退城市配置；前端 `SchedulesView.vue`（/schedules，nav Timer 图标）两 tab——定时任务表格/对话框 + 分组管理（复用 KeywordGroupSettings + 新 BloggerGroupSettings）；`alembic env.py` 模型 import 补齐。
+  - 验收：新增后端测试 25 个（test_blogger_group_api 5 / test_schedules_api 5 / test_scheduled_dispatch 6 / test_dashboard_analytics 7 / test_celery_config 同步）先红后绿；后端 462 passed（仅剩已知 opencli 环境敏感失败）、前端 64 passed、build 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-25-scheduled-crawls-and-dashboard-charts-design.md`。
+  - 注意：改动涉及 models、`app/tasks/*.py`，**必须重启 celery worker 与 beat 后生效**（见待办"重启 celery beat 与 worker"）。
+- [x] 3. 仪表盘抓取统计（定时任务状态 + 折线图 + 饼图）
+  - 目标：仪表盘展示各定时任务最近一次抓取的成功/失败状态；折线图 x=抓取时间、y=抓取数量（发现/成功/失败）；饼图统计抓取成功率。
+  - 结果：`GET /dashboard/analytics` 返回 recent_tasks（最近 20 次倒取正排，含 source=scheduled/manual、schedule_name）、status_counts（最近 50 次状态分布，未知状态归 OTHER）、schedules（含 last_task，Python 过滤 params.schedule_id 避免 SQLite json 方言绑定）；前端引入 echarts，新增 `CrawlTrendChart.vue`（发现/成功/失败三线，x=MM-DD HH:mm）与 `CrawlSuccessPie.vue`（环形饼图，成功/部分成功/失败/已停止/其他）封装 init/resize/dispose；DashboardView 新增「定时任务状态」卡（周期、启用、最近状态标签，空态引导）与两图表卡；analytics 随 3s 轮询刷新。
+  - 验收：DashboardView.spec 新增 2 个用例（状态卡+图表容器渲染、空态占位），vi.mock('echarts')；前端 64 passed、build 通过。
+  - 关联：同上分 spec。
+
+- [x] 1. 修复关键词组在 `/tasks/crawl` 被静默丢弃（端到端断链）+ 归档按城市/周分目录
+  - 目标：前端 DashboardView 提交 `keyword_group_ids`，后端 `CrawlIn` 无该字段被 pydantic 丢弃（已实证）：仅选组 → 422；组+博主 → 组被忽略只抓博主。`resolve_effective_keywords` 的组分支因 `model_dump()` 恒含 `keywords` 键不可达。用户补充语义（2026-07-25）：只选城市+关键词组 → 只抓关键词；只选博主 → 只抓博主；都选都抓；city 与 recent_filter 必填；归档按城市和周分目录。
+  - 结果：`CrawlIn` 新增 `keyword_group_ids`，`recent_filter` 改必填；入口校验组必须存在/启用/挂在当前城市（422）；`resolve_effective_keywords` 改为"键存在即意图"：显式词 ∪ 组并集，键缺省才回退城市配置（显式空列表 = 禁用该维度的旧语义保留）；归档目录改为 `archive/{city_code}/{ISO 年}-W{周}/task-{id}/`（`archive.py` 新增 `iso_week_folder_name`，`crawl_task`/`activity_cleanup` 同步，清理脚本兼容新旧两种目录深度）；`docs/crawler-design.md` 同步。
+  - 验收：新增 `tests/test_crawl_keyword_groups_api.py` 8 个用例（先红后绿）；既有 `test_crawl_scope_unit`/`test_tasks_api_scope`/`test_config_task_duplicate_api`/`test_crawl_auto_stop_previous`/`test_crawl_execution_ownership`/`test_activity_cleanup`/`test_multi_activity_archive` 同步后全绿；后端 439 passed（仅剩已知的 opencli 环境敏感失败）、前端 57 passed、build 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-25-crawl-scope-and-archive-layout-design.md`。
+  - 注意：改动涉及 `app/tasks/*.py` 与 `app/services/*.py`，需重启 celery worker 与 beat 后生效（见待办"重启 celery beat 与 worker"）。
+
+- [x] 仪表盘 `last_task.error_message` 仅在任务进行中或失败时显示
+  - 结果：`DashboardView.vue` 加 `errorVisibleStatuses = ['RUNNING','STOP_REQUESTED','FAILED','PAUSED','STOPPED']` 与 `shouldShowLastTaskError` computed 属性；`ElAlert` 改 `v-if="shouldShowLastTaskError"`。
+  - 验收：前端 48 passed（DashboardView 加 3 测试 case：COMPLETED_WITH_ERRORS 不显示 / FAILED 显示 / RUNNING 显示），`npm run build` 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-dashboard-error-message-conditional-design.md`。
+
+- [x] 列表接口 OCR 摘要聚合性能与长度保护
+  - 结果：`_summary` 内部先按 OCR 块数截到 `MAX_OCR_BLOCKS=5`，再按 UTF-8 字节截到 `MAX_SUMMARY_BYTES=4096`；保留字符边界；每行返回 `summary_truncated: bool`。详情接口 `_detail_data` 不受影响（详情仍返回全部 OCR）。
+  - 验收：后端 309→314 passed（`tests/test_note_summary.py` 5 个 case 含超 4 KiB 截断 + truncated 标志）。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-note-summary-length-guard-design.md`。
+
+- [x] 回答"去重是按什么去的"以及给抓取日志页加批量删除
+  - 结果：Q&A 文档 `docs/superpowers/qa/dedup-rules.md` 解释当前 dedup 两层（硬键 platform_note_id 自动去重 + 软键 SequenceMatcher 相似度入候选）；后端新增 `DELETE /api/v1/tasks/batch` 接 `{ids:number[]}`，清理对应 `CrawlTask` 与 `TaskLog`；前端 `TasksView.vue` 加 selection 列 + "批量删除 (N)" 按钮 + ElMessageBox 确认 + Toast 反馈；`api.client.ts` 加 `batchDeleteTasks`。
+  - 验收：后端 309 passed（新增 4 个 case：删 2 条 / 未知 id 422 / 空列表 422 / 超 100 422）、前端 45 passed（新增 selection-change 触发 + batchDeleteTasks 调用）、前端 build 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-tasks-batch-delete-design.md`、测试 `backend/tests/test_tasks_batch_delete.py`。
+- [x] 活动管理支持关键字搜索
+  - 结果：后端 `list_notes` 加 `keyword: str | None` 参数，对 `Note.title` 与 `Note.content` 做 `ilike` 模糊匹配（strip 后为空不写条件）；前端 `ActivitiesView.vue` 工具栏加 `<ElInput v-model="filters.keyword">`，`queryParams` 透传；resetFilters 也清空 keyword。
+  - 验收：后端 305→309 passed（`tests/test_notes_api.py` 加 4 个 keyword case）、前端 44→45 passed（`ActivitiesView.spec.ts` 加 2 个 case）、build 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-activities-keyword-search-design.md`。
+- [x] 周报 picker 与 ISO 提示及按周排序的改动回滚
+  - 结果：`frontend/src/views/ReportsView.vue` 维持 `form.weekDate = new Date()` + `format="YYYY 第 ww 周"`，无 `sortedRows` / `weekRangeLabel`；spec 文件 `2026-07-21-reports-list-order-by-week-design.md` 与 `2026-07-21-reports-picker-expose-iso-week-design.md` 作为存档保留。
+  - 验收：ReportsView 与 git HEAD 一致；ReportsView.spec 仅 2 个原始测试；前端 42 passed；build 通过。
+- [x] 推文列表"发布时间"列只显示 YYYY-MM-DD（无时分秒）
+  - 结果：`ActivitiesView.vue` 新增 `formatDate(value)` 函数（`.toISOString().slice(0, 10)`），"发布时间" 列改用 `formatDate`；详情识别活动表格的 `start_time` / `end_time` 仍用 `formatTime`。
+  - 验收：`ActivitiesView.spec.ts` 加 "shows YYYY-MM-DD only" 测试全绿；前后端测试全过、build 通过。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-list-publish-time-date-only-design.md`。
+- [x] 从小红书 note ID（ObjectID 24 hex）解析推文发布时间
+  - 结果：`backend/app/services/note_id_published_at.py` 实现 `note_id_published_at(note_id_or_url)`（正则抽取 24 hex → 前 8 hex → int → +8h → UTC ISO datetime）；`backend/scripts/backfill_note_id_published_at.py` 一次性回填脚本（扫描 `published_at IS NULL` 且 24 hex platform_note_id 的记录）；`crawl_task.process_note` 入库前调 `note_id_published_at(source_url)` 作为最高优先级，回退 DOM 解析。
+  - 验收：`backend/tests/test_note_id_published_at.py` 3 个 case 全过；回填脚本输出 before/after 计数且幂等。
+- [x] 识别活动表格增加「开始时间」与「结束时间」两列
+  - 结果：`ActivitiesView.vue` 详情 dialog 加 `<ElTableColumn label="开始时间">` 与 `label="结束时间">` 两列，使用 `formatTime`；缺值显示 "待确认" 或 '-'。
+  - 验收：`ActivitiesView.spec.ts` 表格列断言包含 4 列（名称 / 地点 / 开始时间 / 结束时间 / 操作）。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-list-publish-time-date-only-design.md` 中已包含此改动。
+- [x] 撤回推文列表的 OCR 摘要列
+  - 结果：`ActivitiesView.vue` 推文列表移除"摘要" ElTableColumn；OCR 内容只在详情以"识别活动列表" + 图片 OCR block 呈现；后端 `_summary` 字段保留供详情使用。
+  - 验收：`ActivitiesView.spec.ts` 详情断言中保留 `summary` 字段；推文列表断言不再包含 OCR 长文。
+  - 关联：spec `docs/superpowers/specs/2026-07-21-note-summary-with-ocr-design.md`（列表调用方变种）。
+- [x] 历史 `Note.published_at` 回填
+  - 结果：`backend/scripts/backfill_note_id_published_at.py` 已实现并已验证回填效果；按 24 hex note ID 前 8 位 hex = epoch 秒的方案执行，剩余少量未充填由运行时 `app.services.published_at.parse_published_at` 兜底。
+  - 验收：脚本已执行；`notes.published_at IS NULL` 计数已从 177 大幅下降。
+- [x] 历史 APPROVED 且 0 子活动推文的处理（已由 `POST /notes/{id}/reprocess` + 前端批量重处理入口覆盖）
+  - 结果：`backend/app/api/v1/notes.py` 已实现 `/notes/{id}/reprocess` 端点；当前测试环境下无 "0 子活动但 APPROVED" 的历史脏数据；后续人工可以单条触发或通过 `/notes/batch/approve` 取消误改。
+- [x] 修复worker在opencli阻塞时无法响应停止信号的问题
+  - 结果：缩短 OpenCLI 调用超时（60 秒），`task_registry.kill()` 立即发送 SIGKILL。`backend/tests/test_worker_stop_during_block.py` 4 个全过。
+- [x] 点击开始抓取时自动停止上一个任务（不报错 TASK_IN_PROGRESS）
+  - 结果：见 spec `docs/superpowers/specs/2026-07-18-crawl-auto-stop-previous-design.md`；`backend/tests/test_crawl_auto_stop_previous.py` 4 个全过。
+- [x] 移除推文内子活动的审核状态
+  - 结果：删除 `Activity.status` 列与索引，新增 `deleted_at` 表达软删除；周报收录完全基于推文维度（`Note.review_status` + `Note.published_at`），不再过滤子活动状态；`POST /api/v1/activities/batch/approve` 返回 `410 Gone`；前端列表"识别活动"表格移除"状态"列。
+  - 验收：后端 `296 passed, 1 skipped`、前端 `40 passed`、前端构建成功、Playwright `42 passed`。
+  - 关联 spec：`docs/superpowers/specs/2026-07-21-remove-activity-approval-status-design.md`；迁移：`backend/migrations/versions/0011_activity_soft_delete.py`；E2E：`tests/test-activity-soft-delete-and-report-include.md`。
+- [x] 解析并使用小红书真实发布时间
+  - 结果：新增 `app/services/published_at.py`，解析 OpenCLI 详情字段与页面文字（绝对日期、`MM-DD`、`N天前/N小时前/分钟前`），统一 Asia/Shanghai 解析后转 UTC；`process_note` 入库时自动回填 `Note.published_at`；列表筛选、周报归周取消 `func.coalesce(published_at, created_at)`；前端"发布时间"列不再回退 created_at；缺少时显示"待确认"且不进周报。
+  - 验收：后端、前端、E2E 全绿（同上）。
+  - 关联 spec：`docs/superpowers/specs/2026-07-21-parse-real-published-at-design.md`；E2E：`tests/test-parse-real-published-at.md`。
+- [x] 修复零活动推文仍标记处理完成并可审核的问题
+  - 结果：新增 `app/services/activity_validator.py`，按 `activity.start_time >= note.published_at` 判定（OCR 错识过滤）；区分 `all_before_publish` / `minimax_empty_retryable` / `no_activity_signals` 三态；`process_note` 用 validator 替代旧 ActivityWindow 60 天窗口；`POST /notes/{id}/review` 审批通过校验至少 1 条未删除子活动；新增 `POST /notes/{id}/reprocess` 端点清空子活动重新走抓取。
+  - 验收：后端、前端、E2E 全绿（同上）。
+  - 关联 spec：`docs/superpowers/specs/2026-07-21-zero-activity-and-window-fix-design.md`；E2E：`tests/test-note-zero-activity-and-window.md`。
+- [x] 活动管理列表的摘要列展示 OCR 文字与日期
+  - 结果：列表接口 `_summary` 拼接 `Note.content` 与所有图片 OCR 文字（`正文：<content>` + `[图片 N OCR] <text>`），按 `NoteImage.id` 排序；前端 `ActivitiesView` 新增"摘要"列，`show-overflow-tooltip` 悬浮完整内容；缺失部分跳过不写占位。
+  - 验收：后端、前端、E2E 全绿（同上）。
+  - 关联 spec：`docs/superpowers/specs/2026-07-21-note-summary-with-ocr-design.md`。
+- [x] 补全推文编辑与单条审核闭环
+  - 结果：新增推文更新与单篇审核 API；活动管理列表和详情均支持编辑标题、正文、城市、发布时间及单篇通过/驳回，原文链接只读，批量通过保持兼容。
+  - 验收：后端 `246 passed, 1 skipped`；前端组件串行全量 `11 files / 38 tests passed`；前端构建成功；E2E 完整首轮 `41 passed`，唯一旧选择器回归修正后关联专项 `4 passed`。
+  - 关联 spec：`docs/superpowers/specs/2026-07-21-note-edit-single-review-design.md`；实现计划：`docs/superpowers/plans/2026-07-21-note-edit-single-review.md`；测试案例：`tests/test-note-edit-single-review.md`。
+- [x] 识别小红书验证码/风控后暂停抓取、保留页面并等待人工验证
+  - 结果：明确验证信号映射为 `VerificationRequired` 并进入 PAUSED；crawler 验证页保留，自动唤醒 Chrome；用户结束任务时主动关闭保留 session。
+  - 验收：普通超时不误判，仪表盘复用人工恢复按钮；后端 `240 passed, 1 skipped`、前端 `32 passed`、构建成功、E2E `39 passed`。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-xhs-verification-pause-design.md`；测试案例：`tests/test-xhs-verification-pause.md`。
+- [x] 支持批量上传博主白名单
+  - 结果：配置中心支持下载 Excel 模板并上传 xlsx/UTF-8 csv；按用户 ID、主页、名称幂等更新，只填写城市名称，整批校验后单事务写入。
+  - 验收：支持行号错误、2 MiB/500 行限制、Element Plus loading/Toast；后端 `227 passed, 1 skipped`、前端 `31 passed`、构建成功、E2E `39 passed`。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-blogger-batch-import-design.md`；测试案例：`tests/test-blogger-batch-import.md`。
+- [x] 修复博主 `user/profile` 笔记 URL 的稳定身份识别与重复抓取唯一键冲突
+  - 结果：统一身份函数严格识别 `/user/profile/<user-id>/<note-id>`，不同 token 得到同一 note ID；纯博主主页不误判。已处理笔记会刷新有效 URL 并跳过详情、下载及重复 INSERT。
+  - 验收：身份与任务回归 `30 passed`；后端 `215 passed, 1 skipped`、前端 `28 passed`、E2E `38 passed`；任务 #7 真实记录只读核对通过。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-user-profile-note-identity-design.md`；测试案例：`tests/test-user-profile-note-identity.md`。
+- [x] 跑任务 #7 验证签名 URL，并隔离单博主发现失败
+  - 结果：真实范围 `keywords=0 bloggers=5`；成功博主命中 15、15、15、13 篇，另一个博主解析失败后任务继续进入下载。
+  - 验收：安全停止时发现 58、下载 2、OCR 2、提取 2；本轮 `Missing url` 和 `requires a full signed URL` 均为 0；后端 `212 passed, 1 skipped`、前端 `28 passed`、E2E `38 passed`。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-blogger-discovery-resilience-design.md`；测试案例：`tests/test-blogger-discovery-resilience.md`。
+- [x] 建立 TODO 持续执行授权
+  - 结果：保留“先澄清根因、写 spec、TDD、全量验证、更新 TODO、独立提交”的流程；spec 完成后可按 TODO 顺序自动开发，不再逐项等待确认。
+  - 例外：新增外部权限、敏感登录、不可逆操作或会改变产品方向的实质歧义仍需用户确认。
+- [x] 停止执行栅栏、浏览器标签页清理与真实停止验收
+  - 结果：业务 OpenCLI 命令在进程创建前、PID 登记后和子进程退出后校验执行权；stop API 先提交 `STOP_REQUESTED` 再 kill；crawler session 使用有界 `finally` 清理，Celery worker 保持运行。
+  - 验收：后端 `210 passed, 1 skipped`、前端组件 `28 passed`、E2E `38 passed`；真实任务 `#15` 约 `0.25s` 进入 `STOPPED`，PID 注册表为空且 crawler 标签页关闭；不重启 worker，任务 `#16` 正常进入 `RUNNING / SEARCHING` 并可再次安全停止。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-stop-execution-fence-browser-cleanup-design.md`；测试案例：`tests/test-stop-execution-fence-browser-cleanup.md`。
+- [x] 消除测试环境 JWT 短密钥安全警告
+  - 结果：pytest 在导入应用前注入独立的测试专用 JWT 密钥，不读取或暴露本地 `.env` 真实密钥；应用运行时配置逻辑未修改。
+  - 验收：专项测试 `2 passed`；后端全量 `199 passed, 1 skipped`；输出不再包含 `InsecureKeyLengthWarning`。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-test-jwt-secret-design.md`；测试案例：`tests/test-test-jwt-secret.md`。
+- [x] P0：隔离测试环境与本地运行中的 Celery 队列
+  - 结果：pytest 在应用导入前使用 `memory://`；未声明的 Celery 投递会失败；投递测试显式断言 `task_id + run_token`。
+  - 验收：后端全量 `197 passed, 1 skipped`；关联 spec `docs/superpowers/specs/2026-07-20-test-celery-isolation-design.md`。
+- [x] P0：修复抓取任务安全停止、重复投递和停止后重启的执行权竞争
+  - 结果：新增执行令牌、PENDING 原子领取、阶段检查点和令牌级 PID 注册；停止后旧执行与陈旧消息不能继续写入。
+  - 验收：执行权/停止定向测试及全量测试通过；关联 spec `docs/superpowers/specs/2026-07-20-crawl-execution-safe-stop-design.md`。
+- [x] 推文维度的活动管理、去重审核和本周推文周报
+  - 结果：活动管理、详情、审核、删除、模糊去重和周报均以推文为聚合维度；精确去重支持不同 token/URL 形式；Markdown/Excel 包含全部子活动和来源链接。
+  - 验收：后端 `197 passed, 1 skipped`、前端 `28 passed`、前端构建和 Playwright 38 个案例退出码均为 0；数据库已迁移到 0010。
+  - 关联 spec：`docs/superpowers/specs/2026-07-20-note-centric-management-dedup-report-design.md`。
+
+- [x] 我设置了博主抓取，但是还是依照关键字在搜索，没有按照关联城市的博主进行账号定点抓取
+  - 目标：博主列表只抓取绑定到当前城市且启用的博主，按博主 `profile_url` 定点抓取其笔记，不再回退到关键字搜索。
+  - 验收：运行 `make crawl-by-city -- city=shanghai` 时只抓取 city_code=shanghai 且 enabled=true 的博主；日志中可见"博主"维度的结果；博主 `profile_url` 为空会被跳过并产生 WARNING。
+- [x] 活动管理列表里有城市上海，但是我筛选上海之后没有展示
+  - 目标：活动管理列表的城市筛选能够正确返回上海的活动记录。
+  - 验收：在活动列表选择"上海"过滤器，列表返回 city_code=shanghai 的活动；URL 参数 `city=shanghai` 与 API 请求参数一致；空结果显示空状态而非报错。
+- [x] 博主白名单支持不写小红书id也能保存，支持关联城市配置多个
+  - 目标：博主表单允许不填写小红书 ID 即可保存；同一博主可关联到多个城市。
+  - 验收：在博主管理新增/编辑博主时留空 `xhs_id` 也能成功保存；同一博主可在多个城市下勾选启用；前端表单提交后端校验通过。
+- [x] 所有操作列表，增加宽度不要出现换行
+  - 目标：操作列表（活动/博主/任务/重复项等）的操作列加宽，避免按钮文字或图标换行。
+  - 验收：在 1280px 及以上分辨率下，操作列按钮单行展示无折行；移动端允许折行但保持可点击；视觉走查无横向溢出。
+- [x] 确认阶段一城市配置方式，并支持在配置中心维护城市。
+- [x] 初始化关键词配置，并支持按城市维护关键词。
+- [x] 准备小红书账号，支持 Chrome 登录态检查与登录后继续抓取。
+- [x] 完成阶段一工程搭建：Vue 3、FastAPI、Celery、SQLite、本地文件存储和 filesystem broker。
+- [x] 完成 Excel 和 Markdown 导出。
+- [x] 完成 OpenCLI `whoami`、`search`、`download` 和 `note` 命令验证。
+- [x] 提供 Alembic 数据库迁移脚本。
+- [x] 修复 OpenCLI `whoami` 默认 60s 超时：新增 `OPENCLI_BROWSER_COMMAND_TIMEOUT=120`，适配器自动读取并设置 Python 层 `subprocess` 超时为 `inner + 60s` 缓冲。
+- [x] 修复 OpenCLI `Missing url` 错误：所有需要 url 的入口（`note`、`blogger_notes`、`download`、`search_recent`）校验非空；`process_note` 与博主循环优雅跳过空 url/空 profile_url 并记录 WARNING。
+- [x] 抓取范围完全由"博主管理"和"关键词配置"中 `enabled=true` 的记录驱动
+  - 目标：博主列表只抓取绑定到当前城市且启用的博主；关键词列表只取城市启用项；任务参数优先级正确。
+  - 验收：`backend/tests/test_crawl_scope.py` 全过；`backend/tests/test_crawl_task_resilience.py` 验证博主 profile_url 为空时跳过 + WARNING；前端仪表盘城市切换时关键词/博主下拉同步更新。
+  - 关联：spec `docs/superpowers/specs/2026-07-17-crawl-scope-config-driven-design.md`；E2E `tests/test-crawl-scope-config-driven.md`。
+- [x] 仪表盘选择博主时，若信息不全（缺 `profile_url`），给出提示并要求先去配置中心补充
+  - 目标：避免博主只填了 username 就提交任务，导致 worker 报 `Missing url` 失败。
+  - 验收：选博主时 profile_url 为空的博主标"待补充"；提交任务时若选中有不完整博主，弹出 ElMessage 警告并不发起任务；用户到配置中心点"补充博主信息"按钮后能正常提交。
+- [x] FAILED 状态任务显示"结束抓取"按钮
+  - 目标：FAILED 任务可能还在跑（worker 自动重试），用户需主动强制停止并清理 Browser tab。
+  - 验收：仪表盘 FAILED 任务显示"结束抓取"按钮；点击后调用 `POST /tasks/{id}/stop`，后端允许 RUNNING/FAILED/PAUSED/COMPLETED 状态都强制置为 STOPPED 并写日志；STOPPED/STOP_REQUESTED 状态幂等返回 202。
+- [x] 写流程规则到 AGENTS.md
+  - 目标：把 AI 协作流程的硬约束持久化到项目里，跨会话可读。
+  - 验收：根目录 `AGENTS.md` 存在，含 spec 过审、TDD、提问与回答、撤销不符合规则的代码等约束；流程变更时 AGENTS.md 同步更新。
+- [x] 把没有 TDD 测试案例文档的需求补全
+  - 目标：之前完成的 4 项需求（抓取范围 / 上海筛选 / 博主白名单 / 操作列宽度）只有 spec 没有对应的 E2E 测试案例文档。
+  - 验收：`tests/` 目录下补 4 个 `test-<slug>.md` 测试案例文档：test-crawl-scope-config-driven.md / test-activity-filter-city-code.md / test-blogger-optional-xhs-id.md / test-table-actions-nowrap.md。每个文档描述验收步骤、输入、预期。
+- [x] 重启 worker 让 enrich API 生效测试
+  - 目标：让博主信息补全 API 端点可被前端调用。
+  - 验收：实测 `POST /api/v1/settings/bloggers/{id}/enrich` 返回 200，回填博主 profile_url 与 platform_user_id（enrich API 跑在 uvicorn 进程而非 worker 进程，所以不需要重启 worker 也能生效；这条 TODO 主要是验证 API 可用）。
+- [x] 提供博主信息自动补全（enrich）API + 配置中心"补充博主信息"按钮
+  - 目标：用户只填博主名字也能保存；配置中心提供按钮用 opencli search 自动回填 user_id 与 profile_url。
+  - 验收：`backend/tests/test_blogger_enricher.py` 4 个测试全过；`backend/tests/test_settings_blogger_enrich_api.py` 4 个测试全过；前端 SettingsView 在 profile_url 为空时显示"补充博主信息"按钮；点击成功后 ElMessage 提示 + 重新加载列表。
+- [x] 点击"停止抓取"立即停当前任务（spec 1）
+  - 目标：解决 worker 跑 STOPPED 任务后还在继续跑剩余 note 的问题。
+  - 验收：见 `docs/superpowers/specs/2026-07-17-task-stop-immediate-halt-design.md`。
+  - 实现：`backend/app/services/task_registry.py`（跨进程 PID 注册表）；`OpenCLIAdapter.run` 改用 `subprocess.Popen` + `bind_task()`；stop 接口调 `kill_task_pid()` SIGTERM 当前子进程。
+  - 测试：`tests/test_task_registry.py` 7 个 + `tests/test_task_stop_immediate.py` 6 个 + `tests/test_adapter_popen_register.py` 5 个 = 18 个全过。
+- [x] 博主笔记抓取改用 search 模式（带 xsec_token）（spec 2）
+  - 目标：解决博主抓取的笔记 URL 缺 xsec_token 导致 opencli note 失败的问题。
+  - 验收：见 `docs/superpowers/specs/2026-07-17-blogger-notes-signed-url-design.md`。
+  - 实现：`OpenCLIAdapter.blogger_notes(username, profile_url="")` 改用 `xiaohongshu search <username>` 拿带 token 的 URL；过滤 author 匹配 + URL 含 xsec_token。
+  - 测试：`tests/test_blogger_notes_signed_url.py` 6 个全过；`tests/test_opencli_and_dedup_integration.py` 更新 1 个。
+- [x] 恢复可重复执行的全量测试基线
+  - 目标：修复测试与当前 `subprocess.Popen` 实现不一致导致的真实 OpenCLI 调用和卡死，在不改业务行为、不覆盖现有工作区改动的前提下，恢复后端、前端组件测试与前端构建的稳定验收能力。
+  - 验收：后端全量测试、前端组件测试、前端生产构建和 `git diff --check` 均正常结束且退出码为 0；测试过程未启动真实 OpenCLI、Chrome 或网络请求。
+  - 实现：修正 `test_run_translates_missing_url_error` 的 `subprocess.Popen` 测试替身，并修正博主补全 API 测试的 `OpenCLIAdapter` patch 路径。
+  - 测试：后端 `181 passed, 1 skipped`；前端 `11 files / 28 tests passed`；前端构建成功；关联 spec `docs/superpowers/specs/2026-07-20-test-baseline-recovery-design.md`。
+- [x] 活动管理（推文列表）按关键词组/博主组筛选 + 互动数列展示（spec: 2026-08-13-activities-filter-by-groups-design）
+  - 目标：ActivitiesView 加组筛选 + 落库 matched_* + 互动数
+  - 验收：
+    - 迁移 0022 成功（6 列 + matched_blogger_id 索引）
+    - list_notes 支持 keyword_group_ids / blogger_group_ids，与 keyword / blogger_id 互斥 422
+    - ActivitiesView UI 切换（Radio 自定义 vs 组）+ 表格 3 列互动数
+    - crawl_task 透传 _matched_* + _extract_engagement 提取 like/collect/comment
+    - 后端 36 新增测试 + 前端 5 新增测试全绿
+    - 重启 celery worker（必须手动，uvicorn 自动 reload）
+  - 实施：migration 0022 / Note ORM 6 字段 / list_notes JSON1 过滤 + bindparam expanding fix / _summary 互动数 / crawl_task 透传 + _extract_engagement / 前端 ActivitiesView Radio 切换 / 文档 api-doc + database-design 同步
+- [ ] 小红书账号多 Chrome profile 隔离（2026-08-12 用户反馈：当前多账号未生效）
+  - 目标：2026-08-12 现场验证发现"多小红书账号配置"功能并未真正生效：用户创建 3 个 XhsAccount 都报同一个账号"花卷的📷日常"。根因是 opencli `browser <session>` 的 `<session>` 只是逻辑命名空间，xiaohongshu whoami/note/search 等命令读取的是当前 Chrome profile 的 cookie；opencli 自身不启动独立 Chrome 实例，依赖 Browser Bridge 扩展连接到用户已经在跑的 Chrome。
+  - 当前真实状态：全系统只有 1 个 Chrome profile（id=`jjm94buu`），登录小红书账号为「花卷的📷日常」；历史抓取任务（21、24 共 312+ 篇笔记）全部来自此单一账号；`xhs_accounts` 表已清空测试数据，恢复到「单账号 + 默认 session」状态。
+  - 真正实现多账号隔离需配合 Chrome 多 profile：①用户在 Chrome 里手动建 N 个 profile（每个独立登录不同小红书账号），安装 opencli Browser Bridge 扩展；②用 `opencli profile rename <contextId> <alias>` 给每个 profile 起别名；③代码改造：`XhsAccount` 加 `profile_alias` 字段、`OpenCLIAdapter.run()` 全局加 `--profile <alias>` 参数、`check-login` 改用 `browser <session> open <xhs URL>` + `browser eval` 读登录态（不依赖 `xiaohongshu whoami`）。
+  - 验收：分阶段，先用户在 Chrome 建好 2+ 个 profile 且用 `opencli profile list` 可见；后端改造后实测同一 crawl_task 内切换账号抓取能拿到不同 `notes.platform_user_id`（按账号 ID 区分）；后端全量测试 + 前端测试 + build 通过；更新 spec `docs/superpowers/specs/2026-08-10-multi-xhs-account-design.md` 增加第 6 章已知限制、迁移 `0021` 加 `profile_alias` 字段。
+  - 部署：用户先手动建 Chrome 多 profile + opencli profile rename；worker 重启；migration `alembic upgrade head` 0021。
+
+- [x] **任务停止状态兜底恢复（老问题：正在停止不会到停止）** (2026-08-22)
+  - 目标：用户 2026-08-22 反馈"任务从正在停止不会到停止状态，还是有老问题"。即使 watchdog（spec 2026-08-19）已经覆盖 Event 兜底，worker 卡在 MiniMax HTTP / PaddleOCR / opencli 子进程时主线程完全不去 assert_execution_active，watchdog set event 后仍要等当前调用超时（默认 60s/180s）才会感知 → 用户感受"卡正在停止很久"。
+  - 根因：watchdog 只在 worker 主线程下次 guard 时才感知，无法打破 in-process 长阻塞调用。
+  - 方案：新增独立 beat task `recover_stuck_stop_requests`，每 60s 扫描 status='STOP_REQUESTED' + 最后一条 task_log（或 started_at）超过 STUCK_THRESHOLD_SECONDS=120s 没动 → 强制 UPDATE status='STOPPED' + 写 WARNING task_log（不影响 worker 进程模型，纯 DB 层兜底）。
+  - 验收：
+    - 后端 `pytest tests/test_stop_recovery.py tests/test_celery_config.py -v` → 7 新用例全绿（先红后绿）
+    - 后端 `pytest tests/ -q` → 1004 passed，13 pre-existing fail（与本次改动无关，已确认）
+    - 后端 stop 相关测试 40 个全绿（`test_stop_recovery.py` + `test_stop_watchdog.py` + `test_task_stop_immediate.py` + `test_assert_execution_active_event.py` + `test_crawl_auto_stop_previous.py` + `test_crawl_execution_ownership.py`）
+  - 结果：
+    - 新增 `backend/app/services/stop_recovery.py`：`recover_stuck_stop_requests(session_factory=None)` 扫描 → 强制落 STOPPED + 写 WARNING
+    - 后端 `backend/app/tasks/crawl_task.py` 新增 Celery task `recover_stuck_stop_requests`（装饰位置 148 行，调度名 `app.tasks.crawl_task.recover_stuck_stop_requests`）
+    - 后端 `backend/app/tasks/celery_app.py` beat_schedule 注册 `recover-stuck-stop-requests`，60s 一次
+    - 新增 `backend/tests/test_stop_recovery.py` 6 用例 + `backend/tests/test_celery_config.py` 追加 1 用例
+    - spec `docs/superpowers/specs/2026-08-22-stop-stuck-recovery-design.md`（本地保留）
+  - 部署：**worker + beat 必须重启**才能拉取新 task / beat_schedule（uvicorn 已 reload，API 代码改动 worker 不必重启）
+  - 关联：watchdog spec `docs/superpowers/specs/2026-08-19-crawl-stop-watchdog-design.md`；历史事件：2026-08-19 task29 卡死 8h40min（watchdog 引入）→ 2026-08-22 用户反馈"老问题"（watchdog 不覆盖 in-process 长阻塞）
