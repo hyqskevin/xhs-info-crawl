@@ -6,8 +6,11 @@ import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pwdlib import PasswordHash
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.database import get_db
 
 
 password_hash = PasswordHash.recommended()
@@ -33,15 +36,31 @@ def create_access_token(data: dict[str, object], expires_delta: timedelta | None
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
 
 
-def get_current_user(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> dict[str, object]:
+def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, object]:
+    """解析 JWT + 实时校验 User.enabled。
+
+    设计权衡：permissions/role 仍从 JWT 快照读取（spec 2026-08-13 决定），
+    仅在账号被停用 / 删除时即时拒绝。代价：每次请求 1 次简单 SELECT。
+    """
     if credentials is None:
         raise HTTPException(status_code=401, detail="未提供认证凭据")
     try:
         payload = jwt.decode(credentials.credentials, get_settings().secret_key, algorithms=["HS256"])
     except jwt.InvalidTokenError as exc:
         raise HTTPException(status_code=401, detail="认证凭据无效或已过期") from exc
+    username = str(payload["sub"])
+    # 实时校验：账号不存在 / 已停用 → 即时拒绝
+    from app.models.user import User  # 延迟 import 避免循环
+    enabled = db.scalar(select(User.enabled).where(User.username == username))
+    if enabled is None:
+        raise HTTPException(status_code=401, detail="账号不存在")
+    if not enabled:
+        raise HTTPException(status_code=403, detail="账号已停用")
     return {
-        "username": str(payload["sub"]),
+        "username": username,
         "role": str(payload.get("role", "editor")),
         "permissions": [str(p) for p in payload.get("permissions", [])],
     }
