@@ -455,10 +455,9 @@ class StatusServer:
                 restart_results["beat"] = self.process_manager.restart_service("beat")
 
             logger.info(
-                "通过 launcher 保存系统配置: %s -> 重启 %s",
-                updates,
-                ", ".join(f"{k}={v}" for k, v in restart_results.items()),
+                "通过 launcher 保存系统配置: saved_keys=%s, restart=%s, api=%s, worker=%s",
                 list(updates.keys()),
+                ", ".join(f"{k}={v}" for k, v in restart_results.items()),
                 restart_results["api"],
                 restart_results["worker"],
             )
