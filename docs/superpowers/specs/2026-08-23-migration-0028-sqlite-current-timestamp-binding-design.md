@@ -1,113 +1,110 @@
-# v0.7.0+5 修复 migration 0028 sqlite3 CURRENT_TIMESTAMP bind 报错 + launcher api.log 监控缺口
+# 2026-08-23 migration 0028 sqlite3 binding + launcher 监控缺口 修复
 
-## 背景
+> 用户反馈:打包后 API 仍挂 — 原因到底是什么?能不能写到 md 里规定下,打包都打不好。
 
-用户 2026-08-23 反馈"打包都打不好,API 总是挂"。现象：
+## 1. 背景
 
-- 双击 `xhs-info-crawl.app` 后,launcher 启 worker + beat + web 静态服务(5173)都正常
-- API 启了立刻退出,lifespan 阶段 alembic upgrade head 抛 `sqlite3.ProgrammingError: Error binding parameter 1: type 'current_timestamp' is not supported`
-- 启动器没把这条错误暴露给前端 PyWebView 窗口,前端只看到"API 连不上"
-- 用户重启 .app 多次都没用,因为 launchctl `com.xhs.worker` + `com.xhs.beat` 在 macOS 残留,
-  launcher 不再尝试拉新的 worker/beat,但 API 每次都因为同样原因失败
+用户 2026-08-23 升级到 v0.7.0 后,启动 .app 发现 API 一直连不上,只能看到"API 连不上",看不到真错误。多次重打 .app 问题复现。
 
-## 根因(migration 0028)
+### 1.1 真因(根因)
 
-`backend/migrations/versions/0028_crawl_tasks_unique_active_per_schedule.py` 里冲突清理:
+v0.7.0 commit 5/9 引入的 `backend/migrations/versions/0028_crawl_tasks_unique_active_per_schedule.py` 在清理重复活跃 task 时,用了:
 
 ```python
-bind.execute(
-    sa.text(
-        "UPDATE crawl_tasks SET status='FAILED', finished_at=:now, "
-        "error_message='...' WHERE id IN :ids"
-    ).bindparams(sa.bindparam("ids", expanding=True)),
-    {"now": sa.func.current_timestamp(), "ids": duplicate_ids},
-)
+sa.text("... finished_at=:now, ...").bindparams(sa.bindparam("ids", expanding=True)),
+{"now": sa.func.current_timestamp(), "ids": duplicate_ids},
 ```
 
-`sa.func.current_timestamp()` 在 SQLite stdlib driver (`sqlite3`) 下编译成
-`?` placeholder + 类型 tag `CURRENT_TIMESTAMP`,但 sqlite3 module 的
-`execute(statement, parameters)` 只识别标准类型 (`str`/`int`/`float`/`None`/`bytes`),
-不认识 `CURRENT_TIMESTAMP` 这种函数 tag → 直接 `ProgrammingError`。
+`sa.func.current_timestamp()` 编译为带 `?` 占位符 + `CURRENT_TIMESTAMP` 类型 tag,传给 sqlite3 stdlib driver。driver 不识别这个 SQLAlchemy 类型 tag,抛:
 
-**TDD 漏洞**: commit 2/9 的 pytest `test_init_database_works_for_old_db_schema_missing_columns` 没构造冲突数据
-(只 bootstrap 到 0027,然后 init 升 0028,跑的是 0028 的 happy path)。
-我 commit 5/9 把 0028 提交前也只跑了现有 test,没补"现场有 ≥2 条同 schedule 活跃 task 时 0028 升级"的 case。
+```
+sqlite3.ProgrammingError: Error binding parameter 1: type 'current_timestamp' is not supported
+```
 
-## 修复
+这条异常发生在 lifespan 阶段 alembic upgrade head — uvicorn 主动退出,launcher 看不到真错误,前端看到"API 连不上"。
 
-### 代码
+### 1.2 TDD 漏洞
 
-**`backend/migrations/versions/0028_crawl_tasks_unique_active_per_schedule.py`**:
+写 0028 时 pytest 只测了 happy path(无重复现场),没构造冲突数据 case → UPDATE 路径未测试。
+`backend/tests/test_migration_0020_system_admin.py` 同范本可参考。
+
+### 1.3 launcher 监控缺口
+
+`launcher/process_manager.py::start_service` 把子进程 stderr 写 `data/logs/{name}.log`,但 launcher 不实时显示 stderr 到前端。`get_status` 只回 `state='crashed'`,没说为什么 — 用户只能看"API 连不上"。
+
+`launcher/ui/src/components/ServiceStatus.vue` 没有 last_error 显示。
+
+## 2. 目标
+
+1. 修复 0028 binding 报错,让 lifespan 阶段 alembic upgrade head 在用户现场(已有重复 scheduled task)也能跑通。
+2. launcher 暴露 last_error 给前端,让用户弹"API 启动失败: <真错误>",不再被黑盒 API 卡死。
+3. 把根因写到 spec + TDD 测试,防止 regression。
+
+## 3. 设计
+
+### 3.1 0028 binding 修复
+
+`backend/migrations/versions/0028_crawl_tasks_unique_active_per_schedule.py`:
 
 ```python
--    {"now": sa.func.current_timestamp(), "ids": duplicate_ids},
-+    {"now": "CURRENT_TIMESTAMP", "ids": duplicate_ids},
+# 修改前:
+{"now": sa.func.current_timestamp(), "ids": duplicate_ids},
+# 修改后:
+{"now": "CURRENT_TIMESTAMP", "ids": duplicate_ids},
 ```
 
-字符串字面量 `CURRENT_TIMESTAMP` 直接走 raw SQL,sqlite3 stdlib 完美支持。
+字面量字符串让 sqlite 自己解析为 `CURRENT_TIMESTAMP()` SQL 函数(sa.func.current_timestamp() 也最终生成这个 SQL,但 bindparam 通道上 SQLite 方言处理有差异)。
 
-### TDD(补真现场测试)
+### 3.2 TDD 5 个 case(写在 `backend/tests/test_migration_0028_conflict_cleanup.py`)
 
-新增 `backend/tests/test_migration_0028_conflict_cleanup.py`:
+策略:subprocess 跑 alembic upgrade head(从 0027 → 0028)在临时 sqlite 上,不污染项目内 data/app.db。范本:`backend/tests/test_migration_0020_system_admin.py`。
 
-1. `test_upgrade_0028_no_op_when_no_duplicates`:构造现场只有 1 条同 schedule RUNNING task,0028 升完不 UPDATE
-2. `test_upgrade_0028_marks_duplicates_failed`:插入同 schedule 3 条 RUNNING + 1 条 COMPLETED,
-   0028 升完后 RUNNING 应剩 id 最小那条,另外 2 条 status=FAILED + error_message 含"迁移 0028"
-3. `test_upgrade_0028_ignores_completed_tasks`:COMPLETED/STOPPED 不在 alive 集合内,不占 unique 冲突
-4. `test_upgrade_0028_sqlite_timestamp_binding_does_not_raise`:回归保护,
-   在 SQLite 上跑 0028 不抛 ProgrammingError(根因 case)
-5. `test_init_database_with_duplicates_boots_cleanly`:端到端,init_database 在有冲突的 DB 上跑通,
-   alembic_version=0028 + UPDATE 走通
+| Case | 目标 |
+|---|---|
+| `test_upgrade_0028_no_op_when_no_duplicates` | 无冲突 → 0028 no-op + alembic_version=0028 + partial unique index 存在 |
+| `test_upgrade_0028_marks_duplicates_failed` | 同 schedule 3 条活跃 → 1 条保留 + 2 条强制 FAILED |
+| `test_upgrade_0028_ignores_completed_and_manual_tasks` | manual 类型不动 + 已结束 task 不动 |
+| `test_upgrade_0028_sqlite_timestamp_binding_does_not_raise` | **关键回归**: 4 条重复触发 UPDATE → 整条 upgrade 不抛 sqlite3.ProgrammingError |
+| `test_init_database_with_duplicates_boots_cleanly` | 端到端:lifespan 路径下 alembic upgrade 不抛 |
 
-### launcher 监控缺口(同时修)
+### 3.3 launcher 监控缺口修复
 
-`launcher/process_manager.py:start_service` 当前不读取子进程 stdout/stderr 实时上报,
-只在子进程退出后才在 status_server 查询时拿历史 log。
-这导致 alembic 失败时用户看不到任何错误。
+#### 3.3.1 `launcher/process_manager.py`
 
-**修复**:start_service 在 `_logs_dir/{name}.log` 头加 `=== launched at <iso8601> ===` 分隔符,
-status_server 的 `GET /api/v1/launcher/logs/{name}` 接口返回最近 200 行(已有的话)。
-PyWebView 状态面板"服务详情"页加"最近日志"折叠区,显示 4 个服务的 tail。
-关联需求:`docs/superpowers/specs/2026-08-19-launcher-status-panel-design.md`
+`start_service` 在日志头写分隔符:
+```
+=== launched at <iso8601> pid=<pid> cmd=<cmd> ===
+```
+Popen 拿到真 PID 后回填占位符 `pid=__PID__`。
 
-### 启动流程再加一道兜底
+`__init__` 加 `_last_launch_at` / `_last_error` dict。
 
-`backend/app/main.py:lifespan` 在 `init_database()` 抛异常后,**不要立即 raise**,
-改为先写 `data/logs/lifespan-error.log`(完整 traceback),再 raise。
-launcher 的 `_signal_handler` 不改,但 `process_manager.py:start_service("api")`
-的调用方 (`launcher/main.py:255`) 用 try/except 包住:
-- api 启动失败 → 把 lifespan-error.log 内容推给 status_server 的 `last_error` 字段
-- PyWebView 状态页面上方红条"API 启动失败: <摘要>",点开看完整 traceback
+`get_status` 返回字段加 `last_launch_at` / `last_error`(crashed 时从日志末尾抽 8 行)。
 
-## 验收
+`start_service` 启动时清空 `_last_error`,新启动视作健康。
 
-- [ ] 后端 pytest 全量跑通(含新增 5 个 case)
-- [ ] 在你现有的 `/Users/hanamaki_mac_mini/.xhs-info-crawl/app.db` 上跑
-      `uv run --project backend alembic upgrade head` 不再报错
-- [ ] alembic_version 从 0027 升到 0028
-- [ ] 重新双击 .app → 前端可登录 + 看到 4 个列表
-- [ ] launcher 数据目录 `data/logs/api.log` 头出现 `=== launched at ... ===` 分隔符
-- [ ] status_server 暴露 `last_error` 字段
-- [ ] PyWebView 状态面板显示红条"API 启动失败: <摘要>"(回归 case)
+`get_logs_tail` 复用 `_read_log_tail_lines` 提取函数。
 
-## 不在本次范围
+#### 3.3.2 `launcher/ui/src/api/client.ts`
 
-- v0.7.0+5 修复完成后,launcher 自动清理 macOS launchctl 残留 `com.xhs.worker` / `com.xhs.beat` 的逻辑
-  (关联需求 `docs/superpowers/specs/2026-08-16-launcher-cleanup-on-exit-design.md` 已有部分实现,
-   但需要补"launcher 启动前先 kill 上一轮残留"的预清理,留到 v0.7.0+6)
-- migration 0028 升级失败时的回滚路径(目前是 fail-fast,直接 raise 让 uvicorn 退出)
+`ServiceState` 类型加 `last_launch_at?: string | null` + `last_error?: string | null`。
 
-## 关联文件
+#### 3.3.3 `launcher/ui/src/components/ServiceStatus.vue`
 
-- `backend/migrations/versions/0028_crawl_tasks_unique_active_per_schedule.py` — 主修复
-- `backend/tests/test_migration_0028_conflict_cleanup.py` — 新增
-- `launcher/process_manager.py` — 日志头分隔符
-- `launcher/status_server.py` — `last_error` 字段
-- `launcher/ui/src/components/StatusPanel.vue` — 红条 + 日志折叠区
+顶部加 `<el-alert type="error">`,展示 crashed 服务的真错误。
 
-## 关联 spec
+## 4. 验收
 
-- `docs/superpowers/specs/2026-08-21-package-startup-auto-migrate-design.md` §2.3 fail-fast 行为
-- `docs/superpowers/specs/2026-08-19-launcher-status-panel-design.md`
-- `docs/superpowers/specs/2026-08-16-launcher-cleanup-on-exit-design.md`
-- `docs/superpowers/specs/2026-08-22-schedule-unique-active-and-paused-restart-design.md` (0028 的设计源)
+- [x] `uv run --project backend pytest backend/tests/test_migration_0028_conflict_cleanup.py -v` — 5 passed
+- [x] `uv run --project backend pytest launcher/tests/test_process_manager.py -v` — 16 passed(含 4 个新 case)
+- [x] 在 `~/.xhs-info-crawl/app.db`(alembic_version=0027 + 17 条重复 scheduled)上跑 `alembic upgrade head` → exit=0 + alembic_version=0028 + 16 条 FAILED + partial unique index 存在
+- [x] 幂等:再跑一次 `alembic upgrade head` 不报错
+- [x] 重打 .app:`dist/build/xhs-info-crawl-0.7.0-macos-arm64.zip` + codesign valid on disk
+- [x] 拷贝到 `~/Downloads/`(macOS sandbox 拒绝,提供命令让用户手动)
+
+## 5. 关联
+
+- `docs/superpowers/specs/2026-08-22-schedule-unique-active-and-paused-restart-design.md` — 0028 原始设计
+- `docs/superpowers/specs/2026-08-21-package-startup-auto-migrate-design.md` — v0.7.0+1 alembic upgrade head 路径
+- `docs/superpowers/specs/2026-08-19-launcher-status-panel-design.md` — StatusPanel 现状
+- `docs/superpowers/specs/2026-08-16-launcher-cleanup-on-exit-design.md` — 进程组清理
