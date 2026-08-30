@@ -45,33 +45,32 @@ def get_models_url(os_name: str, arch: str) -> str:
     return f"{GITHUB_RELEASE_BASE}/ocr-models-{MODELS_VERSION}/ocr-models-{MODELS_VERSION}-{os_name}-{arch}.zip"
 
 
-def get_ocr_status(project_root: Path) -> dict:
-    """获取 OCR 安装状态。
+def _resolve_paddlex_dir(project_root: Path) -> Path:
+    """解析 OCR 模型存储目录,优先级链(PADDLE_PDX_CACHE_HOME env > .env 同名 > DATA_DIR/paddlex > fallback)。
 
-    支持外部 PADDLE_PDX_CACHE_HOME 路径(用户改到 .app 外 ~/Library/... 时
-    launcher 不应该误判为未安装)。
-    检查顺序:
-    1. os.environ['PADDLE_PDX_CACHE_HOME'](可能指向 .app 外的绝对路径)
-    2. .env 里的 PADDLE_PDX_CACHE_HOME(launcher 启动时不一定 load 到 os.environ)
-    3. .env 里的 DATA_DIR/paddlex(base dir 模式下用户只设 DATA_DIR)
-    4. fallback 到 .app 内 data/paddlex/
+    关联 spec: docs/superpowers/specs/2026-08-23-audit-fixes-batch-design.md Task 5。
+    同时被 download_models(写入)和 get_ocr_status(读取)使用,保证两边解析的路径一致。
 
-    Returns:
-        {"status": "not_installed"|"installing"|"installed", "version": "..."}
+    优先级:
+    1. ``os.environ['PADDLE_PDX_CACHE_HOME']``(子进程继承自父 launcher,通常就是 .app 启动时设置)
+    2. ``project_root/.env`` 里的 ``PADDLE_PDX_CACHE_HOME=...``
+    3. ``project_root/.env`` 里的 ``DATA_DIR=...`` 拼 ``/paddlex``(base dir 模式用户只设 DATA_DIR)
+    4. ``project_root/data/paddlex/``(.app 内默认)
+
+    路径里的 ``~`` 在 .env 解析阶段展开到用户主目录。
     """
     import os as _os
-    candidate_dirs: list[Path] = []
 
-    # 1. os.environ(子进程继承)
+    # 1. os.environ(子进程继承自父 launcher)
     env_paddlex = _os.environ.get("PADDLE_PDX_CACHE_HOME")
     if env_paddlex:
-        candidate_dirs.append(Path(env_paddlex))
+        return Path(env_paddlex)
 
     # 2-3. 读 .env(launcher 启动时不一定 load .env)
     env_path = project_root / ".env"
+    env_paddlex_from_file: Optional[str] = None
+    data_dir: Optional[str] = None
     if env_path.exists():
-        env_paddlex_2 = None
-        data_dir = None
         for line in env_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line.startswith("#") or "=" not in line:
@@ -80,21 +79,39 @@ def get_ocr_status(project_root: Path) -> dict:
             k = k.strip()
             v = v.strip()
             if k == "PADDLE_PDX_CACHE_HOME" and v:
-                env_paddlex_2 = v
+                env_paddlex_from_file = v
             elif k == "DATA_DIR" and v:
-                data_dir = v
-                # 展开 ~
+                # 展开 ~ → 用户主目录
                 if v.startswith("~"):
-                    data_dir = str(Path(data_dir).expanduser())
-        if env_paddlex_2 and env_paddlex_2 not in [str(d) for d in candidate_dirs]:
-            candidate_dirs.append(Path(env_paddlex_2))
-        if data_dir:
-            derived = Path(data_dir) / "paddlex"
-            if str(derived) not in [str(d) for d in candidate_dirs]:
-                candidate_dirs.append(derived)
+                    v = str(Path(v).expanduser())
+                data_dir = v
+
+    if env_paddlex_from_file:
+        return Path(env_paddlex_from_file)
+    if data_dir:
+        return Path(data_dir) / "paddlex"
 
     # 4. fallback 到 .app 内
-    candidate_dirs.append(project_root / "data" / "paddlex")
+    return project_root / "data" / "paddlex"
+
+
+def get_ocr_status(project_root: Path) -> dict:
+    """获取 OCR 安装状态。
+
+    支持外部 PADDLE_PDX_CACHE_HOME 路径(用户改到 .app 外 ~/Library/... 时
+    launcher 不应该误判为未安装)。路径解析走 _resolve_paddlex_dir,
+    保证与 download_models 写入路径一致。
+
+    Returns:
+        {"status": "not_installed"|"installing"|"installed", "version": "..."}
+    """
+    paddlex_dir = _resolve_paddlex_dir(project_root)
+    candidate_dirs = [paddlex_dir]
+    # 兼容旧 dev 残留:用户曾经装到 project_root/data/paddlex 但后来改了
+    # DATA_DIR/PADDLE_PDX_CACHE_HOME,把老路径放过一次不影响新位置判断。
+    legacy_dir = project_root / "data" / "paddlex"
+    if legacy_dir != paddlex_dir and legacy_dir.exists() and legacy_dir not in candidate_dirs:
+        candidate_dirs.append(legacy_dir)
 
     for paddlex_dir in candidate_dirs:
         if not paddlex_dir.exists():
@@ -190,7 +207,11 @@ def download_models(
     打进 .app/runtime/venv/(backend/requirements-runtime.txt)。关联 spec:
     docs/superpowers/specs/2026-08-21-ocr-packaging-v0.7-design.md § 改动 6
     """
-    paddlex_dir = project_root / "data" / "paddlex"
+    paddlex_dir = _resolve_paddlex_dir(project_root)
+    # tmp_dir 也跟随 DATA_DIR(若设了),避免把下载 zip 落在 .app 内后,
+    # 用户的 PADDLE_PDX_CACHE_HOME 装模型时跨盘读写。
+    # 解析:若 _resolve_paddlex_dir 的根(parent)是 DATA_DIR(无 PADDLE_PDX_CACHE_HOME env),
+    # 用 DATA_DIR/tmp;否则 fallback project_root/data/tmp。
     tmp_dir = project_root / "data" / "tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     paddlex_dir.mkdir(parents=True, exist_ok=True)
