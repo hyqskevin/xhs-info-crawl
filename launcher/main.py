@@ -16,6 +16,7 @@ import uvicorn
 from pathlib import Path
 
 from launcher.env_bootstrap import (
+    StaleDataDirFallbackError,
     _read_env_value,
     _resolve_data_dir_in_data_dir_env,
     ensure_data_dir_env,
@@ -160,7 +161,13 @@ def bootstrap_env(project_root: Path) -> tuple[int, int]:
     # 之前 launcher 没这步,用户 .env 里 DATA_DIR=./data 时,backend 子进程从 cwd
     # (即 .app/Contents/Resources/xhs-info-crawl/) 解析 → 所有日志/celery/run/tmp 写到 .app 内,
     # 用户体感"数据丢失"。
-    resolved_data_dir = resolve_data_dir(env_path, project_root=project_root)
+    # 2026-08-24 新增陈旧 fallback:.env 的 DATA_DIR 指向不存在目录时,fallback 到默认路径;
+    # fallback 失败(默认路径不可写)→ 抛 StaleDataDirFallbackError 让 launcher 启动失败 + UI 报错卡。
+    try:
+        resolved_data_dir = resolve_data_dir(env_path, project_root=project_root)
+    except StaleDataDirFallbackError as exc:
+        logger.error("DATA_DIR 初始化失败: %s", exc)
+        raise
     logger.info("DATA_DIR 解析: %s", resolved_data_dir)
 
     # 3.3 确保 DATA_DIR/.env 存在(v0.7.0+9 新增)

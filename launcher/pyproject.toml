@@ -3,6 +3,14 @@ name = "xhs-info-crawl-launcher"
 version = "0.1.0"
 description = "小红书抓取系统启动器（.app launcher + dev 模式共用工具）"
 requires-python = ">=3.11"
+dependencies = [
+    "pywebview>=5.3,<6",
+    "fastapi>=0.115,<1",
+    "httpx>=0.28,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -10,3 +18,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["launcher*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

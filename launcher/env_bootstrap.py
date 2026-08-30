@@ -6,9 +6,24 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# 异常
+# ============================================================
+
+
+class StaleDataDirFallbackError(Exception):
+    """.env DATA_DIR 陈旧 + fallback 到默认路径也失败(默认路径不可写/不存在)。
+
+    bootstrap_env 捕获此异常后,launcher 启动失败 + UI 报错卡。
+    """
 
 # 占位值,需要替换的
 _SECRET_KEY_PLACEHOLDER = "replace-with-a-random-local-secret"
@@ -336,6 +351,87 @@ def _read_env_value(env_path: Path, key: str, default: str) -> str:
     return default
 
 
+def _resolve_and_write(
+    env_path: Path,
+    target_path: str,
+    project_root: Path,
+    *,
+    _check_writable: bool = False,
+) -> str:
+    """把 target_path 解析为绝对路径,可选校验可写,写回 env_path。
+
+    Args:
+        env_path: .env 文件路径
+        target_path: 目标 DATA_DIR 字面值(可能是 default 字符串)
+        project_root: launcher project_root(用于解析相对路径)
+        _check_writable: True 时校验 target_path 解析后可写,失败抛 StaleDataDirFallbackError
+
+    Returns:
+        解析后的绝对路径字符串
+
+    Raises:
+        StaleDataDirFallbackError: _check_writable=True 且路径不可写/不存在时
+    """
+    candidate = Path(target_path).expanduser()
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+    else:
+        # 相对路径(./data / data / foo/bar)→ 以 project_root 为基准
+        resolved = (project_root / candidate).resolve()
+
+    if _check_writable:
+        # 校验路径可写:目录不存在 → mkdir(parents=True, exist_ok=True);不可写 → 抛异常
+        if not resolved.exists():
+            try:
+                resolved.mkdir(parents=True, exist_ok=True)
+            except (OSError, PermissionError) as exc:
+                raise StaleDataDirFallbackError(
+                    f"陈旧 DATA_DIR fallback 失败:默认路径 {resolved} 不可创建({exc})。"
+                    f"请手动检查磁盘权限或 .env 的 DATA_DIR 字段"
+                ) from exc
+        if not os.access(str(resolved), os.W_OK):
+            raise StaleDataDirFallbackError(
+                f"陈旧 DATA_DIR fallback 失败:默认路径 {resolved} 不可写。"
+                f"请手动检查磁盘权限或 .env 的 DATA_DIR 字段"
+            )
+
+    resolved_str = str(resolved)
+    update_env_value(env_path, "DATA_DIR", resolved_str)
+    return resolved_str
+
+
+def is_data_dir_stale(raw_value: str, *, project_root: Path) -> tuple[bool, str]:
+    """检测 .app/.env 的 DATA_DIR 字面值是否指向"陈旧"路径(目录不存在)。
+
+    陈旧定义(2026-08-24 spec):
+    - 路径解析后物理上不存在(目录不存在)
+    - 路径解析后存在但不是目录(指向文件)
+    - 路径解析失败(OSError / RuntimeError,如循环 symlink)
+
+    Returns:
+        (stale, reason) 元组
+        - stale=True:陈旧,reason 说明原因(供 logger.warning 输出)
+        - stale=False:路径存在且是目录,reason 为空
+    """
+    if not raw_value:
+        return True, "DATA_DIR 字段缺失/空"
+    try:
+        candidate = Path(raw_value).expanduser()
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+        else:
+            resolved = (project_root / candidate).resolve()
+    except (OSError, RuntimeError) as exc:
+        return True, f"DATA_DIR 解析失败: {exc}"
+
+    if not resolved.exists():
+        return True, f"DATA_DIR 路径不存在: {resolved}"
+    if not resolved.is_dir():
+        return True, f"DATA_DIR 不是目录: {resolved}"
+
+    return False, ""
+
+
 def resolve_data_dir(
     env_path: Path,
     *,
@@ -344,34 +440,52 @@ def resolve_data_dir(
 ) -> str:
     """把 .env 里的 DATA_DIR 解析为绝对路径,写入 .env 并返回。
 
-    解析规则:
-    - 缺失 / 空字符串 → 走 `default` 参数(DEFAULT_DATA_DIR 即
-      `~/Library/Application Support/com.xhs-info-crawl.local`),展开 ~ 后返回
+    解析规则(v0.7.0+6 + 2026-08-24 陈旧 fallback):
+    - 缺失 / 空字符串 → 走 `default` 参数(DEFAULT_DATA_DIR),展开 ~ 后返回
+    - 字面值指向目录物理不存在 → 视为陈旧,logger.warning 输出原因,fallback 到默认路径
+      (并校验默认路径可写;不可写则抛 StaleDataDirFallbackError)
     - `~/xxx` → expanduser 展开
     - `./xxx` / `xxx`(无 `/` 开头)→ 以 `project_root` 为基准 resolve
-    - 已是绝对路径 → 原样返回
+    - 已是绝对路径且存在 → 原样返回
 
     为什么必须有这层:backend 子进程 launcher 启时 cwd = .app/Contents/Resources/xhs-info-crawl/,
     相对路径 ./data 会解析成 .app/data/,所有日志/celery/run/全丢。
     dev 模式下 cwd = backend/,相对路径解析到 backend/data/,看似正常 — 但用户 .env 共用,
     必须由 launcher 在写入 .env 时强制绝对路径。
 
-    关联 spec: docs/superpowers/specs/2026-08-23-data-dir-absolute-path-launcher-design.md
+    关联 spec:
+    - docs/superpowers/specs/2026-08-23-data-dir-absolute-path-launcher-design.md
+    - docs/superpowers/specs/2026-08-24-launcher-detect-stale-data-dir-and-fallback-default-design.md
     """
     raw = _read_env_value(env_path, "DATA_DIR", "")
-    if not raw:
-        raw = default or DEFAULT_DATA_DIR
+    fallback_target = default or DEFAULT_DATA_DIR
 
-    # 展开 ~/ → 绝对路径
+    if not raw:
+        # 缺失/空 → 走 fallback,沿用 v0.7.0+6 行为
+        return _resolve_and_write(env_path, fallback_target, project_root)
+
+    # 已有字面值 → 先检测是否陈旧
+    stale, reason = is_data_dir_stale(raw, project_root=project_root)
+    if stale:
+        # 陈旧 → fallback 到默认,带可写性校验
+        logger.warning(
+            ".env DATA_DIR=%r 已陈旧(%s),fallback 到默认路径 %s",
+            raw, reason, fallback_target,
+        )
+        return _resolve_and_write(
+            env_path, fallback_target, project_root, _check_writable=True
+        )
+
+    # 路径有效 → 原样返回(沿用 v0.7.0+6 行为)
     candidate = Path(raw).expanduser()
     if candidate.is_absolute():
         resolved = candidate.resolve()
     else:
-        # 相对路径(./data / data / foo/bar)→ 以 project_root 为基准
         resolved = (project_root / candidate).resolve()
-
     resolved_str = str(resolved)
-    update_env_value(env_path, "DATA_DIR", resolved_str)
+    # 仅当 .env 字面值未写成绝对路径时才写回(v0.7.0+6 行为)
+    if _read_env_value(env_path, "DATA_DIR", "") != resolved_str:
+        update_env_value(env_path, "DATA_DIR", resolved_str)
     return resolved_str
 
 
