@@ -110,6 +110,21 @@ def create_user(
         final_group_ids = sorted(set(payload.group_ids + [admin_gid]))
     else:
         final_group_ids = list(payload.group_ids)
+    # FK 校验：所有 gid 必须存在,缺失 → 422。
+    # 不在 INSERT 之后再校验,因为 SQLite 测试默认 PRAGMA foreign_keys=OFF,
+    # 会漏掉 FK 违反 → 500 在生产 MySQL/Postgres 才暴露。
+    # 关联 spec: docs/superpowers/specs/2026-08-23-audit-fixes-batch-design.md §3.6
+    if final_group_ids:
+        existing_ids = {
+            gid for (gid,) in db.query(Group.id).filter(Group.id.in_(final_group_ids)).all()
+        }
+        missing = set(final_group_ids) - existing_ids
+        if missing:
+            # 显式 rollback:前面 db.flush() 已经 INSERT User 到 DB(SQLite
+            # autocommit + in_transaction),raise HTTPException 不会自动 rollback,
+            # 会留下"无分组的孤儿 user"。先 rollback 再 raise。
+            db.rollback()
+            raise HTTPException(422, f"分组不存在: {sorted(missing)}")
     for gid in final_group_ids:
         db.add(UserGroup(user_id=user.id, group_id=gid))
     db.commit()
