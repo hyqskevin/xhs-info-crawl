@@ -153,7 +153,9 @@ class ChromePool:
     def _launch(self, port: int, user_data_dir: Path) -> subprocess.Popen:
         cmd = [
             self._chrome_bin,
-            "--headless=new=new",
+            # 新 headless 模式(Chrome 109+);不是 --headless=old,也不是 --headless=new=new typo。
+            # 关联 spec: docs/superpowers/specs/2026-08-23-audit-fixes-batch-design.md §3.7
+            "--headless=new",
             "--no-sandbox",
             "--disable-gpu",
             f"--remote-debugging-port={port}",
