@@ -206,10 +206,10 @@ def list_notes(
         blogger = db.scalar(select(Blogger).where(Blogger.id == blogger_id))
         if blogger is None:
             raise HTTPException(404, "博主不存在")
-        if not blogger.profile_url:
-            # 博主无主页地址，无法匹配任何推文
-            return {"code": 200, "message": "success", "data": {"items": []}, "pagination": {"page": page, "page_size": page_size, "total": 0}}
-        filters.append(Note.source_url.like(blogger.profile_url + "%"))
+        # 修复(2026-09-01 P0 #1): 原实现用 source_url.like(profile_url+"%") 几乎永远匹配不到。
+        # 改用 Note.matched_blogger_id == blogger_id（与博主组筛选分支同模式），见 spec
+        # docs/superpowers/specs/2026-09-01-audit-batch-2-notes-blogger-filter-design.md
+        filters.append(Note.matched_blogger_id == blogger_id)
 
     total = db.scalar(select(func.count()).select_from(Note).where(*filters)) or 0
     activity_counts = (
