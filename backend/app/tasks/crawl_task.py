@@ -536,6 +536,9 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
                     task.skipped_notes += 1
                     db.commit()
                     log(db, task.id, "INFO", f"标题未包含关键词，已跳过 [{entry[1]['url']}] 标题={entry[1].get('title', '')!r} 关键词={matched_keywords}")
+                    # 修复(2026-09-01 P2 #3a): 健康跳过路径应清零 consecutive_failures，
+                    # 避免之前累积的计数让后续真实失败更快触发熔断。
+                    consecutive_failures = 0
                     continue
                 staged = download_and_ocr(db, task, run_token, entry[0], entry[1], adapter, settings)
                 if staged is not None:
