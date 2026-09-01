@@ -807,6 +807,10 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
         task = db.get(CrawlTask, task_id)
         task.status = "PAUSED"
         task.error_message = str(exc)
+        # 修复(2026-09-01 P2 #3b): 显式清空 current_stage/current_note，
+        # 避免前端轮询时误读 RUNNING 阶段的旧 stage 字符串。
+        task.current_stage = "账号全失效"
+        task.current_note = None
         db.commit()
         record_schedule_failure(db, task)
         log(db, task.id, "ERROR", str(exc))
