@@ -9,7 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.database import get_db
 from app.core.security import require_permission
@@ -58,7 +58,7 @@ def list_audit_logs(
     db=Depends(get_db),
 ):
     stmt = select(AuditLog)
-    count_stmt = select(AuditLog)
+    count_stmt = select(func.count()).select_from(AuditLog)
     if actor_username:
         stmt = stmt.where(AuditLog.actor_username.contains(actor_username))
         count_stmt = count_stmt.where(AuditLog.actor_username.contains(actor_username))
@@ -71,7 +71,10 @@ def list_audit_logs(
     if date_to:
         stmt = stmt.where(AuditLog.created_at <= date_to)
         count_stmt = count_stmt.where(AuditLog.created_at <= date_to)
-    total = len(db.execute(count_stmt).scalars().all())
+    # 修复(2026-09-01 P1 #2): 原 `len(db.execute(count_stmt).scalars().all())` 把整表 ORM 加载到 Python
+    # 仅为计数，行数大时 O(N) 内存 + 序列化。改用 DB 端 COUNT(*)，见 spec
+    # docs/superpowers/specs/2026-09-01-audit-batch-2-audit-logs-count-design.md
+    total = db.scalar(count_stmt) or 0
     rows = (
         db.execute(stmt.order_by(AuditLog.id.desc()).offset((page - 1) * size).limit(size))
         .scalars()
