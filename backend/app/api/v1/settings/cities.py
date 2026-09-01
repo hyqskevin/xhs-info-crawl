@@ -89,11 +89,13 @@ def update_city(item_id: int, payload: CityIn, _: Admin, db: DB):
 @router.delete("/settings/cities/{item_id}")
 def delete_city(item_id: int, _: Admin, db: DB):
     city = db.get(City, item_id)
-    if city is not None:
-        db.execute(delete(BloggerCity).where(BloggerCity.city_code == city.code))
-        db.execute(delete(KeywordGroupCity).where(KeywordGroupCity.city_code == city.code))
-        db.delete(city)
-        db.commit()
+    if city is None:
+        # 修复(2026-09-01 P2 #5): 与 batch_delete_cities 404 语义对齐。
+        raise HTTPException(404, "城市不存在")
+    db.execute(delete(BloggerCity).where(BloggerCity.city_code == city.code))
+    db.execute(delete(KeywordGroupCity).where(KeywordGroupCity.city_code == city.code))
+    db.delete(city)
+    db.commit()
     return {"code": 200, "message": "success", "data": {"id": item_id}}
 
 

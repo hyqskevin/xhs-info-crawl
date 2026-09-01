@@ -243,10 +243,12 @@ def update_setting(kind: Literal["bloggers"], item_id: int, payload: dict, _: Ad
 @router.delete("/settings/{kind}/{item_id}")
 def delete_setting(kind: Literal["bloggers"], item_id: int, _: Admin, db: DB):
     item = db.get(MODELS[kind], item_id)
-    if item is not None:
-        if kind == "bloggers":
-            db.execute(delete(BloggerCity).where(BloggerCity.blogger_id == item.id))
-            db.execute(delete(BloggerGroupMember).where(BloggerGroupMember.blogger_id == item.id))
-        db.delete(item)
-        db.commit()
+    if item is None:
+        # 修复(2026-09-01 P2 #5): 与 batch_delete 404 语义对齐,不存在资源直接 404。
+        raise HTTPException(404, "配置不存在")
+    if kind == "bloggers":
+        db.execute(delete(BloggerCity).where(BloggerCity.blogger_id == item.id))
+        db.execute(delete(BloggerGroupMember).where(BloggerGroupMember.blogger_id == item.id))
+    db.delete(item)
+    db.commit()
     return {"code": 200, "message": "success", "data": {"id": item_id}}
