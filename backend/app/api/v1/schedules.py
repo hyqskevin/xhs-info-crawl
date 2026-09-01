@@ -58,12 +58,35 @@ def _validate_scope(db: Session, payload: ScheduleIn) -> None:
 
 
 def _last_task(db: Session, schedule_id: int) -> dict | None:
-    """按 params.schedule_id 匹配最新 CrawlTask（Python 过滤，避免 SQLite json_extract 方言绑定）。"""
+    """按 params.schedule_id 匹配最新 CrawlTask（Python 过滤，避免 SQLite json_extract 方言绑定）。
+
+    注意(2026-09-01 P1 #4): 单条 schedule 的便利函数保留，列表/聚合场景请用
+    last_tasks_by_schedule() 一次查，避免 N+1。
+    """
     tasks = db.scalars(select(CrawlTask).order_by(CrawlTask.id.desc()).limit(200)).all()
     for task in tasks:
         if (task.params or {}).get("schedule_id") == schedule_id:
             return {"id": task.id, "status": task.status, "started_at": task.started_at}
     return None
+
+
+def last_tasks_by_schedule(db: Session, limit: int = 200) -> dict[int, dict | None]:
+    """一次查最近 limit 条 CrawlTask，按 params['schedule_id'] 分组取每组最新。
+
+    返回 {schedule_id: {"id", "status", "started_at"} | None}。
+    - schedule_id 出现在 tasks 里 → 该 schedule 的最新 task
+    - 没出现 → 该 schedule 不在返回 dict 里（调用方用 .get(schedule_id) 拿 None）
+
+    修复(2026-09-01 P1 #4): 替代逐个 schedule 调 _last_task 的 N+1 模式。
+    """
+    tasks = db.scalars(select(CrawlTask).order_by(CrawlTask.id.desc()).limit(limit)).all()
+    result: dict[int, dict] = {}
+    for task in tasks:
+        sid = (task.params or {}).get("schedule_id")
+        if sid is None or sid in result:
+            continue
+        result[sid] = {"id": task.id, "status": task.status, "started_at": task.started_at}
+    return result
 
 
 def _dump(db: Session, schedule: ScheduledCrawl, with_last_task: bool = False) -> dict:
@@ -93,10 +116,17 @@ def _dump(db: Session, schedule: ScheduledCrawl, with_last_task: bool = False) -
 @router.get("")
 def list_schedules(_: Admin = None, db: DB = None) -> dict:
     schedules = db.scalars(select(ScheduledCrawl).order_by(ScheduledCrawl.id)).all()
+    # 修复(2026-09-01 P1 #4): 一次查 CrawlTask 聚合 last_task，避免 N+1。
+    last_tasks = last_tasks_by_schedule(db)
     return {
         "code": 200,
         "message": "success",
-        "data": {"items": [_dump(db, s, with_last_task=True) for s in schedules]},
+        "data": {
+            "items": [
+                {**_dump(db, s, with_last_task=False), "last_task": last_tasks.get(s.id)}
+                for s in schedules
+            ]
+        },
     }
 
 

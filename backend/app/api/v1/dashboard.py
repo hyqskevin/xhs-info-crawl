@@ -37,15 +37,18 @@ def analytics(_:Annotated[dict,Depends(get_current_user)],db:Annotated[Session,D
     for t in last50:
         key=t.status if t.status in _KNOWN_STATUSES else 'OTHER'
         status_counts[key]=status_counts.get(key,0)+1
-    scheduled_tasks=list(db.scalars(select(CrawlTask).order_by(CrawlTask.id.desc()).limit(500)).all())
-    schedules=[]
+    # 修复(2026-09-01 P1 #4): 用 schedules helper 一次聚合 last_task，避免对 500 行 CrawlTask 循环 N 次。
+    # 见 docs/superpowers/specs/2026-09-01-audit-batch-2-schedules-last-task-n+1-design.md
+    from app.api.v1.schedules import last_tasks_by_schedule
+    last_tasks = last_tasks_by_schedule(db, limit=500)
+    schedules = []
     for s in db.scalars(select(ScheduledCrawl).order_by(ScheduledCrawl.id)).all():
-        last_task=None
-        for t in scheduled_tasks:
-            if (t.params or {}).get('schedule_id')==s.id:
-                last_task={'id':t.id,'status':t.status,'started_at':t.started_at}
-                break
-        schedules.append({'id':s.id,'name':s.name,'enabled':s.enabled,'day_of_week':s.day_of_week,'hour':s.hour,'minute':s.minute,'city_code':s.city_code,'last_task':last_task})
+        schedules.append({
+            'id': s.id, 'name': s.name, 'enabled': s.enabled,
+            'day_of_week': s.day_of_week, 'hour': s.hour, 'minute': s.minute,
+            'city_code': s.city_code,
+            'last_task': last_tasks.get(s.id),
+        })
     return {'code':200,'message':'success','data':{'recent_tasks':recent_tasks,'status_counts':status_counts,'schedules':schedules}}
 @router.get('/summary')
 def summary(_:Annotated[dict,Depends(get_current_user)],db:Annotated[Session,Depends(get_db)]):
