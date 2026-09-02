@@ -31,11 +31,21 @@ const router = createRouter({
         { path: 'settings', component: SettingsView, meta: { title: '配置中心' } },
         { path: 'posters', component: PostersListView, meta: { title: '海报制作' } },
         { path: 'posters/new', component: PosterWizardView, meta: { title: '新建海报' } },
-        { path: 'system-admin', component: SystemAdminView, meta: { title: '系统管理' } },
+        { path: 'system-admin', component: SystemAdminView, meta: { title: '系统管理', permissions: ['system:admin'] } },
       ],
     },
   ],
 })
-router.beforeEach(to=>{if(!to.meta.public&&!localStorage.getItem('token'))return '/login';if(to.path==='/login'&&localStorage.getItem('token'))return '/dashboard'})
+router.beforeEach(async (to) => {
+  // 动态 import 避免循环依赖（stores/user 不应在 router 文件顶层 import）
+  const { useUserStore } = await import('@/stores/user')
+  const user = useUserStore()
+  if (!to.meta.public && !user.isAuthenticated) return '/login'
+  if (to.path === '/login' && user.isAuthenticated) return '/dashboard'
+  // 权限校验：to.meta.permissions 是 AND 关系（全部满足才放行），
+  // 与后端 require_permission 单个 code 的语义对齐用 .every。
+  const required = (to.meta as { permissions?: string[] }).permissions ?? []
+  if (required.length && !required.every((p) => user.hasPermission(p))) return '/dashboard'
+})
 
 export default router
