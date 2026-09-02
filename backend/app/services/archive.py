@@ -12,12 +12,6 @@ from app.models.note import Note, NoteImage
 _LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 
 
-def resolve_storage_path(data_dir:Path,image_dir:Path,key:str)->Path:
-    data_path=data_dir/key
-    if data_path.exists(): return data_path
-    return image_dir/key
-
-
 def iso_week_folder_name(started_at: datetime | None) -> str:
     if started_at is None:
         reference = datetime.now(timezone.utc)

@@ -31,11 +31,6 @@ def _image_markdown_src(image: NoteImage) -> str | None:
     return None
 
 
-def strip_report_images(markdown: str) -> str:
-    """去掉周报正文里生成的内联图片行（用于 md 下载，不输出图片地址）。"""
-    return "\n".join(line for line in markdown.splitlines() if not _IMAGE_LINE_RE.match(line))
-
-
 def format_activity_markdown(activity: Activity) -> str:
     start = activity.start_time.strftime("%Y-%m-%d %H:%M") if activity.start_time else "待确认"
     end = activity.end_time.strftime("%H:%M") if activity.end_time else ""
@@ -79,20 +74,6 @@ def generate_note_markdown(week: str, cities: list[str], entries: list[NoteRepor
         else:
             lines.extend(["未识别到活动", ""])
     return "\n".join(lines)
-
-
-def generate_note_xlsx(entries: list[NoteReportEntry]) -> bytes:
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "本周推文"
-    sheet.append(["推文标题", "发布时间", "城市", "原文链接", "正文", "OCR", "活动数", "活动详情"])
-    for note, activities, images in entries:
-        published = note.published_at.isoformat() if note.published_at else f"{note.created_at.isoformat()}（待确认）"
-        ocr = "\n".join(image.ocr_text for image in images if image.ocr_text)
-        sheet.append([note.title, published, CITY_NAMES.get(note.city_code, note.city_code), note.source_url, note.content, ocr, len(activities), _activity_lines(activities)])
-    output = BytesIO()
-    workbook.save(output)
-    return output.getvalue()
 
 
 # ---------------------------------------------------------------------------
