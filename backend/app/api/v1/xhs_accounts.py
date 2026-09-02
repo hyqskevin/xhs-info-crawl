@@ -180,9 +180,12 @@ def update_xhs_account(account_id: int, payload: XhsAccountUpdateIn, _: Admin, d
 @router.delete("/{account_id}")
 def delete_xhs_account(account_id: int, _: Admin, db: DB) -> dict:
     account = db.get(XhsAccount, account_id)
-    if account is not None:
-        db.delete(account)
-        db.commit()
+    if account is None:
+        # 修复(2026-09-01 P2 #5): 与 batch_delete_xhs_accounts 404 语义对齐,
+        # 不存在资源直接 404,避免前端误以为删除成功。
+        raise HTTPException(404, "账号不存在")
+    db.delete(account)
+    db.commit()
     return {"code": 200, "message": "success", "data": {"id": account_id}}
 
 
