@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { Delete, Edit, Plus } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { useRoute } from 'vue-router'
 import { api } from '@/api/client'
+import { confirmSafe } from '@/utils/confirm'
 
 const route = useRoute()
 const tab = ref<'schedules' | 'batch'>((route.query.tab as any) || 'schedules')
@@ -118,7 +119,7 @@ async function save() {
 }
 
 async function remove(row: any) {
-  await ElMessageBox.confirm(`确认删除定时任务 "${row.name}"？`, '删除确认', { type: 'warning' })
+  if (!await confirmSafe(`确认删除定时任务 "${row.name}"？`, '删除确认', { type: 'warning' })) return
   await api.deleteSchedule(row.id)
   ElMessage.success('已删除')
   await load()

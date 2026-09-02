@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { Delete, Edit } from '@element-plus/icons-vue'
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import { usePagination } from '@/composables/usePagination'
+import { confirmSafe } from '@/utils/confirm'
 
 const rows = ref<any[]>([])
 const selectedIds = ref<number[]>([])
@@ -82,7 +83,7 @@ async function save() {
 }
 
 async function remove(row: any) {
-  await ElMessageBox.confirm(`确认删除博主组 "${row.name}"？`, '删除确认', { type: 'warning' })
+  if (!await confirmSafe(`确认删除博主组 "${row.name}"？`, '删除确认', { type: 'warning' })) return
   await api.deleteBloggerGroup(row.id)
   ElMessage.success('已删除')
   await load()
@@ -90,11 +91,11 @@ async function remove(row: any) {
 
 async function batchRemove() {
   if (selectedIds.value.length === 0) return
-  await ElMessageBox.confirm(
+  if (!await confirmSafe(
     `确认批量删除选中的 ${selectedIds.value.length} 个博主组？此操作不可撤销。`,
     '批量删除',
     { type: 'warning' },
-  )
+  )) return
   try {
     await api.batchDeleteBloggerGroups(selectedIds.value)
     ElMessage.success(`已批量删除 ${selectedIds.value.length} 个博主组`)

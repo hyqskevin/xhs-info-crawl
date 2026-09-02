@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { api } from '@/api/client'
+import { confirmSafe } from '@/utils/confirm'
 
 interface UserRow {
   id: number
@@ -56,11 +57,7 @@ async function submit() {
 }
 
 async function remove(u: UserRow) {
-  try {
-    await ElMessageBox.confirm(`确认删除账号 ${u.username}？`, '删除确认', { type: 'warning' })
-  } catch {
-    return
-  }
+  if (!await confirmSafe(`确认删除账号 ${u.username}？`, '删除确认', { type: 'warning' })) return
   await api.deleteUser(u.id)
   ElMessage.success('已删除')
   await load()

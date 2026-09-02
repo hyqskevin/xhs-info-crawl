@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { Connection, Link, RefreshRight, TrendCharts, VideoPlay } from '@element-plus/icons-vue'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { getHealth } from '@/api/health'
 import { api } from '@/api/client'
 import { formatUtcAsShanghai } from '@/utils/datetime'
+import { confirmSafe } from '@/utils/confirm'
 import CrawlTrendChart from '@/components/CrawlTrendChart.vue'
 import CrawlSuccessPie from '@/components/CrawlSuccessPie.vue'
 
@@ -354,7 +355,7 @@ async function openLogin() {
 
 async function stop() {
   if (!lastTask.value) return
-  await ElMessageBox.confirm('当前笔记完成后停止，已处理数据会保留。确认停止抓取？', '安全停止', { type: 'warning' })
+  if (!await confirmSafe('当前笔记完成后停止，已处理数据会保留。确认停止抓取？', '安全停止', { type: 'warning' })) return
   stopping.value = true
   try {
     await api.stopTask(lastTask.value.id)
@@ -368,7 +369,7 @@ async function stop() {
 async function finish(taskOverride?: any) {
   const target = taskOverride || lastTask.value
   if (!target) return
-  await ElMessageBox.confirm(`此任务（#${target.id}）已失败。结束抓取将强制清理残留状态并关闭 Browser 标签，已抓取数据会保留。确认结束？`, '结束抓取', { type: 'warning' })
+  if (!await confirmSafe(`此任务（#${target.id}）已失败。结束抓取将强制清理残留状态并关闭 Browser 标签，已抓取数据会保留。确认结束？`, '结束抓取', { type: 'warning' })) return
   stopping.value = true
   try {
     await api.stopTask(target.id)

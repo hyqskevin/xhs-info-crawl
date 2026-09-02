@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { Delete, Download, Plus, View } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import DOMPurify from 'dompurify'
 import { api } from '@/api/client'
 import { resolveReportImageUrls } from '@/utils/reportPreview'
+import { confirmSafe } from '@/utils/confirm'
 
 const rows = ref<any[]>([])
 const cities = ref<any[]>([])
@@ -129,7 +130,7 @@ async function download(row: any, format: 'md' | 'xlsx') {
 }
 
 async function remove(row: any) {
-  await ElMessageBox.confirm(`确认删除周报「${row.week}」？删除后不可恢复。`, '删除周报', { type: 'warning' })
+  if (!await confirmSafe(`确认删除周报「${row.week}」？删除后不可恢复。`, '删除周报', { type: 'warning' })) return
   try {
     await api.deleteReport(row.id)
     ElMessage.success('周报已删除')

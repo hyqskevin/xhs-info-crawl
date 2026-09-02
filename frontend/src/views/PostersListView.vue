@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { Delete, Edit, Download } from '@element-plus/icons-vue'
 import { onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
+import { confirmSafe } from '@/utils/confirm'
 
 const rows = ref<any[]>([])
 const loading = ref(false)
@@ -43,7 +44,7 @@ async function download(item: any) {
 }
 
 async function remove(item: any) {
-  await ElMessageBox.confirm(`确认删除任务 "${item.name}"？`, '删除', { type: 'warning' })
+  if (!await confirmSafe(`确认删除任务 "${item.name}"？`, '删除', { type: 'warning' })) return
   await api.deletePosterTask(item.id)
   ElMessage.success('已删除')
   await load()

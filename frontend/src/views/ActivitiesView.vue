@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { CircleCheck, CircleClose, Delete, Edit, Refresh, Search, View } from '@element-plus/icons-vue'
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import { formatUtcAsShanghai } from '@/utils/datetime'
+import { confirmSafe } from '@/utils/confirm'
 
 const rows = ref<any[]>([])
 const cities = ref<any[]>([])
@@ -124,14 +125,14 @@ function formatEngagement(row: any) {
 
 async function batchRemove() {
   if (!selectedRows.value.length) return
-  await ElMessageBox.confirm(`确认删除选中的 ${selectedRows.value.length} 篇推文及其活动？`, '批量删除确认', { type: 'warning' })
+  if (!await confirmSafe(`确认删除选中的 ${selectedRows.value.length} 篇推文及其活动？`, '批量删除确认', { type: 'warning' })) return
   batchDeleting.value = true
   try { const response = await api.deleteNotes(selectedRows.value.map(row => row.id)); ElMessage.success(`已删除 ${response.data.data.deleted_count} 篇推文`); selectedRows.value = []; await load() }
   finally { batchDeleting.value = false }
 }
 async function batchApprove() {
   if (!selectedRows.value.length) return
-  await ElMessageBox.confirm(`确认通过选中的 ${selectedRows.value.length} 篇推文？`, '批量审核确认', { type: 'warning' })
+  if (!await confirmSafe(`确认通过选中的 ${selectedRows.value.length} 篇推文？`, '批量审核确认', { type: 'warning' })) return
   batchApproving.value = true
   try { const response = await api.approveNotes(selectedRows.value.map(row => row.id)); ElMessage.success(`已通过 ${response.data.data.approved_count} 篇推文`); selectedRows.value = []; await load() }
   finally { batchApproving.value = false }
@@ -145,7 +146,7 @@ async function show(id: number) {
 }
 function openEdit(activity: any) { editingId.value = activity.id; Object.keys(form).forEach(key => delete form[key]); Object.assign(form, activity); editDialog.value = true }
 async function saveActivity() { await api.updateActivity(editingId.value!, { ...form, start_time: form.start_time ? new Date(form.start_time).toISOString() : null, end_time: form.end_time ? new Date(form.end_time).toISOString() : null }); editDialog.value = false; await show(detail.value.id); await load(); ElMessage.success('活动已更新') }
-async function removeActivity(activity: any) { await ElMessageBox.confirm('确认删除该识别活动？', '删除确认', { type: 'warning' }); await api.deleteActivity(activity.id); await show(detail.value.id); await load() }
+async function removeActivity(activity: any) { if (!await confirmSafe('确认删除该识别活动？', '删除确认', { type: 'warning' })) return; await api.deleteActivity(activity.id); await show(detail.value.id); await load() }
 async function reExtractNote() {
   reExtracting.value = true
   try {
@@ -179,7 +180,7 @@ async function saveNewActivity() {
   finally { addActivitySaving.value = false }
 }
 async function removeEditActivity(activity: any) {
-  await ElMessageBox.confirm('确认删除该识别活动？', '删除确认', { type: 'warning' })
+  if (!await confirmSafe('确认删除该识别活动？', '删除确认', { type: 'warning' })) return
   await api.deleteActivity(activity.id)
   noteActivities.value = noteActivities.value.filter(a => a.id !== activity.id)
   await load()
@@ -217,14 +218,13 @@ async function saveNote() {
 }
 async function reviewNote(note: any, target: 'APPROVED' | 'REJECTED', fromDetail = false) {
   const action = target === 'APPROVED' ? '通过' : '驳回'
+  if (!await confirmSafe(`确认${action}这篇推文？`, '单篇审核确认', { type: 'warning' })) return
   try {
-    await ElMessageBox.confirm(`确认${action}这篇推文？`, '单篇审核确认', { type: 'warning' })
     await api.reviewNote(note.id, target)
     await load()
     if (fromDetail) await show(note.id)
     ElMessage.success(`推文已${action}`)
-  } catch (error) {
-    if (error === 'cancel' || error === 'close') return
+  } catch {
     ElMessage.error('审核失败，请重试')
   }
 }

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { Delete, Download, Edit, MagicStick, Plus, QuestionFilled, UploadFilled } from '@element-plus/icons-vue'
 import { onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { useRoute } from 'vue-router'
 import { api } from '@/api/client'
 import { usePagination } from '@/composables/usePagination'
+import { confirmSafe } from '@/utils/confirm'
 import KeywordGroupSettings from '@/components/KeywordGroupSettings.vue'
 import BloggerGroupSettings from '@/components/BloggerGroupSettings.vue'
 
@@ -141,7 +142,7 @@ async function save() {
 }
 
 async function remove(row: any) {
-  await ElMessageBox.confirm(`确认删除“${row.name || row.username}”？`, '删除确认', { type: 'warning' })
+  if (!await confirmSafe(`确认删除“${row.name || row.username}”？`, '删除确认', { type: 'warning' })) return
   if (tab.value === 'xhs-accounts') {
     await api.deleteXhsAccount(row.id)
   } else {
@@ -159,11 +160,11 @@ async function batchRemove() {
     tab.value === 'xhs-accounts' ? xhsAccountsSelectedIds.value :
     []
   if (ids.length === 0) return
-  await ElMessageBox.confirm(
+  if (!await confirmSafe(
     `确认批量删除选中的 ${ids.length} 项？此操作不可撤销。`,
     '批量删除',
     { type: 'warning' },
-  )
+  )) return
   try {
     if (tab.value === 'cities') await api.batchDeleteCities(ids)
     else if (tab.value === 'bloggers') await api.batchDeleteBloggers(ids)

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import { formatUtcAsShanghai } from '@/utils/datetime'
+import { confirmSafe } from '@/utils/confirm'
 
 interface AuditLogOut {
   id: number
@@ -62,15 +63,11 @@ function onSelectionChange(rows: AuditLogOut[]) {
 
 async function batchDelete() {
   if (selection.value.length === 0) return
-  try {
-    await ElMessageBox.confirm(
-      `确认删除选中的 ${selection.value.length} 条操作日志？此操作不可撤销。`,
-      '批量删除确认',
-      { type: 'warning' },
-    )
-  } catch {
-    return
-  }
+  if (!await confirmSafe(
+    `确认删除选中的 ${selection.value.length} 条操作日志？此操作不可撤销。`,
+    '批量删除确认',
+    { type: 'warning' },
+  )) return
   const ids = selection.value.map((row) => row.id)
   const r = await api.deleteAuditLogs(ids)
   const deletedCount = ((r as any).data?.deleted_count ?? (r as any).deleted_count) as number

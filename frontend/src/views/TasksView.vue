@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { Delete, Refresh, View } from '@element-plus/icons-vue'
 import { onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import { formatUtcAsShanghai } from '@/utils/datetime'
+import { confirmSafe } from '@/utils/confirm'
 
 const rows = ref<any[]>([])
 const selected = ref<any[]>([])
@@ -42,11 +43,11 @@ async function restart(row: any) {
 
 async function batchDelete() {
   if (!selected.value.length) return
-  await ElMessageBox.confirm(
+  if (!await confirmSafe(
     `确认批量删除选中的 ${selected.value.length} 条任务？已抓取的推文会保留，仅清理任务历史。`,
     '批量删除确认',
     { type: 'warning' },
-  )
+  )) return
   batchDeleting.value = true
   try {
     const ids = selected.value.map((row: any) => row.id)
