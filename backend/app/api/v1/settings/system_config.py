@@ -150,12 +150,29 @@ class SystemConfigIn(BaseModel):
     huggingface_cache_home: str | None = None
 
 
+def _mask_secret(value: str) -> str:
+    """脱敏 API Key：保留前 4 + 后 4，中间用 • 省略，避免 devtools 读取完整 key。
+
+    例：'sk-this-is-a-full-secret-1234' → 'sk-t•••••••••••••••1234'
+    长度 < 8 时返回 '****'（不分前后缀），低于此长度的 key 都视为短 token 全 mask。
+    """
+    if not value or len(value) < 8:
+        return "****"
+    return f"{value[:4]}{'•' * 8}{value[-4:]}"
+
+
 def _read_system_config(settings) -> dict[str, Any]:
-    """从 Settings 实例读取所有可配置项。"""
-    return {
-        key: getattr(settings, key)
-        for key in _ENV_KEY_MAP
-    }
+    """从 Settings 实例读取所有可配置项。
+
+    P0-2 安全修复：minimax_api_key 不返回明文，改为末尾 4 位 mask + is_set boolean。
+    PUT 端点不受影响（仍写入原值到 .env）。
+    """
+    raw = {key: getattr(settings, key) for key in _ENV_KEY_MAP}
+    # 脱敏 minimax_api_key
+    api_key = raw.pop("minimax_api_key", "") or ""
+    raw["minimax_api_key"] = _mask_secret(api_key)
+    raw["minimax_api_key_set"] = bool(api_key)
+    return raw
 
 
 def _update_env_file(env_path: str, updates: dict[str, str]) -> None:
