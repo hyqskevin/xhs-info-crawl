@@ -11,6 +11,8 @@ import os
 import secrets
 from pathlib import Path
 
+from launcher.env_utils import read_env_value
+
 logger = logging.getLogger(__name__)
 
 
@@ -412,17 +414,13 @@ def update_env_value(env_path: Path, key: str, value: str) -> None:
 
 
 def _read_env_value(env_path: Path, key: str, default: str) -> str:
-    """从 .env 读取某个 key 的字符串值,缺失则返回 default。"""
-    if not env_path.exists():
-        return default
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        if k.strip() == key:
-            return v.strip()
-    return default
+    """兼容 shim:转发到 launcher.env_utils.read_env_value。
+
+    抽出动机:6 个 launcher 文件各自内联同一份 .env 解析逻辑,行为漂移埋坑。
+    保留 _read_env_value 别名是为了不改 11 个调用点 + main.py 的 import。
+    新代码请直接用 launcher.env_utils.read_env_value。
+    """
+    return read_env_value(env_path, key, default)
 
 
 def _resolve_and_write(

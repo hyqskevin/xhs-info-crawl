@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from launcher.env_utils import read_env_value
+
 logger = logging.getLogger(__name__)
 
 GITHUB_RELEASE_BASE = "https://github.com/hyqskevin/xhs-info-crawl/releases/download"
@@ -68,23 +70,12 @@ def _resolve_paddlex_dir(project_root: Path) -> Path:
 
     # 2-3. 读 .env(launcher 启动时不一定 load .env)
     env_path = project_root / ".env"
-    env_paddlex_from_file: Optional[str] = None
-    data_dir: Optional[str] = None
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("#") or "=" not in line:
-                continue
-            k, _, v = line.partition("=")
-            k = k.strip()
-            v = v.strip()
-            if k == "PADDLE_PDX_CACHE_HOME" and v:
-                env_paddlex_from_file = v
-            elif k == "DATA_DIR" and v:
-                # 展开 ~ → 用户主目录
-                if v.startswith("~"):
-                    v = str(Path(v).expanduser())
-                data_dir = v
+    env_paddlex_from_file = read_env_value(env_path, "PADDLE_PDX_CACHE_HOME", "")
+    data_dir_raw = read_env_value(env_path, "DATA_DIR", "")
+    # DATA_DIR 路径里的 ``~`` 在 .env 解析阶段展开到用户主目录
+    data_dir: Optional[str] = (
+        str(Path(data_dir_raw).expanduser()) if data_dir_raw.startswith("~") else data_dir_raw
+    ) if data_dir_raw else None
 
     if env_paddlex_from_file:
         return Path(env_paddlex_from_file)

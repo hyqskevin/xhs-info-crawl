@@ -13,6 +13,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from launcher.env_utils import read_env_value
+
 logger = logging.getLogger(__name__)
 
 SERVICE_NAMES = ("api", "worker", "beat", "web")
@@ -59,19 +61,8 @@ class ProcessManager:
         env_path = project_root / ".env"
         # bootstrap_env 已经在 ProcessManager 之前写好了 LOG_DIR 和 DATA_DIR(都是绝对路径)
         # 这里手动解析,跟 env_bootstrap.resolve_data_dir 同款逻辑
-        raw_log = ""
-        raw_data = ""
-        if env_path.exists():
-            for line in env_path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if line.startswith("#") or "=" not in line:
-                    continue
-                k, _, v = line.partition("=")
-                key = k.strip()
-                if key == "LOG_DIR":
-                    raw_log = v.strip()
-                elif key == "DATA_DIR":
-                    raw_data = v.strip()
+        raw_log = read_env_value(env_path, "LOG_DIR", "")
+        raw_data = read_env_value(env_path, "DATA_DIR", "")
 
         # LOG_DIR 显式设置 → 尊重用户,绝对路径优先 / 相对路径以 project_root 为基准
         if raw_log:
