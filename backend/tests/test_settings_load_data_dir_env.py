@@ -1,14 +1,13 @@
-"""验证 backend Settings 同时读 cwd .env + DATA_DIR/.env,DATA_DIR 优先级更高。
+"""验证 backend Settings 同时读 cwd .env + DATA_DIR/.env,cwd/.env 优先级更高。
 
-关联 spec: docs/superpowers/specs/2026-08-23-settings-load-data-dir-env-design.md
+关联 spec: docs/superpowers/specs/2026-09-02-env-loading-priority-design.md
 
-修复 v0.7.0+6 没覆盖的场景:
-- launcher UI 填的 LLM/OCR 配置写到 DATA_DIR/.env(用户配置主源)
-- backend 子进程 cwd = .app/Contents/Resources/xhs-info-crawl/,只读 cwd 下 .env(.app/.env)
-- 结果 .app/.env 里 LLM 永远是空,DATA_DIR/.env 永远没被 backend 读到
-
-本测试验证 Settings 同时支持 cwd/.env + DATA_DIR/.env,DATA_DIR 优先级高,
-进程 env 优先级最高。
+设计约束:
+- dev 模式下项目根 `.env` 中的用户配置(如 MINIMAX_API_KEY)必须生效,
+  不能被 `data/.env` 里的空值覆盖。
+- 生产打包场景下 `.app/.env` 作为系统 key 来源,
+  用户 key 仍可从 `DATA_DIR/.env` 读取。
+- 进程 env 优先级最高(测试/CI 覆盖一切)。
 """
 from __future__ import annotations
 
@@ -81,10 +80,10 @@ def test_data_dir_env_only(tmp_path: Path, fresh_settings_cache, monkeypatch: py
     assert s.minimax_base_url == "https://data.example/v1"
 
 
-def test_data_dir_overrides_cwd(
+def test_cwd_env_overrides_data_dir(
     tmp_path: Path, fresh_settings_cache, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """DATA_DIR/.env 优先级 > cwd/.env(用户在 DATA_DIR 配的覆盖 .app/.env 模板)。"""
+    """cwd/.env 优先级 > DATA_DIR/.env(dev 模式下项目根 .env 胜出)。"""
     cwd = tmp_path / "workdir"
     cwd.mkdir()
     data_dir = tmp_path / "data-a"
@@ -94,25 +93,57 @@ def test_data_dir_overrides_cwd(
         cwd / ".env",
         [
             "DATA_DIR=" + str(data_dir),
-            "MINIMAX_API_KEY=cwd-key-old",
+            "MINIMAX_API_KEY=cwd-key",
         ],
     )
     _write_env(
         data_dir / ".env",
-        ["MINIMAX_API_KEY=data-key-new"],
+        ["MINIMAX_API_KEY=data-key"],
     )
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
 
     from app.core.config import get_settings
 
     s = get_settings()
-    assert s.minimax_api_key == "data-key-new"
+    assert s.minimax_api_key == "cwd-key"
+
+
+def test_data_dir_env_fallback_when_cwd_missing(
+    tmp_path: Path, fresh_settings_cache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cwd/.env 缺字段时,DATA_DIR/.env 作为补充源 fallback。"""
+    cwd = tmp_path / "workdir"
+    cwd.mkdir()
+    data_dir = tmp_path / "data-a"
+    data_dir.mkdir()
+    monkeypatch.chdir(cwd)
+    _write_env(
+        cwd / ".env",
+        [
+            "DATA_DIR=" + str(data_dir),
+            "MINIMAX_API_KEY=cwd-key",
+        ],
+    )
+    _write_env(
+        data_dir / ".env",
+        [
+            "MINIMAX_BASE_URL=https://data.example/v1",
+        ],
+    )
+    for k in ("MINIMAX_API_KEY", "MINIMAX_BASE_URL"):
+        monkeypatch.delenv(k, raising=False)
+
+    from app.core.config import get_settings
+
+    s = get_settings()
+    assert s.minimax_api_key == "cwd-key"  # cwd 有值,用 cwd
+    assert s.minimax_base_url == "https://data.example/v1"  # cwd 缺,从 DATA_DIR fallback
 
 
 def test_env_var_overrides_data_dir(
     tmp_path: Path, fresh_settings_cache, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """进程 env > DATA_DIR/.env > cwd/.env(测试/CI 覆盖一切)。"""
+    """进程 env > cwd/.env > DATA_DIR/.env(测试/CI 覆盖一切)。"""
     cwd = tmp_path / "workdir"
     cwd.mkdir()
     data_dir = tmp_path / "data-a"
@@ -178,7 +209,7 @@ def test_priority_chain_full(
 ) -> None:
     """同时存在 cwd/.env + DATA_DIR/.env + 进程 env,验证完整优先级链:
 
-    进程 env > DATA_DIR/.env > cwd/.env
+    进程 env > cwd/.env > DATA_DIR/.env
 
     不同字段来自不同源,确保不被串台。
     """
@@ -198,8 +229,8 @@ def test_priority_chain_full(
     _write_env(
         data_dir / ".env",
         [
-            "MINIMAX_API_KEY=data-key",  # 覆盖 cwd
-            "MINIMAX_BASE_URL=https://data.example/v1",  # cwd 无
+            "MINIMAX_API_KEY=data-key",
+            "MINIMAX_BASE_URL=https://data.example/v1",
         ],
     )
     # 进程 env 只覆盖 model,不覆盖 api_key/base_url
@@ -211,6 +242,6 @@ def test_priority_chain_full(
     from app.core.config import get_settings
 
     s = get_settings()
-    assert s.minimax_api_key == "data-key"  # DATA_DIR 覆盖 cwd
+    assert s.minimax_api_key == "cwd-key"  # cwd 覆盖 DATA_DIR
     assert s.minimax_model == "runtime-model"  # env 覆盖一切
-    assert s.minimax_base_url == "https://data.example/v1"  # 仅 DATA_DIR 有
+    assert s.minimax_base_url == "https://data.example/v1"  # cwd 缺,从 DATA_DIR fallback

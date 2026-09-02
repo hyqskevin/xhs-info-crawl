@@ -8,14 +8,17 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, Settings
 
 
 class _DataDirEnvSource(PydanticBaseSettingsSource):
-    """读 <DATA_DIR>/.env 作为补充源,优先级介于 env_settings 和 dotenv_settings 之间。
+    """读 <DATA_DIR>/.env 作为补充源,优先级低于 cwd/.env。
 
-    解决 launcher .app 场景:backend 子进程 cwd = .app/Contents/Resources/xhs-info-crawl/,
-    cwd/.env 是打包模板,用户实际配置在 DATA_DIR/.env,必须让 Settings 也能读它。
+    解决 dev 模式下项目根 `.env` 里的用户配置(如 MINIMAX_API_KEY)不被
+    `data/.env` 空值覆盖的问题;同时为打包版保留 fallback 能力:
+    当 cwd/.env(通常是 .app/.env) 没写用户配置 key 时,从 DATA_DIR/.env 读。
 
-    优先级(从高到低):init_settings > env_settings(进程 env) > _DataDirEnvSource > dotenv_settings(cwd/.env)
+    优先级(从高到低):init_settings > env_settings > dotenv_settings(cwd/.env)
+    > _DataDirEnvSource(data/.env) > file_secret_settings
 
     关联 spec: docs/superpowers/specs/2026-08-23-settings-load-data-dir-env-design.md
+    关联 spec: docs/superpowers/specs/2026-09-02-env-loading-priority-design.md
     """
 
     def __init__(self, settings_cls: type[BaseSettings]) -> None:
@@ -100,13 +103,13 @@ class Settings(BaseSettings):
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         # pydantic_settings._settings_build_values 用 state = deep_update(source_state, state)
         # 即累积 state 覆盖新 source_state — **先** 处理的 source 永远赢(不被后处理覆盖)。
-        # 想要:init(代码 init) > env(进程环境) > DATA_DIR/.env > cwd/.env > file_secret
+        # 想要:init(代码 init) > env(进程环境) > cwd/.env > DATA_DIR/.env > file_secret
         # 即按优先级从高到低排列 sources。
         return (
             init_settings,
             env_settings,
-            _DataDirEnvSource(settings_cls),
             dotenv_settings,
+            _DataDirEnvSource(settings_cls),
             file_secret_settings,
         )
 
@@ -165,6 +168,11 @@ class Settings(BaseSettings):
     weekly_crawl_minute: int = 0
     opencli_cdp_endpoint: str = "http://localhost:9222"
     opencli_bin: str = "opencli"
+    # 默认 opencli profile alias（2026-08-24 加入）。OpenCLIAdapter 构造时不传
+    # profile_alias 时,会用这个值作为 --profile <alias> 注入到所有 opencli 子进程。
+    # 可被 XhsAccount.session_name 覆盖（每个账号独立 profile）。
+    # None = 不注入 --profile,沿用默认 Browser Bridge profile（向后兼容）。
+    opencli_default_profile: str | None = Field(default=None, validation_alias="OPENCLI_DEFAULT_PROFILE")
     xhs_login_url: str = "https://www.xiaohongshu.com/explore"
     xhs_login_browser: str = "Google Chrome"
     search_interval_min: int = 10

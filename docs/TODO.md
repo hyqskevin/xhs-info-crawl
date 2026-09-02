@@ -1258,6 +1258,22 @@
     - 后端 36 新增测试 + 前端 5 新增测试全绿
     - 重启 celery worker（必须手动，uvicorn 自动 reload）
   - 实施：migration 0022 / Note ORM 6 字段 / list_notes JSON1 过滤 + bindparam expanding fix / _summary 互动数 / crawl_task 透传 + _extract_engagement / 前端 ActivitiesView Radio 切换 / 文档 api-doc + database-design 同步
+- [x] **修复 Settings 配置源优先级：cwd/.env 高于 DATA_DIR/.env**（TODO#55，2026-09-02 用户反馈）
+  - 目标：dev 模式下项目根 `.env` 中的用户配置（如 `MINIMAX_API_KEY`）必须生效，不能被 `data/.env` 里的空值覆盖；生产打包场景下 `.app/.env` 作为系统 key 来源，用户 key 仍可 fallback 到 `DATA_DIR/.env`。
+  - **根因**（systematic-debugging）：
+    - `backend/app/core/config.py` 中 `_DataDirEnvSource` 优先级高于 `dotenv_settings`（cwd/.env），导致 `data/.env` 覆盖项目根 `.env`。
+    - dev 工作区 `data/.env` 由 launcher historic 生成，内含 `MINIMAX_API_KEY=` 等空值；项目根 `.env` 却有真实 key。启动后 API 返回 `minimax_api_key_set: False`。
+  - **改动范围**：
+    - 调整 `settings_customise_sources` 顺序：`_DataDirEnvSource` 降到 `dotenv_settings` 之后（cwd/.env > DATA_DIR/.env）。
+    - 更新 `_DataDirEnvSource` docstring 与 `test_settings_load_data_dir_env.py` 既有测试，反映新优先级语义。
+    - 新增/调整 TDD 用例：cwd/.env 显式值覆盖 DATA_DIR/.env；DATA_DIR/.env 仅在 cwd/.env 缺省时 fallback。
+  - **验收（TDD 全绿）**：
+    - `backend/tests/test_settings_load_data_dir_env.py` 8 passed，且包含新优先级断言。
+    - dev 模式重启 uvicorn 后 `GET /settings/system-config` 返回 `minimax_api_key_set: True`（使用项目根 `.env` 真实 key）。
+  - 部署：**API 层（uvicorn）必须重启**；worker/beat 不需重启（本次只改配置加载，不涉及 task/service 代码）。
+  - 关联：spec `docs/superpowers/specs/2026-09-02-env-loading-priority-design.md`
+  - commit：`fix(backend): Settings 配置源优先级 cwd/.env > DATA_DIR/.env (TODO#55)`
+
 - [ ] **小红书账号 crawl_task 主循环接入 run_with_failover adapter 版**（TODO#53，2026-09-01 用户决策 C 方案）
   - 目标：把 2026-08-24 spec §3.3 在 crawl_task 主循环里**完整落地**——`(AuthenticationRequired, VerificationRequired) except` 现有 while-loop 替换为统一 failover 原语。
   - **为什么 TODO#52 不再包含主循环接入**：TODO#52 收尾时只剩 `run_with_failover` 主循环接入；现有 `run_with_failover` 是 subprocess 抽象，与 crawl_task 用的 OpenCLIAdapter 高层抽象不匹配。需要新增 `run_with_adapter_failover` 适配版——属新工作项，拆 TODO#53。
