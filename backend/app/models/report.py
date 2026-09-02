@@ -6,6 +6,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
 
+def _now() -> datetime:
+    """统一时间戳默认值/自动更新值;UTC 避免时区漂移。"""
+    return datetime.now(timezone.utc)
+
+
 class WeeklyReport(Base):
     __tablename__ = "weekly_reports"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -24,5 +29,7 @@ class WeeklyReport(Base):
     note_count: Mapped[int] = mapped_column(Integer, default=0)
     content: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="draft")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # onupdate=_now:与 Schedule / XhsAccount / Activity / SearchUsage 同款语义;
+    # 任何 SQLAlchemy UPDATE 都会刷新 updated_at,API 端点不再需要手工赋值。
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

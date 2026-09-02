@@ -183,7 +183,7 @@ def generate_report(payload: GenerateRequest, _: Annotated[dict[str, str], Depen
         report.activity_count = activity_count
         report.content = content
         report.status = "draft"
-        report.updated_at = datetime.now(timezone.utc)
+        # updated_at 由 model 的 onupdate=_now 自动刷新,无需手工赋值
     db.commit()
     db.refresh(report)
     return {"code": 200, "message": "success", "data": {"id": report.id, "week": report.week, "name": report.name, "cities": payload.cities, "keyword_group_ids": payload.keyword_group_ids, "keywords": payload.keywords, "blogger_group_ids": payload.blogger_group_ids, "blogger_ids": payload.blogger_ids, "note_count": report.note_count, "activity_count": report.activity_count, "status": report.status}}
