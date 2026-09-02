@@ -127,6 +127,63 @@ def _has_user_keys(env_path: Path) -> bool:
     return False
 
 
+def _extract_system_keys(env_path: Path) -> dict[str, str]:
+    """从 .env 文件提取所有 LAUNCHER_SYSTEM_KEYS 的值。
+
+    v0.7.0+10 新增:升级 .app 时,ensure_env_file 备份老 .env 后,
+    用此函数提取用户改过的系统 key(覆盖 .env.example 默认值)。
+    - 跳过: 注释行、空行、用户配置 key(LAUNCHER_USER_KEYS)、未识别 key
+    - 解析失败 (无 = 号) 跳过该行,继续提取其他 key
+    - 后出现的同名 key 覆盖前出现的(与 Python dict 语义一致)
+
+    关联 spec: docs/superpowers/specs/2026-09-01-launcher-env-preserve-system-keys-on-upgrade-design.md
+    """
+    result: dict[str, str] = {}
+    if not env_path.exists():
+        return result
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        if not key or key not in LAUNCHER_SYSTEM_KEYS:
+            continue
+        # 用户配置 key 也在 system 白名单里的极端情况防御(目前没有交集)
+        if key in LAUNCHER_USER_KEYS:
+            continue
+        result[key] = value.strip()
+    return result
+
+
+def _merge_system_keys(target_lines: list[str], preserved: dict[str, str]) -> list[str]:
+    """把 preserved 字典里 key 对应的 target_lines 行,用 preserved 的 value 覆盖。
+
+    v0.7.0+10 新增:升级 .app 时,把 preserved(老 .env 的系统 key 值)合并到
+    新生成的 .env 行里。
+    - 保留 target_lines 里的所有行(注释、空行、其他 key)
+    - 对每行 KEY=VALUE 格式,如果 KEY 在 preserved 里 → 用 preserved 值覆盖
+    - preserved 里的 key 如果 target_lines 没有 → 不插入(本 spec 范围外)
+
+    关联 spec: docs/superpowers/specs/2026-09-01-launcher-env-preserve-system-keys-on-upgrade-design.md
+    """
+    if not preserved:
+        return target_lines
+    new_lines: list[str] = []
+    for line in target_lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            new_lines.append(line)
+            continue
+        key, _, _ = stripped.partition("=")
+        key = key.strip()
+        if key in preserved:
+            new_lines.append(f"{key}={preserved[key]}")
+        else:
+            new_lines.append(line)
+    return new_lines
+
+
 def ensure_env_file(env_path: Path, env_example_path: Path) -> None:
     """确保 .env(.app/.env)存在,只含 launcher 系统级 key。
 
@@ -138,11 +195,18 @@ def ensure_env_file(env_path: Path, env_example_path: Path) -> None:
     - 已存在 + 不含用户配置 key(新版本生成的)→ 不动,保留 launcher 后续写
       (force_local_host / resolve_data_dir / 端口等)
 
+    v0.7.0+10 行为变更:
+    - 备份路径里改用 _extract_system_keys 提取老 .env 的 LAUNCHER_SYSTEM_KEYS 值,
+      在新生成的 .env 上合并,保留用户改过的 DATA_DIR / API_PORT / CORS_ORIGINS 等
+
     用户配置 key(SECRET_KEY / MINIMAX_API_KEY / OPENCLI_BIN / OCR_* 等)
     走 DATA_DIR/.env,由 ensure_secret_key / ensure_data_dir_env 显式处理。
 
-    关联 spec: docs/superpowers/specs/2026-08-24-bootstrap-env-system-keys-only-design.md
+    关联 spec:
+    - docs/superpowers/specs/2026-08-24-bootstrap-env-system-keys-only-design.md (v0.7.0+9)
+    - docs/superpowers/specs/2026-09-01-launcher-env-preserve-system-keys-on-upgrade-design.md (v0.7.0+10)
     """
+    preserved: dict[str, str] = {}
     # 升级检测:老版本 .app/.env 含用户配置 key → 备份 + 重生成
     if env_path.exists() and _has_user_keys(env_path):
         # .env → .env.v0.7.0.bak(不能 with_suffix 因为 .env 整段是 filename)
@@ -152,6 +216,8 @@ def ensure_env_file(env_path: Path, env_example_path: Path) -> None:
         else:
             # 已经有备份,直接删掉老的(用户早就升级过了,不需要多次备份)
             env_path.unlink()
+        # v0.7.0+10: 从 backup 提取用户改过的系统 key(覆盖 .env.example 默认值)
+        preserved = _extract_system_keys(backup_path)
 
     if env_path.exists():
         return  # 已存在(纯系统 key),不覆盖
@@ -184,6 +250,14 @@ def ensure_env_file(env_path: Path, env_example_path: Path) -> None:
             continue
         # 系统 key / 未知 key(可能是 .env.example 里的扩展)→ 保留
         new_lines.append(line)
+
+    # v0.7.0+10: 用 preserved(老 .env 的系统 key 值)覆盖新生成的对应行
+    if preserved:
+        new_lines = _merge_system_keys(new_lines, preserved)
+        logger.info(
+            "升级 .env 已保留用户改过的系统 key: %s",
+            ", ".join(f"{k}={v}" for k, v in sorted(preserved.items())),
+        )
 
     env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
