@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import type { ECharts } from 'echarts'
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ref, toRef } from 'vue'
+import { useECharts } from '@/composables/useECharts'
 
 const props = defineProps<{ counts: Record<string, number> }>()
-const container = ref<HTMLDivElement | null>(null)
-let chart: ECharts | null = null
+const container = ref<HTMLElement | null>(null)
 
 const statusLabels: Record<string, string> = {
   COMPLETED: '成功',
@@ -15,11 +14,11 @@ const statusLabels: Record<string, string> = {
 }
 const order = ['COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED', 'STOPPED', 'OTHER']
 
-function buildOption() {
-  const counts = props.counts || {}
-  const data = order
-    .filter((key) => counts[key])
-    .map((key) => ({ name: statusLabels[key] || key, value: counts[key] }))
+function buildOption(counts: Record<string, number>) {
+  const data = counts || {}
+  const seriesData = order
+    .filter((key) => data[key])
+    .map((key) => ({ name: statusLabels[key] || key, value: data[key] }))
   return {
     tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
     legend: { bottom: 0 },
@@ -29,32 +28,13 @@ function buildOption() {
         radius: ['38%', '65%'],
         center: ['50%', '44%'],
         label: { formatter: '{b}\n{d}%' },
-        data,
+        data: seriesData,
       },
     ],
   }
 }
 
-function render() {
-  chart?.setOption(buildOption())
-}
-
-function resize() {
-  chart?.resize()
-}
-
-onMounted(async () => {
-  const echarts = await import('echarts')
-  chart = echarts.init(container.value!)
-  render()
-  window.addEventListener('resize', resize)
-})
-watch(() => props.counts, render, { deep: true })
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', resize)
-  chart?.dispose()
-  chart = null
-})
+useECharts({ container, data: toRef(props, 'counts'), buildOption })
 </script>
 
 <template>
