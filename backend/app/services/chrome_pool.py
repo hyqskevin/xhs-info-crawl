@@ -21,10 +21,26 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# CDP 默认起始端口；如有冲突由 OS 分配，并回写到 instance.port
+# CDP 默认起始端口；分配前用 bind 探测实际占用（跨进程安全），占用则跳过
 _CDP_PORT_START = 9223
 _CDP_PORT_RANGE = 100  # 9223-9322 范围内分配
 _CDP_READY_TIMEOUT_S = 10
+
+
+def _port_is_free(port: int) -> bool:
+    """探测 127.0.0.1:port 是否可绑定（无进程监听占用）。
+
+    Chrome 的 CDP 监听绑在 127.0.0.1，故用同地址探测；不设 SO_REUSEADDR，
+    TIME_WAIT 端口保守判为占用（跳过无害，只是少用一个候选端口）。
+    """
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
 
 # 跨平台 Chrome 自动检测候选路径。resolve_chrome_bin 在 Settings.chrome_bin 找不到时扫描这里。
 # 用户依然可以通过 Settings / .env 覆盖为任何自定义绝对路径。
@@ -118,8 +134,7 @@ class ChromePool:
                     "（请确认 Chrome 已安装或更新 Settings.chrome_bin）"
                 )
 
-        port = self._next_port_offset % _CDP_PORT_RANGE + self._cdp_port_start
-        self._next_port_offset += 1
+        port = self._allocate_port()
         user_data_dir = self._base_user_data_dir / session_name
         user_data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -133,6 +148,24 @@ class ChromePool:
         self._instances[session_name] = instance
         self._wait_cdp_ready(instance)
         return instance
+
+    def _allocate_port(self) -> int:
+        """按顺序扫描分配一个实际空闲的 CDP 端口（跨进程安全）。
+
+        背景（2026-09-02 评估修复 I3）：uvicorn 与 celery worker 各持独立
+        ChromePool，纯顺序分配不检测占用时跨进程必然撞端口，且错误端口会被
+        _make_chrome_pool_for_task 持久化到 DB。bind 探测跳过被占端口；
+        探测与 Chrome 启动之间的 TOCTOU 窗口由 _wait_cdp_ready 超时警告兜底。
+        """
+        for _ in range(_CDP_PORT_RANGE):
+            port = self._next_port_offset % _CDP_PORT_RANGE + self._cdp_port_start
+            self._next_port_offset += 1
+            if _port_is_free(port):
+                return port
+        raise ChromeLaunchError(
+            f"CDP 端口池（{self._cdp_port_start}-{self._cdp_port_start + _CDP_PORT_RANGE - 1}）已用尽，"
+            "请释放占用的 Chrome 实例或手动清理端口后重试"
+        )
 
     def release(self, session_name: str) -> None:
         """释放指定 session_name 的 Chrome 实例（kill 子进程）。"""
