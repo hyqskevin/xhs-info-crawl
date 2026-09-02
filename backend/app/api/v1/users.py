@@ -37,7 +37,9 @@ class UserCreateIn(BaseModel):
     username: str = Field(min_length=2, max_length=64)
     password: str = Field(min_length=8)
     display_name: str | None = None
-    is_admin: bool = True
+    # 默认 False：管理员需显式 is_admin=True 创建，避免误调默认给所有新用户管理员权限。
+    # 通过 group_ids=[Administrators] 也可等价达成 role=admin。
+    is_admin: bool = False
     group_ids: list[int] = []
 
 
