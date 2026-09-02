@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from launcher.env_utils import read_env_value
+from launcher.paths import resolve_log_dir, resolve_celery_dir
 from launcher.ports import API_PORT_DEFAULT, WEB_PORT_DEFAULT
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ class ProcessManager:
         # bootstrap_env 会在 ProcessManager 之前把 LOG_DIR 写到 .env(默认 DATA_DIR/logs)。
         # 兜底逻辑:没 .env / 没 DATA_DIR 时退回 project_root/data/logs(原行为)。
         # 关联 spec: docs/superpowers/specs/2026-08-23-settings-load-data-dir-env-design.md §修复 2
-        self._logs_dir = self._resolve_logs_dir(project_root)
+        self._logs_dir = resolve_log_dir(project_root)
         self._logs_dir.mkdir(parents=True, exist_ok=True)
         # 默认命令模板(可被 _commands 覆盖,用于测试)
         self._commands = self._build_default_commands()
@@ -53,36 +53,6 @@ class ProcessManager:
         # 关联 spec: docs/superpowers/specs/2026-08-23-migration-0028-sqlite-current-timestamp-binding-design.md
         self._last_launch_at: dict[str, str] = {}
         self._last_error: dict[str, str] = {}
-
-    def _resolve_logs_dir(self, project_root: Path) -> Path:
-        """从 .env 读 LOG_DIR;缺失/空/相对路径时退回 DATA_DIR/logs;DATA_DIR 也缺时兜底 project_root/data/logs。
-
-        关联 spec: docs/superpowers/specs/2026-08-23-settings-load-data-dir-env-design.md §修复 2
-        """
-        env_path = project_root / ".env"
-        # bootstrap_env 已经在 ProcessManager 之前写好了 LOG_DIR 和 DATA_DIR(都是绝对路径)
-        # 这里手动解析,跟 env_bootstrap.resolve_data_dir 同款逻辑
-        raw_log = read_env_value(env_path, "LOG_DIR", "")
-        raw_data = read_env_value(env_path, "DATA_DIR", "")
-
-        # LOG_DIR 显式设置 → 尊重用户,绝对路径优先 / 相对路径以 project_root 为基准
-        if raw_log:
-            candidate = Path(raw_log).expanduser()
-            if candidate.is_absolute():
-                return candidate.resolve()
-            return (project_root / candidate).resolve()
-
-        # LOG_DIR 缺失 → 退化到 DATA_DIR/logs
-        if raw_data:
-            data_dir_candidate = Path(raw_data).expanduser()
-            if data_dir_candidate.is_absolute():
-                data_dir = data_dir_candidate.resolve()
-            else:
-                data_dir = (project_root / data_dir_candidate).resolve()
-            return data_dir / "logs"
-
-        # 都缺(罕见,bootstrap_env 应该已经处理过)→ 兜底原行为
-        return (project_root / "data" / "logs").resolve()
 
     def _build_default_commands(self) -> dict[str, list[str]]:
         """构建默认的服务启动命令。"""
@@ -104,48 +74,11 @@ class ProcessManager:
             # 否则 celery beat 默认写到 worker cwd(=.app/Contents/Resources/xhs-info-crawl/),
             # .app 升级时 schedule 状态丢失,beat 会重新触发所有到期任务
             # 关联 spec: docs/superpowers/specs/2026-08-24-celery-beat-schedule-absolute-path-launcher-design.md
-            "beat": [python, "-m", "celery", "-A", "app.tasks.crawl_task", "beat", "--loglevel=info", "--schedule", str(self._resolve_beat_schedule_path())],
+            "beat": [python, "-m", "celery", "-A", "app.tasks.crawl_task", "beat", "--loglevel=info", "--schedule", str(resolve_celery_dir(self.project_root) / "celerybeat-schedule")],
             # web 服务:等价 vite preview 行为,python -m http.server 提供静态文件
             # bind 127.0.0.1 仅本机访问;directory 指向 frontend/dist
             "web": [python, "-m", "http.server", str(web_port), "--bind", "127.0.0.1", "--directory", str(frontend_dist)],
         }
-
-    def _resolve_beat_schedule_path(self) -> Path:
-        """从 .env 读 CELERY_FOLDER;缺失时退化到 DATA_DIR/celery;都缺时兜底 project_root/data/celery。
-
-        返回绝对路径,用于 celery beat --schedule 参数。避免 .app 升级丢 schedule 状态。
-        关联 spec: docs/superpowers/specs/2026-08-24-celery-beat-schedule-absolute-path-launcher-design.md
-        """
-        env_path = self.project_root / ".env"
-        raw_celery = ""
-        raw_data = ""
-        if env_path.exists():
-            for line in env_path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if line.startswith("#") or "=" not in line:
-                    continue
-                k, _, v = line.partition("=")
-                key = k.strip()
-                if key == "CELERY_FOLDER":
-                    raw_celery = v.strip()
-                elif key == "DATA_DIR":
-                    raw_data = v.strip()
-
-        def _abs(p: Path, base: Path) -> Path:
-            return p.resolve() if p.is_absolute() else (base / p).resolve()
-
-        # CELERY_FOLDER 显式设置 → 尊重用户,绝对路径优先 / 相对路径以 project_root 为基准
-        if raw_celery:
-            celery_dir = _abs(Path(raw_celery).expanduser(), self.project_root)
-            return celery_dir / "celerybeat-schedule"
-
-        # CELERY_FOLDER 缺失 → 退化到 DATA_DIR/celery
-        if raw_data:
-            data_dir = _abs(Path(raw_data).expanduser(), self.project_root)
-            return (data_dir / "celery" / "celerybeat-schedule")
-
-        # 都缺(罕见)→ 兜底原行为
-        return (self.project_root / "data" / "celery" / "celerybeat-schedule").resolve()
 
     def _read_env_int(self, key: str, default: int) -> int:
         """从 .env 读 int 值,找不到或解析失败则用 default。"""

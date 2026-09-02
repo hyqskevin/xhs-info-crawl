@@ -291,3 +291,33 @@ def test_get_status_clears_last_error_on_restart(tmp_path):
     assert status["api"]["state"] == "running"
     assert status["api"]["last_error"] is None
     pm.stop_all()
+
+
+# ---------------------------------------------------------------------------
+# Task 6(2026-08-23 audit):ProcessManager._logs_dir 写死
+# `project_root / "data" / "logs"`,绕过用户在 .env 里配的 LOG_DIR。
+#
+# 用户把 LOG_DIR 改到 .app 外 ~/Library/Logs/xhs-info-crawl 时,
+# 启动器仍把子进程 stdout/stderr 重定向到 project_root/data/logs/<svc>.log,
+# 用户配置形同虚设,日志会和 Settings.log_dir(migrate 后) 错位。
+#
+# 修复(由 e56a364 完成,见 launcher/process_manager._resolve_logs_dir):
+#   - .env 有 LOG_DIR → 用 .env 值
+#   - .env 没 LOG_DIR 但有 DATA_DIR → <DATA_DIR>/logs
+#   - 都没 → fallback project_root/data/logs(向后兼容)
+# ---------------------------------------------------------------------------
+
+
+def test_process_manager_log_dir_falls_back_to_data_dir_logs(tmp_path):
+    """.env 没 LOG_DIR 但有 DATA_DIR 时,fallback 到 <DATA_DIR>/logs。
+
+    关联 spec: docs/superpowers/specs/2026-08-23-audit-fixes-batch-design.md Task 6
+    """
+    data_dir = tmp_path / "external-data"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"DATA_DIR={data_dir}\n")
+
+    pm = ProcessManager(project_root=tmp_path, venv_python=Path(sys.executable))
+    assert pm._logs_dir == (data_dir / "logs").resolve(), (
+        f".env DATA_DIR/logs 应生效,实际 {pm._logs_dir}"
+    )
