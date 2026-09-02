@@ -19,20 +19,34 @@ class OpenCLIAdapter:
         settings: Settings,
         session: str = "xhs-crawler",
         cdp_endpoint: str | None = None,
+        profile_alias: str | None = None,
     ) -> None:
         """opencli 子进程适配器。
 
         Args:
             settings: 全局配置
-            session: opencli browser session 名（逻辑命名空间）
+            session: opencli browser session 名（逻辑命名空间；也是 opencli profile alias）
             cdp_endpoint: 可选 CDP 端点 URL（如 http://127.0.0.1:9223）。传了后
                 所有子进程通过环境变量 OPENCLI_CDP_ENDPOINT=<endpoint> 路由到对应
                 Chrome 实例，实现账号级 cookie 隔离。
                 None = 用当前 Chrome Browser Bridge 默认 profile（向后兼容）。
+            profile_alias: opencli --profile <alias> 路由通道（2026-08-24 加入）。
+                设置后所有 run() 调用会在 cmd 前缀插入 ['--profile', <alias>]，
+                路由到该 Chrome profile 的 Browser Bridge 扩展实例。
+                实测 profile_alias 与 cdp_endpoint 互斥：profile_alias 已能完美隔离，
+                不依赖独立 Chrome 实例（spec 2026-08-24 §3.1）。
+                默认从 settings.opencli_default_profile 读取，可被 XhsAccount.session_name 覆盖。
         """
         self.settings = settings
         self.session = session
         self.cdp_endpoint = cdp_endpoint
+        # 优先用显式传入的 profile_alias；否则用 settings.opencli_default_profile；
+        # 都没有 → None（向后兼容：不注入 --profile）
+        self.profile_alias = (
+            profile_alias
+            if profile_alias is not None
+            else getattr(settings, "opencli_default_profile", None)
+        )
         self._bin = (settings.opencli_bin or "opencli").strip() or "opencli"
         self._current_task_id: int | None = None
         self._current_run_token: str | None = None
@@ -155,14 +169,20 @@ class OpenCLIAdapter:
         effective_run_token = run_token if run_token is not None else self._current_run_token
         self._assert_execution_active(enforce_execution)
         effective_timeout = timeout if timeout is not None else self._command_timeout()
-        # 注入 OPENCLI_CDP_ENDPOINT（如有）让 opencli 路由到指定 Chrome 实例
+        # 构造完整命令：profile_alias 已设 → 在子命令前插 ['--profile', <alias>]
+        cmd: list[str] = [self._bin]
+        if self.profile_alias:
+            cmd += ["--profile", self.profile_alias]
+        cmd += list(args)
+        # 注入 OPENCLI_CDP_ENDPOINT（如有）让 opencli 路由到指定 Chrome 实例。
+        # profile_alias 通道已能完美隔离,所以 profile_alias 已设时不强制再写 CDP env;
+        # 但保留二者都设的可能性（向后兼容）→ 只要 cdp_endpoint 存在就仍写 env。
         proc_env = None
         if self.cdp_endpoint:
-            import os as _os
-            proc_env = {**_os.environ, "OPENCLI_CDP_ENDPOINT": self.cdp_endpoint}
+            proc_env = {**os.environ, "OPENCLI_CDP_ENDPOINT": self.cdp_endpoint}
         try:
             proc = subprocess.Popen(
-                [self._bin, *args],
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -221,42 +241,76 @@ class OpenCLIAdapter:
         except json.JSONDecodeError:
             return output
     def check_login(self, foreground: bool = False):
-        """登录预检：whoami 是轻量只读探测，正常 1~2s 返回。
+        """登录预检：经 browser <session> eval 读 localStorage.RWP_LOGIN_TOKEN.uid（2026-08-24 改）。
 
-        未扫码登录时 opencli 的 whoami 会在浏览器层阻塞等待扫码（不会以 exit 77
-        快速退出），最终被 Python 层超时 kill。这种超时唯一现实诱因就是登录窗口
-        等扫码，归类为 AuthenticationRequired，让任务走 PAUSED 流程提示用户扫码，
-        而不是被当作普通抓取失败逐个博主/笔记白等 60s。
+        之前用 ``xiaohongshu whoami`` 实测返回**硬编码假账号**「花卷的📷日常」(spec
+        2026-08-24 §1.3 踩坑)。改读 ``RWP_LOGIN_TOKEN.uid`` —— 真小红书 SPA 的
+        localStorage key,登出后被清空。
 
-        foreground=True：拉起前台可见窗口，给用户扫码（管理后台 check-login 用）
-        foreground=False：后台窗口（默认，run_crawl 启动预检用，不打扰用户）
+        Args:
+            foreground: True 时拉起前台可见窗口,让用户扫码（API check-login 用）。
+                       仅当 RWP_LOGIN_TOKEN 不存在时才有意义（提示用户去扫码）,
+                       这里不强制拉前台——eval 是只读探测,不阻塞。
         """
-        cmd = ['xiaohongshu', 'whoami', '-f', 'json']
-        if not foreground:
-            cmd += ['--window', 'background']
+        # RWP_LOGIN_TOKEN 是小红书 SPA 启动后才写入 localStorage 的 key,
+        # 页面打开未加载完时拿不到。脚本直接读,失败由调用方决定是否重试。
+        # 顺手探 hasRlt/hasAlt → 反风控能力指标（弱账号会有 hasRlt=false）
+        eval_script = (
+            "(function(){try{"
+            "var raw=localStorage.getItem('RWP_LOGIN_TOKEN');"
+            "if(!raw) return JSON.stringify({logged_in:false,reason:'no_token'});"
+            "var p=JSON.parse(raw);"
+            "return JSON.stringify({logged_in:true,uid:p.uid,expiredAt:p.expiredAt,"
+            "hasAlt:!!localStorage.getItem('alt'),hasRlt:!!localStorage.getItem('rlt')});"
+            "}catch(e){return JSON.stringify({logged_in:false,reason:'parse_err',err:String(e)});"
+            "}})()"
+        )
         try:
-            return self.run(cmd)
+            raw = self.run(["browser", self.session, "eval", eval_script])
         except OpenCLITimeout as exc:
+            # 如果该 session 还没打开过 SPA,eval 会拿 about:blank — 同归为未登录
             raise AuthenticationRequired(
-                '小红书登录检查超时：可能未登录或登录窗口正在等待扫码，'
-                '请完成扫码登录后点击「继续抓取」'
+                '小红书登录检查超时：可能未登录或 session 未打开小红书页面,'
+                '请打开小红书并完成扫码后点击「继续抓取」'
             ) from exc
+        # run() 解析失败时返字符串,解析成功时返 dict
+        if isinstance(raw, dict):
+            # 兼容:把 uid 映射成 user_id（与 fetch_my_user_id 输出同名,调用方少一层 .get("uid")）
+            if "uid" in raw and "user_id" not in raw:
+                raw = {**raw, "user_id": raw["uid"]}
+            return raw
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    if "uid" in parsed and "user_id" not in parsed:
+                        parsed = {**parsed, "user_id": parsed["uid"]}
+                    return parsed
+                return {"logged_in": False, "reason": "eval_unexpected_type"}
+            except Exception:
+                return {"logged_in": False, "reason": "eval_unparseable"}
+        return {"logged_in": False, "reason": "unexpected_payload"}
 
     def fetch_my_user_id(self) -> str | None:
-        """从浏览器 localStorage USER_INFO 提取当前登录账号的 user_id。
+        """从浏览器 localStorage.RWP_LOGIN_TOKEN.uid 提取当前登录账号的 user_id。
 
-        2026-08-19 用户反馈：扫码后小红书账号 ID 不能自动读取。whoami 输出不包含 user_id，
-        改为读 creator.xiaohongshu.com 创建的 localStorage USER_INFO.user.value.userId。
+        2026-08-24 改:从 USER_INFO.userId（实测不存在于真实小红书 SPA）改为
+        RWP_LOGIN_TOKEN.uid —— 小红书 SPA 登录挂载后写入 localStorage 的真实 key,
+        登出后被清空。24 位 hex。
 
         行为：
         - 成功 → 返回 user_id 字符串
-        - USER_INFO 不存在 / 未登录 / CDP 关闭 / 解析失败 → 返回 None（不抛错，不影响其他流程）
+        - RWP_LOGIN_TOKEN 不存在 / 未登录 / CDP 关闭 / 解析失败 → 返回 None（不抛错）
         """
-        # 选择 USER_INFO.user.value.userId 字符串。opencli run() 会把 stdout 当 JSON 解析，
-        # 所以我们不包 JSON.stringify,直接返回字符串内容 → run() 拿到 Python str。
+        # RWP_LOGIN_TOKEN.uid 直接是字符串,不加 JSON.stringify → opencli 把 stdout
+        # 当 JSON 解析,字符串会被 json.loads 成 Python str。
         eval_script = (
-            "((JSON.parse(localStorage.getItem('USER_INFO')||'{}').user||{}).value||{}).userId"
-            " || ''"
+            "(function(){try{"
+            "var raw=localStorage.getItem('RWP_LOGIN_TOKEN');"
+            "if(!raw) return '';"
+            "return (JSON.parse(raw)||{}).uid||'';"
+            "}catch(e){return '';}"
+            "})()"
         )
         try:
             raw = self.run(["browser", self.session, "eval", eval_script])
@@ -272,7 +326,6 @@ class OpenCLIAdapter:
         if not user_id:
             return None
         # 启发式:小红书 user_id 是 24 位 hex;允许 hex / 字母数字 / 长度 16~64
-        # 防御 run() 解析失败返原 stdout 这种污染
         if not (16 <= len(user_id) <= 64) or not re.match(r"^[A-Za-z0-9]+$", user_id):
             logger.info("fetch_my_user_id 拿到非用户 ID 格式 (%r),跳过", user_id)
             return None

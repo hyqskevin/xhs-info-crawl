@@ -237,27 +237,39 @@ def batch_delete_xhs_accounts(
 
 @router.post("/{account_id}/check-login")
 def check_login(account_id: int, _: Admin, db: DB) -> dict:
-    """检查指定账号的登录状态（调 opencli whoami）。
+    """检查指定账号的登录状态（2026-08-24 改用 profile_alias 走 opencli --profile 通道）。
 
-    成功：login_status='logged_in'，返回 logged_in=True + whoami 原始数据。
-    未登录/风控：login_status='logged_out'，返回 logged_in=False + 错误信息。
-    其他异常：503。
+    流程：
+    1. 设 login_status='logging_in'（中间态,前端可轮询显示「正在检查」）
+    2. 构造 OpenCLIAdapter: session=account.session_name, profile_alias=account.session_name
+       （session_name 直接作为 opencli profile 别名;零 schema 改动）
+    3. 调 adapter.check_login() —— 经 browser <session> eval 读 RWP_LOGIN_TOKEN.uid
+       （不再依赖 xiaohongshu whoami,实测后者返回硬编码假账号）
+    4. 成功：login_status='logged_in' + 自动落库 platform_user_id
+       未登录：login_status='logged_out'
+       其他异常：503
 
-    成功时若 whoami 返回了 user_id 且数据库 platform_user_id 尚未登记，自动落库。
+    cdp_endpoint / ChromePool 仍保留作为向后兼容 fallback —— 当 profile_alias 通道
+    失败或 ChromePool 路线被强制启用时,cdp_endpoint 仍可用。
     """
     account = db.get(XhsAccount, account_id)
     if account is None:
         raise HTTPException(404, "账号不存在")
     settings = get_settings()
-    # 用账号的 cdp_port 路由到对应的独立 Chrome 实例（ChromePool），
-    # 这样每个账号检测的是自己的 cookie，而不是默认 Chrome Browser Bridge
+    # 1. 先设 logging_in 中间态 → 前端可立刻看到「正在检查」
+    account.login_status = "logging_in"
+    db.commit()
+    db.refresh(account)
+
+    # 2. profile_alias 通道:session_name 直接当 opencli alias 用
+    # （spec 2026-08-24 §3.1 决定 — 零 schema 改动）
+    profile_alias = account.session_name
+    # 向后兼容:如有 cdp_port 也仍可走 CDP 通道作为兜底（不影响主路径）
     cdp_endpoint = (
         f"http://127.0.0.1:{account.cdp_port}"
         if account.cdp_port is not None
         else None
     )
-    # 若账号配置了 cdp_port 但 Chrome 实例还没启动，先启动它，让用户能扫码登录
-    # 使用全局 ChromePool 单例（API + crawl_task 共享），避免端口冲突和重复启动
     if account.cdp_port is not None:
         try:
             chrome_pool = get_global_chrome_pool()
@@ -269,35 +281,35 @@ def check_login(account_id: int, _: Admin, db: DB) -> dict:
             settings,
             session=account.session_name,
             cdp_endpoint=cdp_endpoint,
+            profile_alias=profile_alias,
         )
         raw = adapter.check_login(foreground=True)
         account.login_status = "logged_in"
-        # 1) whoami 字段（部分 opencli 版本可能含 user_id / userId / id）
-        whoami_user_id = (
-            (raw or {}).get("user_id")
-            or (raw or {}).get("userId")
-            or (raw or {}).get("id")
-        )
-        # 2) 从浏览器 localStorage USER_INFO 拿 user_id（2026-08-19：whoami 默认无 user_id 字段）
-        fetched_user_id = adapter.fetch_my_user_id()
-        user_id = whoami_user_id or fetched_user_id
+        # check_login 现在返 {logged_in, uid, user_id, ...} —— user_id 由实现映射自 uid
+        user_id = (raw or {}).get("user_id") or (raw or {}).get("uid")
         if user_id and not account.platform_user_id:
             account.platform_user_id = str(user_id)
         db.commit()
         db.refresh(account)
-        # 返回完整 account dump，前端可直接合并到 rows；同时带 login_status 便于 ElTag 刷新
-        return {"code": 200, "message": "success", "data": {**_dump(account), "logged_in": True, "raw": raw}}
+        return {
+            "code": 200, "message": "success",
+            "data": {**_dump(account), "logged_in": True, "raw": raw},
+        }
     except (AuthenticationRequired, VerificationRequired) as exc:
         account.login_status = "logged_out"
         db.commit()
         db.refresh(account)
-        return {"code": 200, "message": "success", "data": {**_dump(account), "logged_in": False, "error": str(exc)}}
+        return {
+            "code": 200, "message": "success",
+            "data": {**_dump(account), "logged_in": False, "error": str(exc)},
+        }
     except Exception as exc:
+        # 异常时不改 login_status（保留 logging_in 让前端继续轮询?或者改回 unknown）
+        # 这里改回 unknown — 用户下次手动重试
+        account.login_status = "unknown"
+        db.commit()
+        db.refresh(account)
         raise HTTPException(503, f"登录检查失败：{exc}") from exc
-    finally:
-        # 注意：不调用 chrome_pool.release_all()——保持 Chrome 实例运行让用户扫码登录
-        # ChromePool 会在任务结束（crawl_task）或后端停止时被 release
-        pass
 
 
 @router.post("/{account_id}/open-login")
@@ -326,12 +338,16 @@ def open_login(account_id: int, _: Admin, db: DB) -> dict:
         if instance.port != account.cdp_port:
             account.cdp_port = instance.port
             db.commit()
+        # pool 实际分配端口可能与 DB 记录不同（跨进程端口冲突后重分配）——
+        # 端点必须在 acquire 之后按实例动态端口解析，用旧端口会打开错误的 Chrome 实例
+        cdp_endpoint = f"http://127.0.0.1:{instance.port}"
     # 打开小红书登录页（在 Chrome 实例中打开，foreground=True 拉前台）
     try:
         adapter = OpenCLIAdapter(
             settings,
             session=account.session_name,
             cdp_endpoint=cdp_endpoint,
+            profile_alias=account.session_name,
         )
         ok = adapter.run(["browser", account.session_name, "open", settings.xhs_login_url, "--window", "foreground"])
         if not ok:
@@ -359,7 +375,12 @@ def logout_account(account_id: int, _: Admin, db: DB) -> dict:
         if account.cdp_port is not None
         else None
     )
-    adapter = OpenCLIAdapter(settings, session=account.session_name, cdp_endpoint=cdp_endpoint)
+    adapter = OpenCLIAdapter(
+        settings,
+        session=account.session_name,
+        cdp_endpoint=cdp_endpoint,
+        profile_alias=account.session_name,
+    )
     adapter.logout()
     try:
         get_global_chrome_pool().release(account.session_name)

@@ -12,6 +12,18 @@
 
 ## 当前待办
 
+- [x] 2026-09-02 全量代码评估 6 类问题批量修复（评估基线 5ead318：后端 18 failed / 1115 passed，make test 被收集错误阻断；spec：`docs/superpowers/specs/2026-09-02-audit-fixes-test-suite-and-account-routing-design.md`）
+  - 目标：恢复 make test 可用 + 修复账号路由 bug + 消除测试全局污染，按 C1 → I2 → I1 → I3 → I4/I5 → Minor 顺序修完
+  - **C1 完成**：删 test_dedupe_cities_script.py / test_fix_activity_city_code.py / test_split_blogger_cities.py 3 个整文件（全部用例测已删脚本）；test_duplicate_candidates_stop.py 删引用 scripts.cleanup_duplicate_candidates 的 1 用例（保留 2 个 AST 断言）；test_dead_code_cleanup.py parametrize 移除 ("scripts/dedupe_cities.py", ...) 条目
+  - **I2 完成**：xhs_accounts.py logout/open_login 补 `profile_alias=account.session_name`（对齐 check-login 通道）；open_login 的 cdp_endpoint 改为 acquire 之后按实例动态端口解析。TDD：test_xhs_accounts_profile_routing.py 2 用例先红（profile_alias=None + stale 端口 9999）后绿，存量 test_xhs_accounts.py 18 用例无回归
+  - **I1 完成**：test_database_init.py 删全部 5 处 `importlib.reload(db_mod)` + 配套 setattr（init_database(settings) 显式传参时自建 engine，reload 纯属污染源）；test_keyword_group_patch_and_legacy_cleanup.py 重写为 conftest client/db_session（tmp DB + get_db override + seed admin），消除生产库读写。验收：test_database.py + test_database_init.py + keyword 按序运行 21/21 全绿（原顺序下 keyword 4 用例 404）
+  - 生产库清理：./data/app.db 的 keyword_groups 表删 46 行历史测试残留（patch-%/dup-%/test-% 前缀 + uuid 后缀），用户真实 4 个关键词组保留
+  - **I3 完成**：chrome_pool.py 新增 `_port_is_free()`（127.0.0.1 bind 探测）+ `_allocate_port()`（顺序扫描跳过占用端口，池耗尽抛 ChromeLaunchError）。TDD：test_chrome_pool.py 新增 2 用例（跳过被占端口 / 池耗尽抛错）先红后绿，存量 9 用例无回归
+  - **I4 完成**：test_scaffold_contract.py 期望值同步 base-dir 模式（`DATABASE_URL=` 留空自动推导；移除 IMAGE_DIR/EXPORT_DIR/CELERY_FOLDER 显式字面量——已由 DATA_DIR 推导）
+  - **I5 完成**：test_data_dir_migration_script.py 端到端 2 用例 `monkeypatch.setattr(ddm, "is_app_running", lambda: False)`（进程检测拒绝语义由 TestDataDirMigrationAppRunning 专门覆盖）
+  - **Minor 完成**：opencli_adapter.py 删 `import os as _os` / `import json as _json` 冗余导入（改用顶部 os/json）；删仓库根垃圾文件 .commit-msg-2.txt / .commit_msg_task7.txt / .commit_msg_p2_6.txt
+  - 验收结果：后端全量 **3 failed / 1127 passed / 1 skipped**——collection error 消除，评估时 18 失败全部转绿，仅剩 test_crawl_task_profile_failover.py 3 红灯（TODO#53 进行中 TDD，预期内）；前端 205 测试中 34 失败全部集中在 DashboardView.spec.ts，系并发会话进行中的前端改动（CrawlSuccessPie/CrawlTrendChart/useECharts.ts 未提交中间态）所致，与本批修复无关（本批前端零改动）
+
 > 以下为 2026-07-25 全项目核查新增（证据归档：`docs/superpowers/qa/2026-07-25-project-audit.md`），按列表顺序依次讨论修复。
 
 - [x] 2026-09-01 8 项代码审查问题批量修复（用户 2026-09-01 列出）
@@ -1274,7 +1286,7 @@
   - 关联：spec `docs/superpowers/specs/2026-09-02-env-loading-priority-design.md`
   - commit：`fix(backend): Settings 配置源优先级 cwd/.env > DATA_DIR/.env (TODO#55)`
 
-- [ ] **小红书账号 crawl_task 主循环接入 run_with_failover adapter 版**（TODO#53，2026-09-01 用户决策 C 方案）
+- [x] **小红书账号 crawl_task 主循环接入 run_with_failover adapter 版**（TODO#53，2026-09-01 用户决策 C 方案 → 2026-09-02 完成）
   - 目标：把 2026-08-24 spec §3.3 在 crawl_task 主循环里**完整落地**——`(AuthenticationRequired, VerificationRequired) except` 现有 while-loop 替换为统一 failover 原语。
   - **为什么 TODO#52 不再包含主循环接入**：TODO#52 收尾时只剩 `run_with_failover` 主循环接入；现有 `run_with_failover` 是 subprocess 抽象，与 crawl_task 用的 OpenCLIAdapter 高层抽象不匹配。需要新增 `run_with_adapter_failover` 适配版——属新工作项，拆 TODO#53。
   - **改动范围**：
@@ -1286,6 +1298,12 @@
     - `test_xhs_accounts.py` 账号相关测试 PASS
     - 新增 `tests/test_adapter_failover.py`：failover 调用次数 = primary + len(fallbacks)；首个成功停链；全失败抛 AdapterAllFailed
     - 全量回归：现有 1038+ passed 仍全绿（pre-existing `scripts.*` 5 个 fail 不计入）
+  - 实施（2026-09-02）：
+    - `run_with_adapter_failover` 增加 `no_retry_exceptions` 参数：`ExecutionStopped` / `ExecutionSuperseded` 控制流异常直通上层，不触发链式换号（spec §3.1 补充）
+    - `crawl_task` `(Auth, Verify)` 分支重写为 `run_with_adapter_failover` + `_failover_adapter_factory` / `_failover_bind_task` / `_failover_command` / `_failover_on_success` 四个闭包 helper；primary=失效账号本身（重给一次扫码机会）
+    - **默认 session（id=None）兼容**：`_failover_adapter_factory` 与 `reset_adapter_session` 两处 adapter 构造改为 `profile_alias=... if account.id is not None else None`，防止 failover/周期重置时路由到不存在的默认 profile（TDD：`test_default_session_failover_retry_keeps_profile_alias_none`）
+    - 顺手修复 `test_settings_blogger_enrich_api.py` patch 目标（路由拆分后 `app.api.v1.settings.bloggers.enrich_bloggers` 导入时绑定，patch 定义处失效 → 422）
+  - 验收结果（2026-09-02）：相关套件（adapter_failover / profile_failover / autologin / xhs_accounts / paused_resets_stage / end_cleanup / opencli_failover）57 passed；全量后端回归 **1136 passed / 1 skipped / 0 failed**（含 blogger_enrich patch 修复）
   - 部署：**worker + beat 必须重启**（crawl_task 主循环逻辑改动，按 AGENTS.md 服务层规则）
   - 关联：spec `docs/superpowers/specs/2026-09-01-crawl-task-failover-integration-design.md`
 
