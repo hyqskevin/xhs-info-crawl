@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 import shutil
 
 from sqlalchemy import delete, select
 
 from app.models.activity import Activity
+from app.models.keyword_group import KeywordGroup, KeywordGroupCity
 from app.models.note import Note, NoteImage
 from app.models.task import CrawlTask
 from app.services.archive import archive_task_folder, archive_task_result
@@ -28,6 +30,56 @@ from app.services.paddleocr_adapter import PaddleOCREngine
 from app.services.pipeline import run_stage
 
 from app.tasks.crawl.runtime import assert_execution_active, log, set_progress
+
+
+def _parse_excluded_words(json_text: str | None) -> list[str]:
+    """解析 KeywordGroup.excluded_words_json 为 list[str]。
+
+    与 settings API 端点（backend/app/api/v1/settings/keyword_groups.py:38）同款行为：
+    - 空文本/None → 空 list
+    - 非法 JSON → 空 list（不抛错）
+    - 仅保留非空字符串
+    """
+    if not json_text:
+        return []
+    try:
+        parsed = json.loads(json_text)
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+
+
+def load_excluded_words_for_city(db, city: str) -> set[str]:
+    """查 city 关联的所有 enabled 关键词组的排除词并集。
+
+    设计动机（P2 #6 审计修复）：替代 download_and_ocr 内部对每条笔记都重复查
+    keyword_group_city + excluded_words_json 的 N+1。caller 应在循环外调用一次,
+    结果作为参数传入 download_and_ocr。
+
+    行为：
+    - 仅查 enabled group + enabled city 绑定
+    - 单条非法 JSON → 跳过该 group（不抛错）
+    - 无 group 绑 city → 返空 set
+    """
+    group_ids = db.scalars(
+        select(KeywordGroupCity.keyword_group_id)
+        .join(KeywordGroup, KeywordGroup.id == KeywordGroupCity.keyword_group_id)
+        .where(
+            KeywordGroupCity.city_code == city,
+            KeywordGroupCity.enabled.is_(True),
+            KeywordGroup.enabled.is_(True),
+        )
+    ).all()
+    if not group_ids:
+        return set()
+    rows = db.execute(
+        select(KeywordGroup.excluded_words_json).where(KeywordGroup.id.in_(group_ids))
+    ).all()
+    excluded: set[str] = set()
+    for (json_text,) in rows:
+        for w in _parse_excluded_words(json_text):
+            excluded.add(w)
+    return excluded
 
 
 def _extract_engagement(detail: dict, field: str) -> int | None:
@@ -111,10 +163,23 @@ def prepare_existing_note(db, source_url: str) -> bool:
     return False
 
 
-def download_and_ocr(db, task: CrawlTask, run_token: str, city: str, item: dict, adapter: OpenCLIAdapter, settings) -> StagedNote | None:
+def download_and_ocr(
+    db,
+    task: CrawlTask,
+    run_token: str,
+    city: str,
+    item: dict,
+    adapter: OpenCLIAdapter,
+    settings,
+    excluded_words: set[str] | None = None,
+) -> StagedNote | None:
     """阶段 1：下载笔记详情 + 图片 + OCR，返回 StagedNote 或 None（跳过/失败）。
 
     不调用 MiniMax，不写 Activity。保留 assert_execution_active / set_progress 调用。
+
+    excluded_words（P2 #6 新增参数）：caller 预查的 city 级排除词 set。
+    - 显式传入 → 跳过内部 DB 查询,直接用传入的 set 判命中
+    - 默认 None → 内部 fallback 调 load_excluded_words_for_city 查一次（保持旧调用方行为）
     """
     from app.services.crawl_city_guard import assert_city_code_exists
     from app.services.published_at import extract_published_at
@@ -136,29 +201,16 @@ def download_and_ocr(db, task: CrawlTask, run_token: str, city: str, item: dict,
     # 关键词组排除词过滤（抓取后过滤笔记）：命中关键词但内容含排除词的笔记直接跳过
     matched_kws = item.get("_matched_keywords") or []
     if matched_kws:
-        from app.models.keyword_group import KeywordGroup, KeywordGroupCity, KeywordGroupWord
-        from app.models.config import City as CityModel
-        # 找挂当前 city 的 enabled 关键词组
-        group_ids = db.scalars(
-            select(KeywordGroupCity.keyword_group_id)
-            .join(KeywordGroup, KeywordGroup.id == KeywordGroupCity.keyword_group_id)
-            .where(KeywordGroupCity.city_code == city, KeywordGroupCity.enabled.is_(True), KeywordGroup.enabled.is_(True))
-        ).all()
-        if group_ids:
-            excluded_words: set[str] = set()
-            for kg_id in group_ids:
-                json_text = db.scalar(select(KeywordGroup.excluded_words_json).where(KeywordGroup.id == kg_id)) or "[]"
-                try:
-                    excluded_words.update(str(w).strip() for w in __import__("json").loads(json_text) if str(w).strip())
-                except Exception:
-                    pass
-            if excluded_words:
-                title = (item.get("title") or "").strip()
-                # 命中排除词？注意：排除词匹配只看 title（这是开放搜索的快速预筛），content 过滤交给后续 OCR 阶段精细化。
-                hit = next((w for w in excluded_words if w in title), None)
-                if hit:
-                    log(db, task.id, "INFO", f"关键词组排除词命中：title 含 '{hit}'，跳过 url={note_url}")
-                    return None
+        if excluded_words is None:
+            # 兼容旧调用方:内部查一次（caller 已优化 → 不会重复触发 N+1）
+            excluded_words = load_excluded_words_for_city(db, city)
+        if excluded_words:
+            title = (item.get("title") or "").strip()
+            # 命中排除词？注意：排除词匹配只看 title（这是开放搜索的快速预筛），content 过滤交给后续 OCR 阶段精细化。
+            hit = next((w for w in excluded_words if w in title), None)
+            if hit:
+                log(db, task.id, "INFO", f"关键词组排除词命中：title 含 '{hit}'，跳过 url={note_url}")
+                return None
     if not assert_city_code_exists(db, city):
         log(db, task.id, "ERROR", f"city_code 不在 cities 表：{city!r}，跳过该笔记 url={note_url}")
         task.skipped_activities += 1
