@@ -20,6 +20,7 @@ import re
 from pathlib import Path
 
 from launcher.env_utils import read_env_value
+from launcher.ports import API_PORT_DEFAULT, WEB_PORT_DEFAULT
 
 
 _INJECTED_RE = re.compile(
@@ -61,8 +62,8 @@ def inject_app_config(dist: Path, env_file: Path) -> None:
         return
 
     api_host = read_env_value(env_file, "API_HOST", "127.0.0.1")
-    api_port = read_env_value(env_file, "API_PORT", "8000")
-    web_port = read_env_value(env_file, "WEB_PORT", "5173")
+    api_port = read_env_value(env_file, "API_PORT", str(API_PORT_DEFAULT))
+    web_port = read_env_value(env_file, "WEB_PORT", str(WEB_PORT_DEFAULT))
 
     # apiBaseUrl 包含 /api/v1 路径前缀,前端 axios baseURL 直接拼
     # (避免开发/生产两套 baseURL 逻辑;VITE_API_BASE_URL=/api/v1 配合 vite proxy 仅开发用)

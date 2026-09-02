@@ -12,6 +12,7 @@ import secrets
 from pathlib import Path
 
 from launcher.env_utils import read_env_value
+from launcher.ports import API_PORT_DEFAULT, WEB_PORT_DEFAULT, WEB_PORT_SCAN_RANGE
 
 logger = logging.getLogger(__name__)
 
@@ -227,9 +228,9 @@ def ensure_env_file(env_path: Path, env_example_path: Path) -> None:
     if not env_example_path.exists():
         # 写一个最小可用 .env,让后续 bootstrap_env 能正常工作
         env_path.write_text(
-            "API_HOST=127.0.0.1\n"
-            "API_PORT=8000\n"
-            "WEB_PORT=5173\n"
+            f"API_HOST=127.0.0.1\n"
+            f"API_PORT={API_PORT_DEFAULT}\n"
+            f"WEB_PORT={WEB_PORT_DEFAULT}\n"
             "VITE_API_BASE_URL=/api/v1\n"
             "DATA_DIR=./data\n"
             "LOG_DIR=./logs\n",
@@ -567,7 +568,7 @@ def build_api_base_url(env_path: Path) -> str:
     缺失 key 时用默认 127.0.0.1:8000,而不是抛异常,保证启动器在 .env 未就绪时也能拿到合理 URL。
     """
     host = _read_env_value(env_path, "API_HOST", "127.0.0.1")
-    port = _read_env_value(env_path, "API_PORT", "8000")
+    port = _read_env_value(env_path, "API_PORT", str(API_PORT_DEFAULT))
     return f"http://{host}:{port}"
 
 
@@ -578,10 +579,11 @@ def build_cors_origins(env_path: Path) -> list[str]:
     .env 中的 WEB_PORT 即使落在 5173-5199 之外也会被加入(防止端口冲突跳出去)。
     """
     host = _read_env_value(env_path, "API_HOST", "127.0.0.1")
-    web_port = _read_env_value(env_path, "WEB_PORT", "5173")
+    web_port = _read_env_value(env_path, "WEB_PORT", str(WEB_PORT_DEFAULT))
     origins: set[str] = set()
     # 默认范围 5173-5199:同时支持 127.0.0.1 和 localhost
-    for port in range(5173, 5200):
+    scan_start, scan_end = WEB_PORT_SCAN_RANGE
+    for port in range(scan_start, scan_end + 1):
         origins.add(f"http://127.0.0.1:{port}")
         origins.add(f"http://localhost:{port}")
     # .env 里的 WEB_PORT 即使在范围外也加入

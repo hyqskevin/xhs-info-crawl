@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from launcher.env_utils import read_env_value
+from launcher.ports import API_PORT_DEFAULT, WEB_PORT_DEFAULT
 
 logger = logging.getLogger(__name__)
 

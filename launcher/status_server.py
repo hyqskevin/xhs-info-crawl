@@ -18,8 +18,12 @@ from launcher.opencli_checker import check_opencli, OPENCLI_DOWNLOAD_URL, OpenCL
 from launcher.ocr_installer import get_ocr_status, download_models, OcrInstallResult
 from launcher.process_manager import ProcessManager
 from launcher.env_bootstrap import update_env_value
+from launcher.ports import API_PORT_DEFAULT, WEB_PORT_DEFAULT
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_API_BASE_URL = f"http://127.0.0.1:{API_PORT_DEFAULT}"
+_DEFAULT_WEB_BASE_URL = f"http://127.0.0.1:{WEB_PORT_DEFAULT}"
 
 
 class StatusServer:
@@ -33,8 +37,8 @@ class StatusServer:
         process_manager: ProcessManager,
         project_root: Path,
         venv_python: Path,
-        api_base_url: str = "http://127.0.0.1:8000",
-        web_base_url: str = "http://127.0.0.1:5173",
+        api_base_url: str = _DEFAULT_API_BASE_URL,
+        web_base_url: str = _DEFAULT_WEB_BASE_URL,
     ):
         self.process_manager = process_manager
         self.project_root = project_root

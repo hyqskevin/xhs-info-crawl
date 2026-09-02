@@ -307,7 +307,7 @@ def main():
     )
 
     # 5. 启动状态服务(在后台线程)
-    status_port = find_available_port(start=9000, end=9020)
+    status_port = find_available_port(*STATUS_PORT_SCAN_RANGE)
     status_thread = threading.Thread(
         target=lambda: uvicorn.run(status_server.app, host="127.0.0.1", port=status_port, log_level="warning"),
         daemon=True,
