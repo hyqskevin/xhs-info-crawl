@@ -1,12 +1,12 @@
 import { defineStore } from 'pinia'
 
-interface JwtPayload {
+export interface JwtPayload {
   sub: string
   role?: string
   permissions?: string[]
 }
 
-function parseJwtPayload(token: string): JwtPayload | null {
+export function parseJwtPayload(token: string): JwtPayload | null {
   try {
     const parts = token.split('.')
     if (parts.length !== 3) return null

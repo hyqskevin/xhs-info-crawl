@@ -2,7 +2,7 @@
 import { onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { useUserStore } from '@/stores/user'
+import { useUserStore, parseJwtPayload } from '@/stores/user'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -14,14 +14,9 @@ const isAuthenticated = computed(() => userStore.isAuthenticated)
 function readRoleFromToken(): 'admin' | 'editor' | null {
   const token = localStorage.getItem('token')
   if (!token) return null
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 3) return null
-    const payload = JSON.parse(atob(parts[1]))
-    return payload.role === 'admin' || payload.role === 'editor' ? payload.role : null
-  } catch {
-    return null
-  }
+  const payload = parseJwtPayload(token)
+  const r = payload?.role
+  return r === 'admin' || r === 'editor' ? r : null
 }
 
 const tokenRole = computed(() => readRoleFromToken())
