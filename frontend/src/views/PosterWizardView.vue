@@ -206,14 +206,6 @@ onMounted(async () => {
       <div v-else-if="step === 5" class="step-panel">
         <div v-for="item in items" :key="item.id" class="image-row">
           <h4>{{ item.title }} (note id={{ item.id }})</h4>
-          <ElImage
-            :src="item.image_url"
-            fit="cover"
-            style="width: 120px; height: 80px; margin-right: 8px"
-            v-for="(_img, idx) in [item.image_url].filter(Boolean) === [] ? ['placeholder'] : [item.image_url]"
-            :key="idx"
-            v-show="false"
-          />
           <ElRadioGroup v-model="item.image_url">
             <ElRadio v-for="(url, i) in [item.image_url].filter(Boolean)" :key="url" :value="url" :label="url">
               图 {{ i + 1 }}
