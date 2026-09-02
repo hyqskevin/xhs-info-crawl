@@ -52,6 +52,7 @@ from app.tasks.crawl.notes import (  # noqa: F401
     cleanup_incomplete_note,
     download_and_ocr,
     extract_and_save,
+    load_excluded_words_for_city,
     prepare_existing_note,
     process_note,
 )
@@ -527,6 +528,8 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
         from app.services.crawl_scope import resolve_crawl_scope
 
         scope = resolve_crawl_scope(db, None, task.params)
+        # P2 #6: per-city cache for excluded words (avoids per-note N+1 DB queries).
+        excluded_words_cache = {}
         for entry in results:
             if finish_stop_if_requested(db, task.id, run_token):
                 return
@@ -540,7 +543,10 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
                     # 避免之前累积的计数让后续真实失败更快触发熔断。
                     consecutive_failures = 0
                     continue
-                staged = download_and_ocr(db, task, run_token, entry[0], entry[1], adapter, settings)
+                staged = download_and_ocr(
+                    db, task, run_token, entry[0], entry[1], adapter, settings,
+                    excluded_words=excluded_words_cache.setdefault(entry[0], load_excluded_words_for_city(db, entry[0])),
+                )
                 if staged is not None:
                     # min engagement 过滤：组配置阈值不达标时跳过不入库
                     # 用 getattr 兼容测试中的 SimpleNamespace fake（不必显式带 like/collect 字段）
@@ -574,7 +580,10 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
                                 # 刷新成功：用新 URL 重抓当前 entry
                                 db.rollback()
                                 cleanup_incomplete_note(db, old_url)
-                                retry_staged = download_and_ocr(db, task, run_token, entry[0], entry[1], adapter, settings)
+                                retry_staged = download_and_ocr(
+                                    db, task, run_token, entry[0], entry[1], adapter, settings,
+                                    excluded_words=excluded_words_cache.setdefault(entry[0], load_excluded_words_for_city(db, entry[0])),
+                                )
                                 if retry_staged is not None:
                                     if retry_staged.note.content and retry_staged.note.content.strip():
                                         log(db, task.id, "INFO", f"token 池刷新后重抓成功 url={entry[1]['url']}")
@@ -708,7 +717,10 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
                     switched = True
                     # 3.4 用新账号重试当前笔记一次
                     try:
-                        staged = download_and_ocr(db, task, run_token, entry[0], entry[1], adapter, settings)
+                        staged = download_and_ocr(
+                            db, task, run_token, entry[0], entry[1], adapter, settings,
+                            excluded_words=excluded_words_cache.setdefault(entry[0], load_excluded_words_for_city(db, entry[0])),
+                        )
                     except (AuthenticationRequired, VerificationRequired) as retry_exc:
                         # 新账号也失效，跳过本篇，下一篇继续用当前账号（account_index 已增）
                         db.rollback()
