@@ -6,7 +6,7 @@ const { page, size, pagedRows, total } = usePagination(rows)
 ```
 其中 `pagedRows` 是基于当前页/页大小切片后的响应式数组。
 */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 export type UsePaginationOptions = {
   defaultPage?: number
@@ -24,12 +24,6 @@ export function usePagination<T>(
   const sizeOptions = options.sizeOptions ?? [10, 20, 50, 100]
 
   const total = computed(() => rowsGetter().length)
-  const pagedRows = computed(() => {
-    const all = rowsGetter()
-    const start = (page.value - 1) * size.value
-    const end = start + size.value
-    return all.slice(start, end)
-  })
 
   /** 切页或改 size 时调用，确保 page 不超出范围 */
   function ensureValidPage() {
@@ -37,6 +31,16 @@ export function usePagination<T>(
     const max = Math.max(1, Math.ceil(total.value / size.value))
     if (page.value > max) page.value = max
   }
+
+  // rows 减少时（如删除数据）自动修正 page，避免留白页。
+  watch(total, () => ensureValidPage(), { flush: 'sync' })
+
+  const pagedRows = computed(() => {
+    const all = rowsGetter()
+    const start = (page.value - 1) * size.value
+    const end = start + size.value
+    return all.slice(start, end)
+  })
 
   function onSizeChange(newSize: number) {
     size.value = newSize
