@@ -828,6 +828,8 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
         log(db, task.id, "ERROR", str(exc))
         # 未登录（whoami 超时归类）、安全验证与连续失败熔断都需要用户在浏览器里
         # 检查并完成扫码/验证，统一自动打开登录页；打开失败不影响 PAUSED 状态。
+        # 注意：open_xhs_login 必须在 _safe_cleanup_task_resources 之前调用——
+        # 否则 close_session 之后用已关闭 session 打开登录页会失败。
         page_kind = "验证页面" if isinstance(exc, VerificationRequired) else "登录页面，请完成扫码后点击「继续抓取」"
         try:
             open_xhs_login(settings)
@@ -844,6 +846,82 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
         record_schedule_failure(db, task)
         log(db, task.id, "ERROR", str(exc))
     finally:
-        # 不释放 chrome_pool——它是全局单例，由 atexit 在后端退出时统一 release
-        # 这样账号已启动的 Chrome 实例可在任务间持续运行（用户已登录的 cookie 保持有效）
+        # 任务级清理（关 tab + 关 Chrome 实例）必须放到 finally 才能覆盖：
+        # - for 循环内部的 return 早退（line 532/638/641/722/725/772/778/792）
+        # - ExecutionStopped/Superseded 路径的 return（line 638/641 等）
+        # - 5 个 except 分支
+        # 进程级 ChromePool 仍由 atexit 兜底 release_all；任务级 release 仅做
+        # 释放 → 下次同账号任务用 chrome_pool.acquire(session_name) 复用。
+        # spec: docs/superpowers/specs/2026-09-01-crawl-task-end-cleanup-tab-chrome.md
+        try:
+            reason = "FINALLY"
+            try:
+                current = db.get(CrawlTask, task_id)
+                if current is not None:
+                    # 映射到具体 reason（便于 WARNING 日志可读）
+                    reason_map = {
+                        "COMPLETED": "COMPLETED",
+                        "COMPLETED_WITH_ERRORS": "COMPLETED_WITH_ERRORS",
+                        "PAUSED": "PAUSED",
+                        "FAILED": "FAILED",
+                        "RUNNING": "STOPPED_OR_SUPERSEDED",  # finally 时仍 RUNNING → for-loop return 早退
+                    }
+                    reason = reason_map.get(current.status, "FINALLY")
+            except Exception:
+                # db 状态不可读也照常清理
+                pass
+            _safe_cleanup_task_resources(
+                db, task_id, reason, adapter, accounts, chrome_pool,
+            )
+        except Exception as cleanup_exc:
+            logger.warning("任务级资源清理异常（忽略）: %s", cleanup_exc)
         db.close()
+
+
+def _safe_cleanup_task_resources(
+    db,
+    task_id: int,
+    reason: str,
+    adapter,
+    accounts: list,
+    chrome_pool,
+) -> None:
+    """任务结束时安全释放临时资源：关 tab + 关 Chrome 实例。
+
+    任何失败仅 WARNING,不抛错（不影响 task 状态记录）。
+
+    调用位置：_run_crawl_body 的 5 种结束分支（COMPLETED / ExecutionStopped /
+    ExecutionSuperseded / PAUSED / FAILED）末尾。
+
+    Args:
+        db: 当前 Session（用于 log）
+        task_id: 任务 ID
+        reason: 结束原因(用于 WARNING 文案)
+        adapter: 当前 OpenCLIAdapter(可能为 None,如任务在初始化阶段失败)
+        accounts: 当前账号列表(可能含 SimpleNamespace fallback)；用于取 session_name
+        chrome_pool: ChromePool 全局单例(可能为 None=默认 session/无账号配置)
+
+    说明:cookie 与 login 态由 opencli 管控,Chrome 实例关掉时 user-data-dir 持久化;
+    下次同账号任务重启 Chrome 实例无需重新登录(用户 2026-09-01 确认)。
+    spec: docs/superpowers/specs/2026-09-01-crawl-task-end-cleanup-tab-chrome.md
+    """
+    if adapter is not None:
+        try:
+            adapter.close_session()
+        except Exception as exc:
+            log(db, task_id, "WARNING", f"adapter.close_session 失败（{reason}）：{exc}")
+    if chrome_pool is not None and accounts:
+        # 取当前账号的 session_name（取 accounts[0] —— 启动 adapter 用的是主账号；
+        # 任务中途切账号时 adapter 已切到 accounts[account_index]，但 release 用
+        # accounts[0] 主账号的 session_name 即可——chrome_pool.release 不区分账号）
+        # 实际更准确的方式：记录最近一次 chrome_pool.acquire 用的 session_name。
+        # chrome_pool 用 session_name 作 key（dict），不释放就泄漏；这里 release
+        # 所有已 acquire 的账号更彻底。
+        for acc in accounts:
+            session_name = getattr(acc, "session_name", None)
+            if not session_name:
+                continue
+            try:
+                chrome_pool.release(session_name)
+            except Exception as exc:
+                log(db, task_id, "WARNING", f"chrome_pool.release({session_name}) 失败（{reason}）：{exc}")

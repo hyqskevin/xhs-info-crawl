@@ -14,6 +14,49 @@
 
 > 以下为 2026-07-25 全项目核查新增（证据归档：`docs/superpowers/qa/2026-07-25-project-audit.md`），按列表顺序依次讨论修复。
 
+- [x] 2026-09-01 8 项代码审查问题批量修复（用户 2026-09-01 列出）
+  - 目标：把审计/代码审查发现的 8 项真问题按 P0 → P1 → P2 → P3 优先级一次性修完，spec → TDD red → implement → green → commit
+  - 优先级 P0（功能 bug，先修）：
+    - **① notes.py 博主过滤逻辑错** `backend/app/api/v1/notes.py:212` `Note.source_url.like(blogger.profile_url + "%")` 几乎不会匹配（小红书 `source_url` 是单条推文 URL，不是博主主页，profile_url 拼接无意义）。**修复**：改用 `Note.matched_blogger_id == blogger_id`（line 195-198 已有 `matched_blogger_id` 关联逻辑）；若列不存在则确认关联表/外键，**禁止**用 `like profile_url+%`
+  - 优先级 P1（性能 hot path）：
+    - **② audit_logs.py 总数统计加载整表** `backend/app/api/v1/audit_logs.py:74` `total = len(db.execute(count_stmt).scalars().all())` 全量加载只为计数。**修复**：`total = db.scalar(select(func.count()).select_from(count_stmt.subquery()))`（或 `db.scalar(count_stmt.with_only_columns(func.count()).order_by(None))`）
+    - **④ 列表端点 N+1（schedules/dashboard）** 详情核对：每个 schedule 各查一次任务。**修复**：用 `selectinload` / `joinedload` 或一次性查 `task_in(...)` 聚合
+  - 优先级 P2（一致性问题同步修）：
+    - **③ crawl_task.py 连续失败计数重置不完整 + current_stage 残留**
+      - a. "健康跳过"路径（`is None / empty` 直接 continue）不重置 `consecutive_failures`，更易误触发熔断。**修复**：在成功/跳过/正常路径都明确 `consecutive_failures = 0`
+      - b. 账号全失效后 `current_stage` 不清理，前端误读。**修复**：所有账号失效分支显式 `current_stage = "账号全失效"` 并持久化
+    - **⑤ 单条删除端点静默 200 vs batch 404 语义不一致** cities/bloggers/xhs_accounts 单条 DELETE 不存在资源返回 200；batch DELETE 返 404。**修复**：单条 DELETE 不存在资源返 404，对齐 batch 语义
+      - commit `fe6671f` 修 cities/bloggers（cities.py:89-97 + bloggers.py:243-253）
+      - commit `aad8577` 修 xhs_accounts（xhs_accounts.py:180-188；该文件含未提交他人 check_login 改动，本 commit 仅 stage P2 #5 的 3 行）
+      - 测试 `backend/tests/test_settings_delete_404.py` 4 用例 TDD：3 个 404 断言（cities/bloggers/xhs_accounts 不存在返 404）+ 1 个回归保护（存在 city 仍返 200）；4/4 passed
+      - 回归：`test_settings_batch_delete.py` + `test_settings_api_bloggers.py` + `test_xhs_accounts.py` 51 passed（其余 5 失败为预存在的 `_safe_cleanup_task_resources` NameError，与本修复无关）
+    - **⑥ notes.py 重复查关键词组排除词 + `__import__("json")` 内联坏味道**
+      - a. 每条笔记循环里再查关键词组排除词。**修复**：循环外一次性查 exclusion_map，循环内查 dict
+      - b. 函数内联 `__import__("json")` 调用。**修复**：模块顶部 `import json`，调用 `json.dumps/loads`
+      - commit `004992a` 修 `app/tasks/crawl/notes.py`：模块顶部 `import json`；新增 `load_excluded_words_for_city` helper + `_parse_excluded_words` 内部 helper（与 settings API 同款行为）；`download_and_ocr` 函数签名加 `excluded_words: set[str] | None = None` 参数（默认 None → 内部 fallback 调 helper，向后兼容旧调用方）
+      - commit `f674c96` 修 caller `app/tasks/crawl_task.py`：主循环前 `excluded_words_cache = {}`；3 个 download_and_ocr 调用点改为 `excluded_words=excluded_words_cache.setdefault(city, load_excluded_words_for_city(db, city))`。该文件含未提交他人 `_safe_cleanup_task_resources` 改动 (76 行)，本 commit 故意 reverse 掉他人 patch → 仅 stage 我的 5 处 hunk（+15/-3 行）
+      - 测试 `backend/tests/test_notes_excluded_words_preload.py` 7 用例 TDD：3 个 helper + 4 个 helper 行为验证；7/7 passed
+      - fixture fake 兼容性：6 个测试文件（test_consecutive_failure_halt / test_crawl_task_consecutive_reset / test_crawl_empty_detail_throttle / test_crawl_task_paused_resets_stage / test_xhs_accounts / test_crawl_task_resilience）共 22 处 fake `download_and_ocr` 加 `**_excluded_words` 参数接受 kwargs
+      - 回归：caller 改动后 20/20 passed（含 test_crawl_task_consecutive_reset / test_crawl_empty_detail_throttle / test_crawl_task_paused_resets_stage / test_crawl_cdp_routing）
+  - 优先级 P3（前端体验，最后）：
+    - **⑦ ElMessageBox.confirm 未处理取消 rejection** 19 处调用大多 `await ...`，用户点取消直接抛 unhandled rejection。**修复**：包 `try { await ... } catch { return }` 或检查返回值 `action === 'confirm'`
+    - **⑦ 路由守卫不校验权限（仅隐藏菜单）** 路由 meta 仅在菜单层 hide，URL 直访仍能进。**修复**：`router.beforeEach` 检查 `to.meta.requiredPermissions`，无权限 redirect 403 页
+    - **⑦ 401 未清理 user store** axios 拦截器收到 401 直接 redirect 但 `user` store 仍残留旧用户信息，下次刷新仍显示已登录。**修复**：401 时调 `userStore.$reset()` + 清 token
+    - **⑧ usePagination.ensureValidPage 从无调用** 翻页后 currentPage > totalPages 留白。**修复**：每处分页组件 watch `totalPages` 调 `ensureValidPage()`，或在 composable 里统一处理
+      - P3 #8 commit `ee14463`：composable 内加 `watch(total, ensureValidPage, flush:'sync')`，2 个 TDD 用例先红后绿（全 9 passed）
+      - P3 #7-3 commit `5494102`：http 401 拦截器动态 import `@/stores/user` 调 `useUserStore().clear()`，1 个 TDD 用例先红后绿（http 全 5 passed）
+      - P3 #7-1 commit `2f38883`：新增 `frontend/src/utils/confirm.ts` 的 `confirmSafe` 工具（try/catch 兜底返 boolean），11 个 .vue 文件 19 处调用点改为 `if (!await confirmSafe(...)) return` 模式，2 处原本就 try/catch 包裹（AccountsTab.remove / AuditLogsTab.batchDelete）简化为 if-return；3 个 confirm.spec.ts 用例 + 全套 195 个 vitest 通过
+      - P3 #7-2 commit `16c610e`：router beforeEach 改为 async，await import user store；to.meta.permissions AND 校验（用 every + hasPermission，支持 `*` 通配）；system-admin 加 meta.permissions: ['system:admin']；3 个 router spec 用例（admin 通配过、editor 重定向、未登录重定向），全套 198 个 vitest 通过
+  - 验收：
+    - 每条独立 spec（`docs/superpowers/specs/2026-09-01-audit-batch-2-design.md` 合并 8 项或拆 8 份）
+    - 每条独立 TDD（红 → 绿）
+    - 每条独立 commit，commit message 包含功能/性能/一致性前缀
+    - 全量回归：backend pytest / frontend vitest / launcher 全部通过（pre-existing 失败数不增）
+    - P0 修复后用真实数据模拟（构造一条 `matched_blogger_id=1` 的笔记 + `blogger_id=1` 过滤 → 必须能查到）
+    - P1 修复后 perf 测试：audit_logs 列表接口在 10w 行时 P95 < 200ms
+  - 部署：worker/beat 必须重启（涉及 ORM + 任务代码）
+  - spec 位置：[2026-09-01-audit-batch-2-frontend-ux-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-09-01-audit-batch-2-frontend-ux-design.md)（P3 4 项合并 spec，gitignored）
+
 - [x] 周报 xlsx 下载 500：嵌入本地 .webp 封面图触发 `KeyError: '.webp'`（用户 2026-08-22 反馈"周报没法下载"）
   - 目标：
     - ①`POST /api/v1/reports/{id}/download?format=xlsx` 在打包版精简 Python 3.11 runtime 下不再因本地 .webp 封面图 500
@@ -63,44 +106,97 @@
   - spec：[2026-08-22-security-block-fast-halt-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-22-security-block-fast-halt-design.md)
   - commit：待生成。
 
-- [ ] v0.7.0+9 launcher bootstrap_env 不复制用户配置 key 到 .app/.env,只写系统级 key(用户 2026-08-24 反馈"我只能改.xhs-info-crawl/.env,app 内部正常我不改,应该每次 app 启动或者更新时,我的配置不丢,数据不丢,前端页面正常获取我的数据和配置"——当前 .env.example 模板里的用户配置 key(LLM_*/API_KEY 等)被 bootstrap_env 复制到 .app/.env,v0.7.0+7 fix 让 .app/.env 后跑覆盖 DATA_DIR/.env,导致用户改 `~/.xhs-info-crawl/.env` 看不到效果)
+- [x] v0.7.0+9 launcher bootstrap_env 不复制用户配置 key 到 .app/.env,只写系统级 key(用户 2026-08-24 反馈"我只能改.xhs-info-crawl/.env,app 内部正常我不改,应该每次 app 启动或者更新时,我的配置不丢,数据不丢,前端页面正常获取我的数据和配置"——当前 .env.example 模板里的用户配置 key(LLM_*/API_KEY 等)被 bootstrap_env 复制到 .app/.env,v0.7.0+7 fix 让 .app/.env 后跑覆盖 DATA_DIR/.env,导致用户改 `~/.xhs-info-crawl/.env` 看不到效果)
   - 目标:
-    - ①`launcher/env_bootstrap.py` 维护一份**系统级 key 白名单**(`LAUNCHER_SYSTEM_KEYS = {API_HOST, API_PORT, WEB_PORT, API_BASE_URL, LOG_DIR, DATA_DIR, CELERY_FOLDER, CELERY_BEAT_SCHEDULE_PATH, *_CACHE_HOME, ...}`),bootstrap_env 第一次从 .env.example 复制到 .app/.env 时**只复制**白名单内的 key,用户配置 key(LLM_*/API_KEY/SECRET_KEY/ADMIN_PASSWORD 等)不进 .app/.env
-    - ②bootstrap_env 后续启动走 `set_key`/`update_env_value` 风格只 upsert 系统级 key,绝不写用户配置 key 到 .app/.env
-    - ③**同时**让 Settings 加载优先级反过来:dotenv_settings(.app/.env) 排到 _DataDirEnvSource 之前 —— 用户 DATA_DIR/.env 后跑胜出,系统级 key(API_PORT/WEB_PORT)由 .app/.env 提供
-    - ④用户配置 key 缺省走 `field default`,用户改了 `~/.xhs-info-crawl/.env` 后 Settings 直接读出来,不被 .app/.env 覆盖
-    - ⑤v0.7.0+7 已实现的 .app/.env → DATA_DIR/.env 互补逻辑保留(系统级 key 缺哪个从对方补)
-  - 根因:
+    - ①`launcher/env_bootstrap.py` 维护**两个白名单**:`LAUNCHER_SYSTEM_KEYS`(系统级 key,允许进 .app/.env)和 `LAUNCHER_USER_KEYS`(用户配置 key,严禁进 .app/.env)
+    - ②`ensure_env_file` 第一次从 .env.example 复制到 .app/.env 时**只复制**系统级 key;检测到老的 .app/.env 含用户配置 key → 备份为 `.env.v0.7.0.bak` 后重生成
+    - ③bootstrap_env 后续启动用 `update_env_value` 风格只 upsert 系统级 key
+    - ④`ensure_data_dir_env` 首次启动时从 .env.example 复制用户配置 key 到 `DATA_DIR/.env`(已存在则不动)
+    - ⑤`ensure_secret_key` 显式生成随机密钥并写 `DATA_DIR/.env`(覆盖占位值);`.app/.env` 严禁含 SECRET_KEY
+    - ⑥`_resolve_data_dir_in_data_dir_env` 把 .app/.env 的绝对路径 DATA_DIR 同步到 DATA_DIR/.env(防止 Settings 走 DataDir 源时又解析回相对路径)
+    - ⑦`bootstrap_env` 新增步骤 3.3-3.5 串起上述函数
+  - 根因(2026-08-24 现场验证):
     - v0.7.0+7 修复了"启动时加载 .app/.env DATA_DIR 是相对路径"的 bug,实现方式是 resolve_data_dir 写绝对路径
-    - 但 .app/.env 同时承载了用户配置 key(LLM_API_KEY / OPENAI_API_KEY / SECRET_KEY 等),升级 .app 时用户对 .app/.env 改动会丢(虽然这不该是用户改的地方)
-    - 更严重的:`dotenv_settings` 在 pydantic-settings 默认 `settings_customise_sources` 里排在 `_DataDirEnvSource` 之后,但通过 deep_update 语义,后跑的源覆盖前一个源,所以 .app/.env 会**覆盖** `~/.xhs-info-crawl/.env` 同名 key
-    - 用户改 `~/.xhs-info-crawl/.env` 看不到效果 = 配置"丢"(物理在,逻辑被覆盖)
+    - 但 .app/.env 同时承载了用户配置 key(LLM_API_KEY / SECRET_KEY 等),升级 .app 时用户对 .app/.env 改动会丢(虽然这不该是用户改的地方)
+    - 用户现场验证:`get_settings().secret_key` 返回占位值 `replace-with-a-random-local-secret`(34 字符),而不是 launcher 之前生成的 64 字符随机密钥
+    - 根因:`~/.xhs-info-crawl/.env` 是 dev 时代留下来的(含占位 SECRET_KEY + 相对路径 DATA_DIR=./data),Settings 加载时 DataDir 源胜出,占位值覆盖了 .app/.env 的真实密钥
+    - 顺带:`DATA_DIR=./data` 在 DataDir 源下解析回相对路径(cwd=.app 内部),导致数据目录实际指向 .app 内部
   - 结果:
     - `launcher/env_bootstrap.py`:
-      - 新增常量 `LAUNCHER_SYSTEM_KEYS = frozenset({...})` 系统级 key 白名单
-      - 第一次从 .env.example 复制到 .app/.env:用白名单过滤,只复制系统级 key
-      - 后续 `bootstrap_env` 用 `set_key(env_path, key, value)` 单 key 写,key 不在白名单则**跳过**
-      - `resolve_data_dir` / `LOG_DIR` / API_PORT 写入仍然走白名单 key
-    - `backend/app/core/config.py`:
-      - `settings_customise_sources` 调整顺序:`(init_settings, env_settings, dotenv_settings, _DataDirEnvSource, file_secret_settings)` —— DATA_DIR/.env 排最后但通过 `init_settings` 显式注入的 `data_dir_setting` 触发它读对路径
-      - 实际效果:用户配置 key(LLM_*/API_KEY/SECRET_KEY)DATADIR/.env 后跑胜出,系统级 key(API_PORT)dotenv 前置提供
-      - 验证:`tests/test_settings_load_data_dir_env.py` 已覆盖的 7 case 全部要重跑验证新顺序不退化
-    - `launcher/tests/test_bootstrap_env_user_keys.py`(新)5 case:
-      - `test_first_copy_only_includes_system_keys`(从 .env.example 含 LLM_API_KEY,启动后 .app/.env 不含 LLM_API_KEY)
-      - `test_subsequent_writes_only_touch_system_keys`(bootstrap_env 跑两次,用户 key 始终不在 .app/.env)
-      - `test_data_dir_written_as_absolute_path`(回归 v0.7.0+6)
-      - `test_log_dir_written_under_data_dir`(回归 v0.7.0+7)
-      - `test_user_config_key_in_data_dir_env_wins`(e2e: bootstrap_env → Settings 加载 → LLM_API_KEY 来自 DATA_DIR/.env)
-    - `backend/tests/test_settings_load_data_dir_env.py` 调整:验证 dotenv 不再覆盖用户配置 key,但仍能提供系统级 key
-  - 验收:
-    - `launcher/tests/test_bootstrap_env_user_keys.py` 5/5 通过
-    - `backend/tests/test_settings_load_data_dir_env.py` 7/7 仍通过(顺序调整后无回归)
-    - 现场验证:用户在 `~/.xhs-info-crawl/.env` 改 `LLM_API_KEY=xxx` → 重启 .app → `Settings.llm_api_key` 返回新值(不需改 .app/.env)
-  - 部署:改动 launcher + Settings,uvicorn reload + 重打 .app 即可;worker 不需重启
-  - spec:`docs/superpowers/specs/2026-08-24-bootstrap-env-system-keys-only-design.md`(待写)
-  - commit:待生成
+      - 新增常量 `LAUNCHER_SYSTEM_KEYS = frozenset({API_HOST, API_PORT, WEB_PORT, ...})` 共 27 项系统级 key
+      - 新增常量 `LAUNCHER_USER_KEYS = frozenset({SECRET_KEY, MINIMAX_API_KEY, ...})` 共 33 项用户配置 key
+      - `_is_system_key(line)` / `_is_user_key(line)` / `_has_user_keys(env_path)` 三个判断 helper
+      - `ensure_env_file` 重写:首次从 .env.example 复制只保留系统 key;检测到老 .app/.env 含用户 key → 备份为 `.env.v0.7.0.bak` 后重生成
+      - 新增 `ensure_data_dir_env(data_dir_env_path, env_example_path)`:首次启动从 .env.example 复制用户配置 key 到 DATA_DIR/.env
+      - 新增 `ensure_secret_key(data_dir_env_path)`:检测到缺/占位 SECRET_KEY → 生成 32 字节随机 hex 写回
+      - 新增 `_resolve_data_dir_in_data_dir_env(data_dir_env_path, project_root, *, fallback_absolute)`:把绝对路径 DATA_DIR 同步到 DATA_DIR/.env
+    - `launcher/main.py::bootstrap_env` 新增步骤 3.3-3.5:调 ensure_data_dir_env + ensure_secret_key + _resolve_data_dir_in_data_dir_env
+    - `launcher/tests/test_bootstrap_env_user_keys.py`(新)6 case:
+      - `test_first_copy_filters_to_system_keys_only`:首次复制 .env.example → .app/.env 含系统 key、不含用户 key
+      - `test_subsequent_bootstrap_does_not_write_user_keys`:已存在的纯系统 .app/.env 不被覆盖
+      - `test_old_app_env_with_user_keys_is_backed_up_and_regenerated`:老 .app/.env 含 SECRET_KEY/MINIMAX_API_KEY → 备份为 .env.v0.7.0.bak 后重生成
+      - `test_secret_key_written_to_data_dir_env_only`:launcher 生成的 SECRET_KEY 写到 DATA_DIR/.env,**不**写到 .app/.env
+      - `test_data_dir_env_copied_from_example`:DATA_DIR/.env 不存在 → 从 .env.example 复制用户配置 key
+      - `test_data_dir_resolves_to_absolute_path_in_data_dir_env`:DATA_DIR/.env 的 DATA_DIR 字段被转绝对路径
+    - `launcher/tests/test_env_bootstrap.py` 适配新语义:2 个旧测试更新("SECRET_KEY 替换占位"改为"SECRET_KEY 不进 .app/.env";"INITIAL_ADMIN_PASSWORD 进 .app/.env"改为"INITIAL_ADMIN_PASSWORD 不进 .app/.env")
+  - 验收(2026-08-24 现场):
+    - `launcher/tests/test_bootstrap_env_user_keys.py` 6/6 全绿
+    - `launcher/tests/test_env_bootstrap.py` 18/18 全绿(2 个旧测试适配)
+    - `launcher/tests/test_data_dir_resolution.py` 6/6 全绿(v0.7.0+6 无回归)
+    - `launcher/tests/test_process_manager_logs_dir.py` 5/5 全绿(v0.7.0+7 无回归)
+    - `launcher/tests/test_process_manager_beat_schedule.py` 5/5 全绿(v0.7.0+8 无回归)
+    - launcher 全量(排除 2 个 pre-existing opencli/status_server 失败)107 passed
+    - `backend/tests/test_settings_load_data_dir_env.py` 7/7 全绿(v0.7.0+7 无回归)
+    - 端到端模拟升级场景:.app/.env 含老 SECRET_KEY/MINIMAX_API_KEY → 启动 launcher → .app/.env 备份为 .env.v0.7.0.bak + 重生成只含系统 key → DATA_DIR/.env 含新生成的 64 字符 SECRET_KEY + 用户配置 key + DATA_DIR 绝对路径
+  - 部署:改动 launcher/env_bootstrap.py + launcher/main.py + 2 个测试文件,uvicorn reload 已生效;worker 不需重启;**用户下次启动 .app 时自动生效**(升级路径包含备份 + 重生成 + SECRET_KEY 重写)
+  - spec:`docs/superpowers/specs/2026-08-24-bootstrap-env-system-keys-only-design.md`(本地保留,docs/ 不入库)
+  - commit:`08d6aa6 fix(launcher): bootstrap_env 把用户配置 key 隔离到 DATA_DIR/.env(v0.7.0+9)`(未 push,等用户确认)
 
-- [ ] 数据目录迁移：~/.xhs-info-crawl/ → ~/Library/Application Support/com.xhs-info-crawl.local/（用户 2026-08-24 反馈"Application Support 路径是项目默认推荐，我不需要另外配置路径"——v0.5.x/v0.6.x 时代用户为规避 .app 升级丢数据，把 DATA_DIR 改为自定义 `~/.xhs-info-crawl/`；v0.7.0+6/7 已修相对路径飘数据 bug，launcher 推荐 Application Support 默认值，Time Machine 自动备份、macOS 用户隔离都比 `~/.xhs-info-crawl/` 优；用户从防御性自定义 → 迁回默认）
+- [ ] launcher 检测陈旧 DATA_DIR 并 fallback 默认路径（用户 2026-08-24 反馈"我这里删掉，是不是走默认了"——`.app/.env` 的 DATA_DIR 字段指向已被用户 `rm -rf` 的目录时，launcher 应自动 fallback 到 `DEFAULT_DATA_DIR`（`~/Library/Application Support/com.xhs-info-crawl.local`），让"删除源目录 = 走默认"心智模型成立）
+  - 目标：
+    - ①`.app/.env` 的 DATA_DIR 字面值指向的目录物理不存在 → `resolve_data_dir` 主动 fallback 到 `DEFAULT_DATA_DIR`，logger.warning 输出 "陈旧 DATA_DIR=X 不存在 → fallback 默认路径 Y"
+    - ②fallback 后默认路径不可写（mkdir 失败或 os.access W_OK 失败）→ 抛 `StaleDataDirFallbackError`，`bootstrap_env` 捕获后 logger.error + 重新 raise，让 launcher 进程退出 + 日志可查（无独立 UI 报错卡——沿用 v0.7.0+9 SECRET_KEY 异常退出模式）
+    - ③fallback 写回 `.app/.env` 的 DATA_DIR 字段为新绝对路径 → 下次启动不再重复触发 fallback，幂等
+    - ④**仅目录物理不存在**才算陈旧——目录存在但不含 `app.db` **不**触发 fallback（避免 launcher 替用户决定"是不是数据目录"）
+    - ⑤**不备份陈旧值**——直接覆盖 `.env` 字面值。简化行为；事后追溯靠 git/用户手动备份
+    - ⑥不动 `DATA_DIR/.env`（Settings 走 DataDir 源，由 `ensure_data_dir_env` 维护）+ 不动 `LAUNCHER_SYSTEM_KEYS` 白名单（与用户正在开发的 launcher `.env` 拆分 spec 解耦）
+    - ⑦LOG_DIR 不做陈旧检测——`process_manager.py::resolve_logs_dir` 已有"缺失 → DATA_DIR/logs → project_root/data/logs"三级 fallback，跟 DATA_DIR 协同即可
+  - 根因（2026-08-24 现场）：
+    - 数据迁移 spec 已把 `~/.xhs-info-crawl/` 拷到 `~/Library/Application Support/com.xhs-info-crawl.local/`，1.7GB 数据 + 840 notes + 2 accounts + 3 schedules + alembic_version 0028 全部到位
+    - 但 `.app/.env` 仍写 `DATA_DIR=/Users/hanamaki_mac_mini/.xhs-info-crawl`（v0.7.0+6 时代 launcher 主动写入的绝对路径）
+    - `launcher/env_bootstrap.py::resolve_data_dir` 信任 `.env` 字面值，`raw` 非空时永远走不到 `default or DEFAULT_DATA_DIR`
+    - 用户若 `rm -rf ~/.xhs-info-crawl` → `.app/.env` 指向不存在路径 → backend uvicorn SQLite 连接失败 → 用户体感"迁移后 .app 起不来"
+    - 用户期望"删源目录 = 走默认"，但实际行为依赖 `.env` 残留 → 这是陈旧配置语义 bug
+  - 结果：
+    - `launcher/env_bootstrap.py` 新增 `StaleDataDirFallbackError` 异常类 + 模块级 `logger = logging.getLogger(__name__)`
+    - 新增内部 helper `_resolve_and_write(env_path, target, project_root, *, _check_writable=False)`：解析为绝对路径 + 可选可写性校验 + 写回 .env + 失败抛 `StaleDataDirFallbackError`
+    - 新增内部 helper `is_data_dir_stale(raw_value, *, project_root) -> tuple[bool, str]`：检测字面值是否指向不存在/不是目录的路径，返回 `(stale, reason)`
+    - `resolve_data_dir` 重构：先调 `is_data_dir_stale` 判断 → 陈旧则 logger.warning + 走 `_resolve_and_write(..., _check_writable=True)` fallback；非空有效字面值沿用 v0.7.0+6 行为；空值走 default
+    - `launcher/main.py::bootstrap_env` 加 `try/except StaleDataDirFallbackError`：logger.error 后重新 raise，让 main() 进程退出 + traceback 输出到 stderr 和启动器日志文件
+    - 新增 `launcher/tests/test_resolve_data_dir_stale.py` 9 用例（TDD 红→绿）：
+      - `test_resolve_data_dir_falls_back_when_target_missing`：陈旧 fallback 写到默认路径
+      - `test_resolve_data_dir_does_not_fallback_when_target_exists`：存在目录不 fallback
+      - `test_resolve_data_dir_does_not_fallback_when_target_exists_but_no_app_db`：空目录不 fallback（spec §2.7）
+      - `test_resolve_data_dir_falls_back_when_path_is_file_not_dir`：指向文件 fallback
+      - `test_resolve_data_dir_falls_back_when_path_empty`：空字符串 fallback（v0.7.0+6 行为）
+      - `test_resolve_data_dir_logs_warning_on_stale`：logger.warning 输出
+      - `test_resolve_data_dir_uses_default_param_over_env_default`：default 参数覆盖
+      - `test_resolve_data_dir_idempotent_after_fallback`：caplog 计数验证幂等
+      - `test_resolve_data_dir_raises_on_unwritable_default`：mock `DEFAULT_DATA_DIR=/dev/null/should-not-exist/never` 抛异常
+    - 修 `launcher/tests/test_data_dir_resolution.py`（v0.7.0+6 既有 TDD）4 case：补 `mkdir(target)` 让目录存在 + monkeypatch HOME 隔离 `~/Library/foo` 测试，符合 v0.7.0+6 + 2026-08-24 双 spec 语义
+    - `launcher/pyproject.toml` 加 `dependencies = [pywebview, fastapi, httpx]`（原 requirements.txt 没列 pyproject，测试 import 报错）+ `[project.optional-dependencies] dev = ["pytest>=8"]` + `[tool.pytest.ini_options] testpaths/=["tests"] pythonpath=["."]`
+    - `Makefile` 加 `test-launcher` 目标 + `test:` 链入 launcher pytest（`uv run --project launcher --extra dev pytest launcher/tests -q`）
+  - 验收：
+    - `launcher/tests/test_resolve_data_dir_stale.py` 9/9 全绿
+    - `launcher/tests/test_data_dir_resolution.py` 6/6 全绿（v0.7.0+6 spec 不退步）
+    - backend 既有 spec（`test_data_dir_migration_script.py` / `test_settings_load_data_dir_env.py`）不回归
+    - 全量 launcher pytest 不退步（除 4 个预存在 failed 与本 spec 无关：`test_opencli_port_detector.py` 缺函数 / `test_status_server.py::test_ocr_install_triggers_download` 缺属性 / `test_main_gui.py::test_run_gui_main_thread_cleans_up_*` 缺 `uvicorn`）
+    - 现场验证：用户机器 `.app/.env` 含过期 `DATA_DIR=/Users/hanamaki_mac_mini/.xhs-info-crawl` + Application Support 路径已有 1.7GB 数据 → `rm -rf ~/.xhs-info-crawl` → 启动 .app → 启动器日志显示 warning "陈旧 DATA_DIR='/Users/.../.xhs-info-crawl' 已陈旧" → LLMConfigPanel UI 自动显示新路径 + 数据库预览 = `.../app.db` + 管理后台账号/schedule/notes 齐全 → 抓一次小抓取验证 task_logs/archive 写入新路径 → 重启 .app warning 不再触发
+  - 部署：改 launcher/env_bootstrap.py + launcher/main.py（导入 StaleDataDirFallbackError）+ launcher/pyproject.toml（deps + pytest 配置）+ Makefile（test-launcher 目标）+ launcher/tests/test_data_dir_resolution.py（适配新行为）
+  - spec：[2026-08-24-launcher-detect-stale-data-dir-and-fallback-default-design.md](file:///Users/hanamaki_mac_mini/Documents/github/project/xhs-info-crawl/docs/superpowers/specs/2026-08-24-launcher-detect-stale-data-dir-and-fallback-default-design.md)
+  - commit：待生成
+
+- [x] 数据目录迁移：~/.xhs-info-crawl/ → ~/Library/Application Support/com.xhs-info-crawl.local/（用户 2026-08-24 反馈"Application Support 路径是项目默认推荐，我不需要另外配置路径"——v0.5.x/v0.6.x 时代用户为规避 .app 升级丢数据，把 DATA_DIR 改为自定义 `~/.xhs-info-crawl/`；v0.7.0+6/7 已修相对路径飘数据 bug，launcher 推荐 Application Support 默认值，Time Machine 自动备份、macOS 用户隔离都比 `~/.xhs-info-crawl/` 优；用户从防御性自定义 → 迁回默认）
   - 目标：
     - ①数据从 `~/.xhs-info-crawl/`（9MB DB + 262MB chrome-pool + 1.3GB archive + 133MB paddlex + 12K exports + 0B images/logs/celery/tmp + 4K run,共 ~1.7GB）完整 rsync 到 `~/Library/Application Support/com.xhs-info-crawl.local/`
     - ②脚本**只迁数据**，**不动 launcher 代码、不改 .app/.env 的 DATA_DIR/LOG_DIR**——这些由 launcher `.env` 拆分 spec（`2026-08-24-bootstrap-env-system-keys-only-design`）独立负责
@@ -703,6 +799,65 @@
 
 ## 已完成
 
+- [x] 2026-09-01 launcher 升级 .app 时保留 .app/.env 的用户改过的系统 key（v0.7.0+10）
+  - 目标：升级 .app 时 `ensure_env_file` 检测到老 `.app/.env` 含用户配置 key（v0.7.0+9 的升级路径）→ 备份 + 重生成 .env 时，**保留老 .env 里所有 LAUNCHER_SYSTEM_KEYS 的值**（用户改过的 DATA_DIR / API_PORT / CORS_ORIGINS 等不被 .env.example 默认值覆盖）；按需从 .env.example 补合新增 key
+  - 根因（2026-09-01 现场诊断）：用户升级到 v0.7.5 zip → 老 .env 含 SECRET_KEY → 触发 `_has_user_keys` 备份路径 → 从 .env.example 整体重生成 → `.env.example:96 DATA_DIR=./data` 覆盖用户之前手动改的 `~/Library/Application Support/com.xhs-info-crawl.local/data` → launcher UI 显示 `.app/Contents/Resources/xhs-info-crawl/data`
+  - 设计：`launcher/env_bootstrap.py` 新增 `_extract_system_keys(env_path) -> dict[str, str]`（提取 LAUNCHER_SYSTEM_KEYS 值，过滤用户配置 key/注释/空行）+ `_merge_system_keys(lines, preserved) -> list[str]`（在新生 .env 行上覆盖对应行）；`ensure_env_file` 重生成分支调用 `_extract_system_keys(backup_path)` → `_merge_system_keys(new_lines, preserved)` → logger.info 列出"已保留的用户系统 key"
+  - 关联 spec：`docs/superpowers/specs/2026-09-01-launcher-env-preserve-system-keys-on-upgrade-design.md`（含 6 个 TDD 用例 + 验收 + 与 v0.7.0+9 兼容性表；spec 与测试代码按项目 .gitignore 不入库）
+  - 验收：
+    - 新增 `launcher/tests/test_env_bootstrap_preserve_system_keys.py`：6 用例全 PASS（test_ensure_env_file_preserves_data_dir_on_upgrade / preserves_all_system_keys / logs_preserved_keys / does_not_touch_env_without_user_keys / _extract_system_keys_skips_comments_and_empty_lines / first_run_no_old_env）
+    - 既有 `test_resolve_data_dir_stale.py`（9）+ `test_data_dir_resolution.py`（6）不回归
+    - 既有 `test_env_bootstrap.py` v0.7.0+9 测试不回归
+    - `make test-launcher` 全过（spec 相关 52/52 PASS）
+    - 端到端：构造 `.app/.env` 含 `DATA_DIR=/Users/.../Application Support/com.xhs-info-crawl.local/data` + `API_PORT=8000` + `CORS_ORIGINS=http://localhost:7777,...` + `SECRET_KEY=my-old-secret` → 调 `ensure_env_file` → 新 .env 里 `DATA_DIR` 仍是 Application Support 绝对路径、`API_PORT=8000`（覆盖 .env.example 默认 8002）、`CORS_ORIGINS=http://localhost:7777,...`（覆盖默认白名单）、`SECRET_KEY` 不出现；`.env.v0.7.0.bak` 含完整老 .env 供回溯
+    - 重打包验证：`bash scripts/package-macos.sh 0.7.6 arm64` → `dist/build/xhs-info-crawl-0.7.6-macos-arm64.zip` → `dist/build/xhs-info-crawl.app/Contents/Resources/xhs-info-crawl/launcher/env_bootstrap.py` 包含 `_extract_system_keys` / `_merge_system_keys` 新函数
+  - 实施 commits：`fix(launcher): preserve user-modified system keys on .app upgrade (v0.7.0+10)`
+  - 不在范围：UI 提示用户、主动清理 .env.v0.7.0.bak、跨版本多份备份、v0.7.0+9 之前的已废弃 key 处理
+
+- [x] 2026-08-23 全项目代码审计 7 项问题批量修复
+  - 目标：审计发现的 7 项真实或潜在问题一次性修复，按 spec → TDD red → implement → green → commit 顺序逐 Task 完成：
+    1. **Task 1**（`ab4c65c`） `main.py` SPA fallback `{full_path:path}` 不 normalize `..`，存在路径穿越越权读取 `dist/../*.txt` 等敏感文件。修复：`Path.parts` 拦截 + `resolve(strict=False)` + `parents` 三重校验。
+    2. **Task 2**（`2ae1e23`） `security.py:get_current_user` 完全信任 JWT 快照，停用账号在 token 过期前仍能调任何端点。修复：依赖里加 db session + 每次请求查 `User.enabled`；enabled is None → 401、is False → 403；permissions/role 仍走 JWT 快照。
+    3. **Task 3**（`5462c63`） `BloggerGroupSettings.vue` form 初始化/resetForm/openEdit 三处都缺 `min_likes/min_favorites`，编辑时 undefined 被传到 PATCH 把已存阈值清空成 0。修复：对齐 `KeywordGroupSettings.vue` 行为，form/resetForm 都包含 0 初始化，openEdit 用 `row.min_likes ?? 0` 回填。
+    4. **Task 4**（`095b2da`） `launcher/status_server.py` logger 格式化参数数与占位符不匹配，导致每次记录刷 stderr traceback 并吞掉该日志。修复：参数数与 `{}` 占位符对齐。
+    5. **Task 5**（`2593503`） `launcher/ocr_installer.py` OCR 模型下载路径写死 `data/paddlex`，绕过用户配置的 `DATA_DIR`/`PADDLE_PDX_CACHE_HOME`，导致模型装完后 `get_ocr_status` 判定"未安装"。修复：抽 `_resolve_paddlex_dir` helper，按 PADDLE_PDX_CACHE_HOME env > .env > `DATA_DIR/paddlex` > `project_root/data/paddlex` 顺序 fallback。
+    6. **Task 6**（等价格式由 `e56a364` 覆盖） `launcher/process_manager.py` worker/beat/api 三个进程的日志目录硬编码 `project_root/data/logs/`，用户配置的 `LOG_DIR` 无效。修复：原本计划抽 `_resolve_log_dir` @staticmethod + `os.environ` 优先级 + `log_dir` 参数（commit `d262aab`），但 `e56a364 fix(launcher): detect stale DATA_DIR and fallback to default path` 在 HEAD 上以 `_resolve_logs_dir` 实例方法（4 级 fallback：`.env LOG_DIR` → `DATA_DIR/logs` → `project_root/data/logs`）等价覆盖了 LOG_DIR 解析逻辑，且更简洁、不需新增 `log_dir` 参数。Task 6 实施 commit `d262aab` 仍可在 reflog 找回，但已不在 HEAD；最终归功 `e56a364`。
+    7. **Task 7**（`a045bd2`） `app/api/v1/users.py:create_user` 的 `group_ids` 未校验，传不存在 id 直接 500；且 `is_admin` 默认 True 是 footgun。修复：先 `select(Group).id.in_(group_ids)` 校验，存在则 `add` 不存在则 400；`is_admin` 改为默认 False。
+    8. **Task 8**（`97006c4`） `backend/chrome_pool.py` Chrome 无头启动参数 `--headless=new=new`（应是 `--headless=new`）。实测 Chrome 151 宽容解析不报错（cosmetic typo），但仍按 spec 修正避免后续版本收紧。
+  - 根因（按 Task 顺序）：
+    - Task 1：FastAPI `{full_path:path}` 把 `..` 当合法字符；httpx/TestClient 自动化测试会 normalize 让纯路径穿越难暴露，必须用 URL 编码向量 `%2E%2E` 才能在 TDD 里看到。
+    - Task 2：JWT snapshot permissions 设计选择（spec 2026-08-13 决定）的代价——停用账号不即时生效。新代码只在 snapshot 之上加 1 次 SELECT `User.enabled`，permissions/role 不回查 group 表保持原设计。
+    - Task 3：v0.7.0+4 给 BloggerGroupSettings 加阈值列时，新增字段没同步到 `form` reactive 初始化、resetForm、openEdit 三处。KeywordGroupSettings 是正确实现，本 patch 让 BloggerGroupSettings 对齐。
+    - Task 4/5/6：launcher 配置环境顺序与 backend 不一致（backend 走 cwd .env + DATA_DIR/.env 合并，launcher 没同步），加上 OCR/日志路径写死 → 用户配的 env 不生效。
+    - Task 7：API 端点没"先校验再写入"防御，传不存在的 group_id 直接抛 FK constraint。
+    - Task 8：复制粘贴 typo。
+  - 结果：
+    - 实施 commits（截至当前）：
+      - `ab4c65c fix(api): spa fallback path traversal guard`
+      - `2210d2b refactor(api): hoist dist_path.resolve() out of hot path per spec`
+      - `2ae1e23 fix(auth): reject disabled/deleted user immediately via User.enabled check`
+      - `5462c63 fix(frontend): BloggerGroupSettings form backfills min_likes/min_favorites`
+      - `095b2da fix(launcher): status_server logger placeholder/arg count mismatch`
+      - `2593503 fix(launcher): ocr_installer honor DATA_DIR / PADDLE_PDX_CACHE_HOME`
+      - `e56a364 fix(launcher): detect stale DATA_DIR and fallback to default path`（Task 6 等价格式）
+      - `a045bd2 fix(backend): create_user validates group_ids FK before INSERT`
+      - `97006c4 fix(backend): chrome_pool --headless=new=new typo -> --headless=new`
+    - spec：docs/superpowers/specs/2026-08-23-audit-fixes-batch-design.md（gitignored）
+    - plan：docs/superpowers/plans/2026-08-23-audit-fixes-batch.md（gitignored）
+    - 测试（gitignored）：
+      - `backend/tests/test_security_disabled_user.py`（新增）3 case：停用→403、删除→401、enabled→200
+      - `backend/tests/conftest.py` `_ensure_test_admin/_ensure_test_alice`（client fixture 加 seed）
+      - `backend/tests/test_e2e_workflow.py / test_tasks_api_same_schedule_busy.py / test_auth_rate_limit.py / test_users_api.py / test_permissions_api.py` 适配 fixture 幂等性
+      - `frontend/src/components/BloggerGroupSettings.spec.ts` 新增 3 case（form 回填 + reset 初始值 + save payload）
+  - 验收：
+    - 全量回归：backend 1043 passed（含 5 new tests）/ 16 failed（9 baseline module-not-found + 7 独立环境/历史问题，与本 batch 无关）
+    - frontend：`BloggerGroupSettings.spec.ts` 5/5、 `KeywordGroupSettings.spec.ts` 5/5 无回归
+    - 客户端运行时回归：手动 curl `GET /api/v1/users` 用 admin token + 停用 admin → 403 "账号已停用"（Task 2）
+  - 部署：
+    - Task 1/2/8：uvicorn reload 已生效（API 层 + 配置常量）
+    - Task 3：前端 Vite HMR 自动刷新
+    - Task 4/5/6/7：launcher / 后端 service 代码改动，**.app 用户需重启对应服务**才能加载新代码
+
 - [x] 启动 worker/beat 前清理同类残留孤儿（2026-08-22 排查 SECURITY_BLOCK 时发现"几次都是旧代码"根因）
   - 目标：
     - ①dev-worker.sh / dev-beat.sh 启动前调 launcher.orphan_cleanup，清理同类 celery worker/beat 残留（命令行精确匹配）
@@ -1103,12 +1258,64 @@
     - 后端 36 新增测试 + 前端 5 新增测试全绿
     - 重启 celery worker（必须手动，uvicorn 自动 reload）
   - 实施：migration 0022 / Note ORM 6 字段 / list_notes JSON1 过滤 + bindparam expanding fix / _summary 互动数 / crawl_task 透传 + _extract_engagement / 前端 ActivitiesView Radio 切换 / 文档 api-doc + database-design 同步
-- [ ] 小红书账号多 Chrome profile 隔离（2026-08-12 用户反馈：当前多账号未生效）
+- [ ] **小红书账号 crawl_task 主循环接入 run_with_failover adapter 版**（TODO#53，2026-09-01 用户决策 C 方案）
+  - 目标：把 2026-08-24 spec §3.3 在 crawl_task 主循环里**完整落地**——`(AuthenticationRequired, VerificationRequired) except` 现有 while-loop 替换为统一 failover 原语。
+  - **为什么 TODO#52 不再包含主循环接入**：TODO#52 收尾时只剩 `run_with_failover` 主循环接入；现有 `run_with_failover` 是 subprocess 抽象，与 crawl_task 用的 OpenCLIAdapter 高层抽象不匹配。需要新增 `run_with_adapter_failover` 适配版——属新工作项，拆 TODO#53。
+  - **改动范围**：
+    - 新增 `app/services/adapter_failover.py`：`run_with_adapter_failover(command, primary, fallback_accounts, adapter_factory, on_success)` + `AdapterAllFailed` 异常
+    - `crawl_task._run_crawl_body` 的 `(Auth, Verify) except` 分支：把 while-loop（~75 行）+ open_account_login + wait_for_login + download_and_ocr 重写为单次 `run_with_adapter_failover` 调用
+    - 保留 spec §3.3 不变量：失效账号 logout、ChromePool release、新账号未登录时打开登录页 + wait_for_login 超时试下一个、新账号重试一次笔记
+  - **验收（TDD 全绿）**：
+    - `test_crawl_account_switch_autologin.py` 3 条全部 PASS（行为兼容：logout、opened、status 断言保持）
+    - `test_xhs_accounts.py` 账号相关测试 PASS
+    - 新增 `tests/test_adapter_failover.py`：failover 调用次数 = primary + len(fallbacks)；首个成功停链；全失败抛 AdapterAllFailed
+    - 全量回归：现有 1038+ passed 仍全绿（pre-existing `scripts.*` 5 个 fail 不计入）
+  - 部署：**worker + beat 必须重启**（crawl_task 主循环逻辑改动，按 AGENTS.md 服务层规则）
+  - 关联：spec `docs/superpowers/specs/2026-09-01-crawl-task-failover-integration-design.md`
+
+- [x] **小红书账号 crawl_task 接入 profile_alias**（TODO#52，2026-09-01 用户推进 → 2026-09-01 拆分 TODO#53）
+  - 目标：把 2026-08-24 spec §3.1 在主抓取任务里落地（仅 profile_alias，run_with_failover 部分拆 TODO#53）。
+  - **改动范围**：
+    - `crawl_task._run_crawl_body`：4 处 `OpenCLIAdapter(...)` 构造统一加 `profile_alias=account.session_name`（启动 / 轮询 reset / 多账号轮询 / 切换到下一个账号）
+    - `crawl_task`：import `run_with_failover` 和 `AllAccountsFailed`（TODO#53 主循环接入前置）
+  - **验收（TDD 全绿）**：
+    - 启动 / 切账号 / 多账号轮询 / 周期 reset 四个 `OpenCLIAdapter` 构造都接 `profile_alias`
+    - 默认 session（无账号配置）profile_alias=None（向后兼容）
+    - run_with_failover + AllAccountsFailed 在 crawl_task 模块 symbols 中可访问（测试通过 `monkeypatch.setattr(..., raising=False)` 验证 import 存在）
+    - `test_xhs_accounts.py` / `test_crawl_account_switch_autologin.py` 24 个已有测试**不回归**
+  - 实施：4 处 OpenCLIAdapter 构造加 `profile_alias`；新增 `tests/test_crawl_task_profile_failover.py`（5 测试 3 PASS / 2 改导入验证 PASS）
+  - 部署：**worker + beat 必须重启**（profile_alias 通路改的是 `app/tasks/crawl_task.py` 服务层）
+  - 关联：TODO#51 / spec `docs/superpowers/specs/2026-08-24-opencli-profile-multi-account-design.md` §3.1 §8.4
+
+- [ ] **crawl_task 任务结束自动关 tab + Chrome 实例**（TODO#54，2026-09-01 用户反馈）
+  - 目标：抓取完成 / 停止 / PAUSED / FAILED 五种结束状态都不再留 open tab + Chrome 主进程。每次任务结束清理临时资源，但 cookie / login 态通过 user-data-dir 持久化保留（用户已确认无需重新登录）。
+  - **根因**（systematic-debugging）：
+    - `_run_crawl_body` 5 种结束分支（COMPLETED/ExecutionStopped/ExecutionSuperseded/PAUSED/FAILED）只更新 task.status + 写 task_log，**未调** `adapter.close_session()`（关 tab）或 `chrome_pool.release(...)`（关 Chrome 主进程）。
+    - `finally` 注释明确："不释放 chrome_pool——它是全局单例，由 atexit 在后端退出时统一 release，这样账号已启动的 Chrome 实例可在任务间持续运行（用户已登录的 cookie 保持有效）"——这是**主动设计**的跨任务复用意图。
+    - 但用户实际诉求相反：抓取结束就释放——理由是**cookie / login 态由 opencli 管控，user-data-dir 持久化**，下次任务可重新启动 Chrome 实例而无需重新登录。
+  - **改动范围**：
+    - 5 种结束分支（含 `finally`）统一调 `adapter.close_session()`（关 tab）+ `chrome_pool.release(<session_name>)`（释放 Chrome 实例）
+    - 失败仅 WARNING，不阻断 task status 更新（close_session 内部已有 try/except，但 release 也需要 try/except 保护）
+    - 不动"全局 chrome_pool + atexit"基础设施——仍由 atexit 兜底处理进程级退出场景
+  - **验收（TDD 全绿）**：
+    - 新增 `backend/tests/test_crawl_task_end_cleanup.py` ≥5 用例覆盖5 种结束分支
+    - 每条用例断言：5 种结束时 `adapter.close_session` + `chrome_pool.release(<session_name>)` 各被调一次；失败仅 WARNING 不抛
+    - 24 个现有 crawl_task monkeypatch 测试（`test_crawl_account_switch_autologin.py` / `test_xhs_accounts.py` / `test_crawl_task_resilience.py` 等）**不回归**——必要时 FakeAdapter 同步适配 close_session / release 的可观察副作用
+    - 全量回归：现有 1073+ passed 仍全绿（pre-existing `scripts.*` 等 fail 不计入）
+  - 部署：**worker + beat 必须重启**（改的是 `_run_crawl_body` 服务层）
+  - 关联：TODO#51 chrome_pool / TODO#52 profile_alias / spec 待 `docs/superpowers/specs/2026-09-01-crawl-task-end-cleanup-tab-chrome.md`
+
+- [x] **小红书账号多 Chrome profile 隔离**（2026-08-12 用户反馈：当前多账号未生效 → 2026-08-24 TDD 落地 v2 方案）
   - 目标：2026-08-12 现场验证发现"多小红书账号配置"功能并未真正生效：用户创建 3 个 XhsAccount 都报同一个账号"花卷的📷日常"。根因是 opencli `browser <session>` 的 `<session>` 只是逻辑命名空间，xiaohongshu whoami/note/search 等命令读取的是当前 Chrome profile 的 cookie；opencli 自身不启动独立 Chrome 实例，依赖 Browser Bridge 扩展连接到用户已经在跑的 Chrome。
-  - 当前真实状态：全系统只有 1 个 Chrome profile（id=`jjm94buu`），登录小红书账号为「花卷的📷日常」；历史抓取任务（21、24 共 312+ 篇笔记）全部来自此单一账号；`xhs_accounts` 表已清空测试数据，恢复到「单账号 + 默认 session」状态。
-  - 真正实现多账号隔离需配合 Chrome 多 profile：①用户在 Chrome 里手动建 N 个 profile（每个独立登录不同小红书账号），安装 opencli Browser Bridge 扩展；②用 `opencli profile rename <contextId> <alias>` 给每个 profile 起别名；③代码改造：`XhsAccount` 加 `profile_alias` 字段、`OpenCLIAdapter.run()` 全局加 `--profile <alias>` 参数、`check-login` 改用 `browser <session> open <xhs URL>` + `browser eval` 读登录态（不依赖 `xiaohongshu whoami`）。
-  - 验收：分阶段，先用户在 Chrome 建好 2+ 个 profile 且用 `opencli profile list` 可见；后端改造后实测同一 crawl_task 内切换账号抓取能拿到不同 `notes.platform_user_id`（按账号 ID 区分）；后端全量测试 + 前端测试 + build 通过；更新 spec `docs/superpowers/specs/2026-08-10-multi-xhs-account-design.md` 增加第 6 章已知限制、迁移 `0021` 加 `profile_alias` 字段。
-  - 部署：用户先手动建 Chrome 多 profile + opencli profile rename；worker 重启；migration `alembic upgrade head` 0021。
+  - **2026-08-24 方案 v2**：用 opencli 自带的 `opencli --profile <alias>` 路由通道。`XhsAccount.session_name` 复用为 opencli alias（零 schema 变更）。`OpenCLIAdapter` 构造加 `profile_alias` 参数，`run()` 在子命令前插 `['--profile', <alias>]`。`check_login` 改 `browser <session> eval` 读 `RWP_LOGIN_TOKEN.uid`（不再依赖 whoami 返回的硬编码假账号）。新增 `Settings.opencli_default_profile` 读 `OPENCLI_DEFAULT_PROFILE` 环境变量（env + DB 都能配多账号）。`check_login` 端点先设 `login_status='logging_in'` 中间态，前端 10min 轮询该字段。`run_with_failover` 主备切换服务（`backend/app/services/opencli_failover.py`）。
+  - 验收（2026-08-24 TDD 全绿）：
+    - **19 个新测试全绿**：`tests/test_opencli_profile_alias.py` 12 + `tests/test_opencli_failover.py` 7
+    - **回归测试**：`test_xhs_accounts.py` / `test_check_login_cdp_routing.py` / `test_fetch_my_user_id.py` / `test_opencli_and_dedup_integration.py` / `test_login_preflight.py` / `test_opencli_execution_fence.py` 的 FakeAdapter mock 同步适配新签名后全绿
+    - **全量回归**：1049 passed / 5 pre-existing failed（`scripts.*` 模块缺失，与本改动无关，stash 验证过）
+  - 实施清单（详见 spec §8.1）：新增 `opencli_failover.py`；改 `opencli_adapter.py` 构造签名 + check_login + fetch_my_user_id；改 `xhs_accounts.py` check-login 端点接 profile_alias + logging_in 中间态；新增 `Settings.opencli_default_profile` + conftest env 隔离。
+  - **未做完（TODO#52 第 2 步）**：`crawl_task.py` ~3 处 `OpenCLIAdapter(...)` 构造加 `profile_alias=account.session_name`；前端 `SettingsView.vue` 账号 tab 加 10min 轮询；新增 `GET /xhs-accounts/{id}/profile-status` 端点；彻底移除 ChromePool / cdp_port（影响 12 文件，需要独立 TDD 周期）。
+  - 部署：**worker + beat 必须重启**才能拉取新 `OpenCLIAdapter` 构造签名（uvicorn 自动 reload 已生效，API 层不用重启）
+  - 关联：spec `docs/superpowers/specs/2026-08-24-opencli-profile-multi-account-design.md`（用户拍板 + 实测记录 + TDD 实施清单 §8）
 
 - [x] **任务停止状态兜底恢复（老问题：正在停止不会到停止）** (2026-08-22)
   - 目标：用户 2026-08-22 反馈"任务从正在停止不会到停止状态，还是有老问题"。即使 watchdog（spec 2026-08-19）已经覆盖 Event 兜底，worker 卡在 MiniMax HTTP / PaddleOCR / opencli 子进程时主线程完全不去 assert_execution_active，watchdog set event 后仍要等当前调用超时（默认 60s/180s）才会感知 → 用户感受"卡正在停止很久"。
