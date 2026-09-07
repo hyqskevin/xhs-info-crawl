@@ -7,7 +7,9 @@
 
 关联 spec: docs/superpowers/specs/2026-07-25-scheduled-crawls-and-dashboard-charts-design.md
 """
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.core.timeutil import now_cn
 
 from sqlalchemy import JSON, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -16,7 +18,7 @@ from app.core.database import Base
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_cn()
 
 
 class ScheduledCrawl(Base):

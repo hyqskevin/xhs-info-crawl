@@ -7,7 +7,9 @@ run_crawl 按 priority 升序选账号，某账号失效时切换到下一个。
 - docs/superpowers/specs/2026-08-10-multi-xhs-account-design.md
 - docs/superpowers/specs/2026-08-12-xhs-account-registration.md
 """
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.core.timeutil import now_cn
 
 from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -16,7 +18,7 @@ from app.core.database import Base
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_cn()
 
 
 class XhsAccount(Base):

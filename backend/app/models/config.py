@@ -1,9 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.core.timeutil import now_cn
 from sqlalchemy import Boolean, DateTime, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
-def now(): return datetime.now(timezone.utc)
+def now(): return now_cn()
 
 class City(Base):
     __tablename__ = "cities"

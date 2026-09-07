@@ -4,7 +4,9 @@
 - poster_templates：HTML 模板库
 - poster_tasks：每次生成流程的快照（含 items、字段、展示图、override_html、渲染产物）
 """
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.core.timeutil import now_cn
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -14,7 +16,7 @@ from app.core.database import Base
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_cn()
 
 
 class PosterTemplate(Base):

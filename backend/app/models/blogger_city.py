@@ -1,4 +1,6 @@
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.core.timeutil import now_cn
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -7,7 +9,7 @@ from app.core.database import Base
 
 
 def now() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_cn()
 
 
 class BloggerCity(Base):

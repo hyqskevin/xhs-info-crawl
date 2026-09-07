@@ -1,4 +1,6 @@
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.core.timeutil import now_cn
 
 from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -8,7 +10,7 @@ from app.core.database import Base
 
 def _now() -> datetime:
     """统一时间戳默认值/自动更新值;UTC 避免时区漂移。"""
-    return datetime.now(timezone.utc)
+    return now_cn()
 
 
 class WeeklyReport(Base):

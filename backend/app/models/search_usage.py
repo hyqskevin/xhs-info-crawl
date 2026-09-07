@@ -5,7 +5,9 @@
 - week_key 为 Asia/Shanghai 时区的 ISO 年-周（如 "2026-W30"），全局跨任务累计；
 - 每次 adapter.search_recent 调用成功后 count +1。
 """
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.core.timeutil import now_cn
 
 from sqlalchemy import DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -14,7 +16,7 @@ from app.core.database import Base
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_cn()
 
 
 class SearchUsage(Base):
