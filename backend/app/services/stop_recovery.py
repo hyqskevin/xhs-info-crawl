@@ -13,7 +13,9 @@ in-process 阻塞调用（MiniMax HTTP / PaddleOCR / opencli 子进程）卡住�
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+
+from app.core.timeutil import now_cn, to_cn_naive
 from typing import TYPE_CHECKING, Callable
 
 from sqlalchemy import func, select
@@ -39,7 +41,7 @@ def recover_stuck_stop_requests(session_factory: Callable | None = None) -> int:
     factory = session_factory or SessionLocal
     db = factory()
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=STUCK_THRESHOLD_SECONDS)
+        cutoff = now_cn() - timedelta(seconds=STUCK_THRESHOLD_SECONDS)
         rows = db.scalars(
             select(CrawlTask).where(
                 CrawlTask.status == "STOP_REQUESTED",
@@ -47,7 +49,7 @@ def recover_stuck_stop_requests(session_factory: Callable | None = None) -> int:
             )
         ).all()
         recovered = 0
-        now = datetime.now(timezone.utc)
+        now = now_cn()
         for row in rows:
             last_log_at = db.scalar(
                 select(func.max(TaskLog.created_at)).where(TaskLog.task_id == row.id)
@@ -56,9 +58,9 @@ def recover_stuck_stop_requests(session_factory: Callable | None = None) -> int:
             anchor = last_log_at or row.started_at or row.created_at
             if anchor is None:
                 continue
-            # anchor 可能是 naive (SQLite 不保留 tzinfo)；按 UTC 比较
-            if anchor.tzinfo is None:
-                anchor = anchor.replace(tzinfo=timezone.utc)
+            # anchor 存量可能是 aware（旧 UTC 写侧产生）；统一归一到北京墙钟 naive 再比较
+            if anchor.tzinfo is not None:
+                anchor = to_cn_naive(anchor)
             if anchor > cutoff:
                 continue
             row.status = "STOPPED"

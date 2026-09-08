@@ -2,7 +2,9 @@
 
 关联 spec: docs/superpowers/specs/2026-07-30-duplicates-orphan-candidates-design.md
 """
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.core.timeutil import now_cn
 
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
@@ -21,7 +23,7 @@ def prune_orphan_duplicates(db: Session) -> dict[str, int]:
     ).all()
     pruned = 0
     kept = 0
-    now = datetime.now(timezone.utc)
+    now = now_cn()
     for cand in pending_rows:
         a = db.get(Note, cand.note_a_id)
         b = db.get(Note, cand.note_b_id)

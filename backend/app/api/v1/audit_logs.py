@@ -5,6 +5,8 @@
 - docs/superpowers/specs/2026-08-13-admin-feature-batch-design.md §2.1 (DELETE)
 """
 from datetime import datetime, timedelta, timezone
+
+from app.core.timeutil import now_cn
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -116,7 +118,7 @@ def delete_audit_logs(
 
     关联 spec: docs/superpowers/specs/2026-08-13-admin-feature-batch-design.md §2.1
     """
-    cutoff = datetime.now(timezone.utc) - _RECENT_SKIP_WINDOW
+    cutoff = now_cn() - _RECENT_SKIP_WINDOW
     # 只删 id 命中且 created_at 早于 5s 窗口的行
     target_ids = set(payload.ids)
     rows = (

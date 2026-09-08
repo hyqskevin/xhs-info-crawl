@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 
 
 def _iso_now() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+    from app.core.timeutil import now_cn
+    return now_cn().isoformat()
 
 
 def _safe_version(bin_path: str, timeout: float = 5.0) -> str | None:

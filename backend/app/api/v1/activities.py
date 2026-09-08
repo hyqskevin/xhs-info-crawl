@@ -1,4 +1,6 @@
 from datetime import date, datetime, time, timezone
+
+from app.core.timeutil import now_cn
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -69,7 +71,7 @@ def batch_delete_activities(payload: BatchDeleteRequest, _: auth, db: database):
     activities = list(db.scalars(select(Activity).where(Activity.id.in_(ids), Activity.deleted_at.is_(None))).all())
     if not activities:
         raise HTTPException(status_code=404, detail="没有可删除的活动")
-    changed_at = datetime.now(timezone.utc)
+    changed_at = now_cn()
     for activity in activities:
         activity.deleted_at = changed_at
         activity.updated_at = changed_at
@@ -129,7 +131,7 @@ def update_activity(activity_id: int, payload: ActivityUpdate, _: auth, db: data
     changes = payload.model_dump(exclude_unset=True)
     for key, value in changes.items():
         setattr(activity, key, value)
-    activity.updated_at = datetime.now(timezone.utc)
+    activity.updated_at = now_cn()
     db.commit()
     db.refresh(activity)
     return {"code": 200, "message": "success", "data": serialize(activity)}
@@ -138,7 +140,7 @@ def update_activity(activity_id: int, payload: ActivityUpdate, _: auth, db: data
 @router.delete("/{activity_id}")
 def delete_activity(activity_id: int, _: auth, db: database):
     activity = find_activity(db, activity_id)
-    now = datetime.now(timezone.utc)
+    now = now_cn()
     activity.deleted_at = now
     activity.updated_at = now
     db.commit()

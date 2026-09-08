@@ -20,7 +20,9 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.core.timeutil import now_cn, to_cn_naive
 from types import SimpleNamespace
 from uuid import uuid4
 import logging
@@ -185,7 +187,7 @@ def _restart_existing_paused_task(db, task: CrawlTask) -> None:
         task_id=task.id,
         level="INFO",
         message="熔断冷却到期,自动重新启动原任务",
-        created_at=datetime.now(timezone.utc),
+        created_at=now_cn(),
     ))
     db.commit()
 
@@ -298,9 +300,9 @@ def retry_failed_schedules(now=None) -> None:
     - 兜底:无 PAUSED 且无活跃 → 新建一条 PENDING(沿用旧逻辑,保留审计兼容)
     - 行为 A:已有活跃任务 → 跳过(防 #1 违例)
     """
-    now = now or datetime.now(timezone.utc)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+    now = now or now_cn()
+    if now.tzinfo is not None:
+        now = to_cn_naive(now)
     db = SessionLocal()
     try:
         busy = db.scalar(
@@ -412,7 +414,7 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
         task.status = "FAILED"
         task.error_message = message
         task.current_stage = None
-        task.finished_at = datetime.now(timezone.utc)
+        task.finished_at = now_cn()
         db.commit()
         log(db, task.id, "ERROR", message)
         db.close()
@@ -448,7 +450,7 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
         )
     try:
         if task.started_at is None:
-            task.started_at = datetime.now(timezone.utc)
+            task.started_at = now_cn()
         db.commit()
         log(db, task.id, "INFO", "登录预检：检查小红书登录状态")
         adapter.check_login()
@@ -840,7 +842,7 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
         task.status = "COMPLETED_WITH_ERRORS" if task.failed_notes or discovery_failures else "COMPLETED"
         task.current_stage = None
         task.current_note = None
-        task.finished_at = datetime.now(timezone.utc)
+        task.finished_at = now_cn()
         db.commit()
         record_schedule_success(db, task)
         log(db, task.id, "INFO", "completed")

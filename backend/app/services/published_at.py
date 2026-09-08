@@ -46,7 +46,13 @@ def parse_published_at(raw_text: str, *, now_local: datetime | None = None) -> P
     text = (raw_text or "").strip()
     if not text:
         return PublishedAtResult(None, 0.0, "none")
-    now = (now_local or datetime.now(SHANGHAI)).astimezone(SHANGHAI)
+    if now_local is None:
+        now = datetime.now(SHANGHAI)
+    elif now_local.tzinfo is None:
+        # 单口径约定：naive 即北京墙钟，不按系统时区解释
+        now = now_local.replace(tzinfo=SHANGHAI)
+    else:
+        now = now_local.astimezone(SHANGHAI)
 
     match = _ABSOLUTE.search(text)
     if match:
@@ -102,5 +108,8 @@ def extract_published_at(detail: dict[str, Any], *, fallback_now: datetime) -> d
         if isinstance(value, str) and value:
             candidates.append(value)
     text = " ".join(candidates)
-    result = parse_published_at(text, now_local=fallback_now.astimezone(SHANGHAI))
+    result = parse_published_at(
+        text,
+        now_local=fallback_now if fallback_now.tzinfo is None else fallback_now.astimezone(SHANGHAI),
+    )
     return result.value

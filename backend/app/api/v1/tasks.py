@@ -1,4 +1,6 @@
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.core.timeutil import now_cn
 from uuid import uuid4
 from typing import Annotated, Literal
 from fastapi import APIRouter,Depends,HTTPException,Query,status
@@ -39,10 +41,10 @@ def crawl(payload:CrawlIn,_:Admin,db:DB):
         from app.services.task_registry import kill as kill_task_pid
         pid_killed = kill_task_pid(running.id, run_token=running.run_token, timeout=5.0)
         if running.status == 'PENDING':
-            running.status='STOPPED';running.current_stage=None;running.current_note=None;running.finished_at=datetime.now(timezone.utc)
+            running.status='STOPPED';running.current_stage=None;running.current_note=None;running.finished_at=now_cn()
         elif running.status == 'RUNNING':
             running.status='STOP_REQUESTED';running.current_stage=None;running.current_note=None
-        db.add(TaskLog(task_id=running.id,level='INFO',message=f'被新任务顶替停止（子进程已 kill={pid_killed}）',created_at=datetime.now(timezone.utc)))
+        db.add(TaskLog(task_id=running.id,level='INFO',message=f'被新任务顶替停止（子进程已 kill={pid_killed}）',created_at=now_cn()))
         db.commit()
 
     # city 可选：未传 / 空字符串 = 不限城市
@@ -111,7 +113,7 @@ def crawl(payload:CrawlIn,_:Admin,db:DB):
     scope = resolve_crawl_scope(db, city, payload.model_dump())
     if not scope.keywords and not scope.bloggers:
         raise HTTPException(422, '所选关键词组/博主组均无启用项，请检查配置')
-    now = datetime.now(timezone.utc)
+    now = now_cn()
     task=CrawlTask(type=payload.type,status='PENDING',run_token=str(uuid4()),params=payload.model_dump(),started_at=now); db.add(task); db.commit(); db.refresh(task)
     from app.tasks.crawl_task import run_crawl
     run_crawl.delay(task.id,task.run_token)
@@ -157,8 +159,8 @@ def restart(task_id:int,_:Admin,db:DB):
     # 重新启动后更新 started_at，让仪表盘 last_task 排序优先看到本次（仅 FAILED 全新重跑）；
     # PAUSED 是登录续跑，保留原 started_at（不是重新开始）。
     if was_failed:
-        task.started_at=datetime.now(timezone.utc)
-    db.add(TaskLog(task_id=task.id,level='INFO',message='任务继续抓取',created_at=datetime.now(timezone.utc)))
+        task.started_at=now_cn()
+    db.add(TaskLog(task_id=task.id,level='INFO',message='任务继续抓取',created_at=now_cn()))
     db.commit();db.refresh(task)
     from app.tasks.crawl_task import run_crawl
     run_crawl.delay(task.id,task.run_token)
@@ -172,7 +174,7 @@ def stop(task_id:int,_:Admin,db:DB):
         return {'code':202,'message':'success','data':dump(task)}
     close_verification_session = task.status == 'PAUSED' and '安全验证' in (task.error_message or '')
     if task.status in {'PENDING','FAILED','PAUSED'}:
-        task.status='STOPPED';task.current_stage=None;task.current_note=None;task.finished_at=datetime.now(timezone.utc)
+        task.status='STOPPED';task.current_stage=None;task.current_note=None;task.finished_at=now_cn()
     elif task.status == 'RUNNING':
         task.status='STOP_REQUESTED';task.current_stage=None;task.current_note=None
     else:
@@ -184,11 +186,11 @@ def stop(task_id:int,_:Admin,db:DB):
         try:
             OpenCLIAdapter(get_settings()).close_session()
         except Exception as exc:
-            db.add(TaskLog(task_id=task.id,level='WARNING',message=f'关闭验证页面失败：{exc}',created_at=datetime.now(timezone.utc)))
+            db.add(TaskLog(task_id=task.id,level='WARNING',message=f'关闭验证页面失败：{exc}',created_at=now_cn()))
             db.commit()
     from app.services.task_registry import kill as kill_task_pid
     pid_killed = kill_task_pid(task_id, run_token=task.run_token, timeout=5.0)
-    db.add(TaskLog(task_id=task.id,level='INFO',message=f'已请求停止抓取（状态置为 {task.status}, 子进程已 kill={pid_killed}）',created_at=datetime.now(timezone.utc)))
+    db.add(TaskLog(task_id=task.id,level='INFO',message=f'已请求停止抓取（状态置为 {task.status}, 子进程已 kill={pid_killed}）',created_at=now_cn()))
     db.commit();db.refresh(task)
     return {'code':202,'message':'success','data':dump(task)}
 @router.get('/{task_id}/logs')

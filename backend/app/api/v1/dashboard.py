@@ -1,10 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Annotated
 from fastapi import APIRouter,Depends
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_current_user
+from app.core.timeutil import now_cn
 from app.models.activity import Activity
 from app.models.duplicate import NoteDuplicateCandidate
 from app.models.note import Note
@@ -12,14 +13,11 @@ from app.models.schedule import ScheduledCrawl
 from app.models.task import CrawlTask, TaskLog
 router=APIRouter(prefix='/dashboard',tags=['dashboard'])
 
-_SHANGHAI = timezone(timedelta(hours=8))
 
-
-def _iso_week_start_utc_naive() -> datetime:
-    """本周一 00:00（北京）对应的 UTC naive 时间点，用于匹配 UTC naive 存储的 created_at。"""
-    now_sh = datetime.now(_SHANGHAI)
-    monday_sh = (now_sh - timedelta(days=now_sh.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-    return monday_sh.astimezone(timezone.utc).replace(tzinfo=None)
+def _iso_week_start_cn_naive() -> datetime:
+    """本周一 00:00（北京墙钟 naive），与 created_at 存储口径一致。"""
+    now_sh = now_cn()
+    return (now_sh - timedelta(days=now_sh.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
 
 _KNOWN_STATUSES={'COMPLETED','COMPLETED_WITH_ERRORS','FAILED','STOPPED'}
 
@@ -82,7 +80,7 @@ def summary(_:Annotated[dict,Depends(get_current_user)],db:Annotated[Session,Dep
         if resumable_row:
             rprogress = round((resumable_row.extracted_notes + resumable_row.failed_notes + resumable_row.skipped_notes) * 100 / resumable_row.total_notes, 1) if resumable_row.total_notes else None
             resumable_task = {'id': resumable_row.id, 'status': resumable_row.status, 'total_notes': resumable_row.total_notes, 'downloaded_notes': resumable_row.downloaded_notes, 'ocr_notes': resumable_row.ocr_notes, 'extracted_notes': resumable_row.extracted_notes, 'success_notes': resumable_row.success_notes, 'failed_notes': resumable_row.failed_notes, 'skipped_notes': resumable_row.skipped_notes, 'skipped_activities': resumable_row.skipped_activities, 'current_stage': resumable_row.current_stage, 'current_note': resumable_row.current_note, 'error_message': resumable_row.error_message, 'progress_percent': rprogress}
-    week_start = _iso_week_start_utc_naive()
+    week_start = _iso_week_start_cn_naive()
     recent_logs = [
         {'id': log.id, 'task_id': log.task_id, 'level': log.level, 'message': log.message, 'created_at': log.created_at}
         for log in db.scalars(select(TaskLog).order_by(TaskLog.id.desc()).limit(5)).all()

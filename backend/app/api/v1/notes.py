@@ -1,4 +1,4 @@
-from datetime import date, datetime, time, timezone as tz
+from datetime import date, datetime, time
 from typing import Annotated, Literal
 
 import logging
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import get_current_user
+from app.core.timeutil import CN_TZ, now_cn
 from app.models.activity import Activity
 from app.models.blogger_group import BloggerGroup, BloggerGroupMember
 from app.models.config import Blogger, City
@@ -311,11 +312,11 @@ def re_extract_note(note_id: int, _: Auth, db: DB):
 
     # 提取活动
     settings = get_settings()
-    reference_now = note.published_at.replace(tzinfo=None) if note.published_at else datetime.now(tz.utc).replace(tzinfo=None)
+    reference_now = note.published_at.replace(tzinfo=None) if note.published_at else now_cn()
     if settings.minimax_api_key:
         client = MiniMaxClient(settings)
         try:
-            extracted = extract_activities(combined, reference_now, lambda text: client.extract_many(text, datetime.now(tz.utc)))
+            extracted = extract_activities(combined, reference_now, lambda text: client.extract_many(text, datetime.now(CN_TZ)))
         except Exception as exc:
             logger.warning("re-extract MiniMax 失败，降级规则提取 note_id=%s: %s", note_id, exc)
             extracted = extract_activities(combined, reference_now, None)
@@ -353,7 +354,7 @@ def re_extract_note(note_id: int, _: Auth, db: DB):
         }
 
     # 软删除旧活动，写入新活动
-    now = datetime.now(tz.utc)
+    now = now_cn()
     db.execute(
         update(Activity).where(Activity.note_id == note_id, Activity.deleted_at.is_(None))
         .values(deleted_at=now)

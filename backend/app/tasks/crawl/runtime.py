@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.core.timeutil import now_cn
 from zoneinfo import ZoneInfo
 import logging
 import shutil
@@ -126,7 +128,7 @@ def finish_stop_if_requested(db, task_id: int, run_token: str) -> bool:
         current.status = "STOPPED"
         current.current_stage = None
         current.current_note = None
-        current.finished_at = datetime.now(timezone.utc)
+        current.finished_at = now_cn()
         db.commit()
         log(db, current.id, "INFO", "任务已安全停止")
     return True

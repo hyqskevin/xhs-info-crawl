@@ -1,4 +1,6 @@
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.core.timeutil import now_cn
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -70,7 +72,7 @@ def merge(candidate_id: int, payload: MergeIn, _: User, db: DB):
         raise HTTPException(409, "候选推文已不存在")
     removed.review_status = "MERGED"
     removed.merged_into_note_id = kept.id
-    now = datetime.now(timezone.utc)
+    now = now_cn()
     db.execute(update(NoteDuplicateCandidate).where(
         NoteDuplicateCandidate.status == "pending",
         or_(NoteDuplicateCandidate.note_a_id == removed.id, NoteDuplicateCandidate.note_b_id == removed.id),
@@ -85,5 +87,5 @@ def ignore(candidate_id: int, _: User, db: DB):
     candidate = db.get(NoteDuplicateCandidate, candidate_id)
     if candidate is None:
         raise HTTPException(404, "去重候选不存在")
-    candidate.status = "ignored"; candidate.resolved_at = datetime.now(timezone.utc); db.commit()
+    candidate.status = "ignored"; candidate.resolved_at = now_cn(); db.commit()
     return {"code": 200, "message": "success", "data": dump(candidate)}

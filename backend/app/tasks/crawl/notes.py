@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
+from app.core.timeutil import now_cn
 import json
 import shutil
 
@@ -220,7 +222,7 @@ def download_and_ocr(
 
     attempts = settings.pipeline_stage_max_retries
     delay = settings.pipeline_stage_retry_delay_seconds
-    started_at = task.started_at or datetime.now(timezone.utc)
+    started_at = task.started_at or now_cn()
     set_progress(db, task, run_token, "DOWNLOADING", item.get("title") or note_url)
     detail = run_stage(lambda: adapter.note(note_url), attempts, delay)
     assert_execution_active(db, task.id, run_token)

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from app.core.timeutil import now_cn
+
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -73,7 +75,7 @@ def record_schedule_failure(db: Session, task) -> None:
     limit = schedule.consecutive_fail_limit or settings.schedule_consecutive_fail_limit
     interval = schedule.retry_interval_minutes or settings.schedule_retry_interval_minutes
     schedule.consecutive_failures = (schedule.consecutive_failures or 0) + 1
-    now = datetime.now(timezone.utc)
+    now = now_cn()
     if schedule.consecutive_failures >= max(limit, 1):
         # 达到阈值 → 进入冷却，到期后由 retry_failed_schedules 自动重启
         schedule.cooldown_until = now + timedelta(minutes=max(interval, 1))
