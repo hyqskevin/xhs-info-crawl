@@ -12,6 +12,18 @@
 
 ## 当前待办
 
+- [ ] 2026-09-07 抓取任务结束时 sweep 清理 Chrome 残留标签页（保留 1 个常驻页）
+  - 目标：消灭"每次抓取后 Chrome 标签页堆积一大堆"——任务结束 `close_session` 时 `tab list` 列出全部标签页，保留 1 个 xiaohongshu.com 常驻页，其余全部 `tab close <targetId>`
+  - 背景（泄漏根因，2026-09-07 实测）：① `blogger_notes` 开博主主页 tab 后无 finally 关闭（opencli_adapter.py:450）；② `xiaohongshu download --window background` 开的 tab 无人关（opencli_adapter.py:469）；③ 任务崩溃/worker 被杀时 finally 不执行，残留留在跨任务常驻的池 Chrome 实例里永不自愈。`note()`/`search_recent()` 的逐条 close 正常
+  - 设计：`OpenCLIAdapter.close_session` 改为 sweep 路径（`tab list` → 全关但保留 1 个 xiaohongshu.com 页，无 XHS 页则保留 active 页 → 不再追加 `browser close`，避免关掉常驻页）；`tab list` 失败或列表为空时回退现有 `browser close`；进入时 `_preserve_browser_tab=True`（安全验证中）跳过 sweep 走原路径；`_safe_cleanup_task_resources` 记录清理数量的 INFO 日志
+  - 验收：
+    - 新增 backend/tests/test_opencli_tab_sweep.py 先红后绿：保留策略（优先 xiaohongshu.com / 兜底 active）、0 tab 回退、tab list 失败回退、preserve 跳过、单个 close 失败不阻断
+    - 存量 adapter/crawl_task 相关 pytest 无回归
+    - 真实抓取任务结束后 `tab list` 仅剩 ≤1 个标签页（chrome MCP / opencli 实测）
+    - worker 必须重启（services 变更）
+  - spec：`docs/superpowers/specs/2026-09-07-crawl-end-tab-sweep-design.md`
+  - **进展（2026-09-07）**：已实现 `close_session` sweep + TDD（test_opencli_tab_sweep.py 9 用例先红后绿）；相关回归 28 passed，更广回归 76 passed / 3 failed（失败为并发会话未提交的 `check_login(timeout=8)` 改动与旧测试桩不匹配，与本功能无关）。实测修正：`browser open`/`xiaohongshu note` 均复用同一 tab 不堆积，sweep 对任意泄漏来源无差别（spec §1.1）。待办：真实抓取任务验收 + worker 重启 + 独立 commit（工作区有并发会话未提交改动，暂缓提交避免混入）
+
 - [x] 2026-09-02 全量代码评估 6 类问题批量修复（评估基线 5ead318：后端 18 failed / 1115 passed，make test 被收集错误阻断；spec：`docs/superpowers/specs/2026-09-02-audit-fixes-test-suite-and-account-routing-design.md`）
   - 目标：恢复 make test 可用 + 修复账号路由 bug + 消除测试全局污染，按 C1 → I2 → I1 → I3 → I4/I5 → Minor 顺序修完
   - **C1 完成**：删 test_dedupe_cities_script.py / test_fix_activity_city_code.py / test_split_blogger_cities.py 3 个整文件（全部用例测已删脚本）；test_duplicate_candidates_stop.py 删引用 scripts.cleanup_duplicate_candidates 的 1 用例（保留 2 个 AST 断言）；test_dead_code_cleanup.py parametrize 移除 ("scripts/dedupe_cities.py", ...) 条目
@@ -810,6 +822,39 @@
   - 优先级：低（不阻塞当前 PR）
 
 ## 已完成
+
+- [x] 2026-09-07 全工程时间统一北京墙钟（东八区），消灭 8 小时错位类 bug
+  - 目标：存储口径从「审计字段 UTC naive + 业务时间北京墙钟 naive」两套并存统一为单一北京墙钟 naive；API datetime 出口带 `+08:00`；修复已定位的 5 处 8 小时错位（Z 后缀误标、published_at 二次 +8h、活动时间 toISOString 入库偏移、海报名 UTC、notes.py 跨口径比较）
+  - 实现：新增 `app/core/timeutil.py`（`now_cn()`/`to_cn_naive`/`CN_TZ`）；16 个 models 文件 default → `now_cn()`；Alembic `0029_unify_timestamps_to_cn`（审计列 naive +8h / 带 offset 归一，业务列仅归一 offset 行，迁移前自动备份 DB 到 `data/backups/pre-0029-*.db`）；`UtcJsonResponse` → `CnJsonResponse` 补 `+08:00`；前端 `formatUtcAsShanghai` → `formatCnDateTime` + `toCnWallString`/`cnWallStamp`，活动提交/海报名/checked_at 改北京墙钟；`notes.py:314` re-extract 边界修复（UTC now → `now_cn()`）；`dashboard.py` 周起点绕行删除；`stop_recovery`/`schedule_service`/`prune_orphan_duplicates`/`diagnostics`/`archive`/`published_at` 写侧统一
+  - 明确不动：JWT exp（security.py aware UTC）、maintenance.py 文件 mtime cutoff（系统时间域）、activity_validator 内部 aware 运算、celery beat / ISO 周 / published_at 解析（已按 Asia/Shanghai）、历史迁移文件
+  - 验收结果：
+    - 新增 test_timeutil（5 用例）/ test_migration_0029（3 用例）/ test_api_datetime_tz_suffix（4 用例）/ test_notes_reference_now_cn（1 用例）先红后绿
+    - 后端全量 **30 failed / 1181 passed / 1 skipped**——30 个失败全部位于并发会话未提交改动域（config env 污染 / opencli fake 签名 / database 种子 / cdp_routing / xhs_accounts_profile_routing），隔离复跑稳定复现，与本批改动域零交集；本批相关文件（test_schedule_service / test_retry_failed_schedules / test_stop_recovery / test_report_model_updated_at / test_database_init / test_migration_0028_conflict_cleanup / test_notes_api / test_published_at_parser）全绿
+    - 前端 vitest 226/226 全绿 + build 通过
+    - 真实 `data/app.db` 迁移成功：`alembic_version=0029`，`data/backups/pre-0029-20260907T113141Z.db` 已生成；task_logs 最新一条从 UTC 06:01 → 北京 14:01（+8h 正确）；activities/notes 业务列 offset 残留清零
+    - worker（59770）/ beat（60801）已重启（dev-worker.sh / dev-beat.sh）
+    - 页面验证：测试环境 DB 无账号/日志数据，页面验证无法覆盖真实数据场景；DB 层验证已确认迁移正确性
+  - spec：`docs/superpowers/specs/2026-09-07-unify-beijing-timezone-design.md`
+
+- [x] 2026-09-07 抓取流水线重排：全量下载完成后再集中 OCR（阶段 1.5）
+  - 目标：`run_crawl` 从「逐篇 详情→下载→立即 OCR」改为「逐篇 详情→下载 → 全部下载完成后集中 OCR → 全量 MiniMax」。OCR 与网络下载阶段分离，OCR 线程池持续满载、阶段进度可观测（下载 x/y → OCR z/w）、失败定位清晰
+  - 实现：notes.py `download_and_ocr` 拆为 `download_note`（详情+图片，状态 DOWNLOADED，StagedNote 新增 `images` 字段）+ `ocr_staged_note`（单篇图片批量 OCR，NoteImage 落库 + OCR_DONE + combined_text 填充）；crawl_task.py 主循环 3 处调用点改调 `download_note`，阶段 1 与 MiniMax 批量之间插入阶段 1.5 循环（篇间 set_progress("OCR") + assert_execution_active，异常路径对齐阶段 2）；`process_note` 旧包装改为组合调用；进度字符串不变，前端零改动
+  - **超出原 spec 的必要修复——阶段 2 zip 循环补占位跳过**：「失败也计入 staged_notes」（2026-09-06 改动）追加的 note=None 占位会流入阶段 2，`extract_and_save` 在 `note.city_code` 直接 AttributeError——多计一次 failed_notes 且 handler 日志行 `staged.note.source_url` 二次异常可把整个任务打成 FAILED。test_stage15_skips_failure_placeholder 在 GREEN 阶段恰好抓住（failed_notes 2≠1），修复后转绿
+  - 存量测试适配：实际 **12 个文件**（spec 原列 6 个，基于 P2 #6 旧记录）机械改名 `download_and_ocr`→`download_note`；`test_minimax_parallel_integration` 拆分适配（StagedNote 字段断言补 `images`、两个行为用例改为 download_note + ocr_staged_note 两段断言，12/12 绿）；`test_crawl_empty_detail_throttle` 假 StagedNote 补 `images` 字段（8/8 绿）；`test_crawl_task_resilience` 1 用例 FakeAdapter 改返回非空图列表绕开并行会话新增的「空图重试」逻辑（HEAD worktree 对拍确认该冲突非本批引入，系 0 图防护未提交改动的测试未同步），17/17 绿
+  - 验收结果：新增 `tests/test_batch_ocr_phase.py` 5 用例先红（download_note / ocr_staged_note 缺失）后绿 5/5（阶段顺序、enabled/disabled 单元行为、OCR 阶段停止语义、占位跳过）；受影响测试文件全绿；后端全量 **21 failed / 1170 passed / 1 skipped**——21 个失败全部位于并行会话进行中的文件域（config / chrome_pool / xhs_accounts / opencli_adapter / check_login 路由 / database 种子，隔离复跑稳定复现，与本批改动域零交集），crawl 流水线相关测试零失败；TODO#53 的 failover 3 红灯已被并行会话修复转绿
+  - 部署：**worker 必须重启**（app/tasks/*.py 变更，uvicorn --reload 不覆盖 celery worker）
+  - spec：`docs/superpowers/specs/2026-09-07-batch-ocr-phase-design.md`
+
+- [x] 2026-09-07 抓取 0 图静默丢失防护 + 周报 zip md 缺图标注（用户反馈"zip 导出应该是 md + 按推文分类的图片子文件夹"）
+  - 排查结论：zip 打包结构（`images/note_<id>/`）本就符合预期；用户拿到的 md-only zip 根因是抓取侧静默丢图——2026-09-07 02:47 任务 45 账号未登录等扫码期间，opencli `xiaohongshu download` 退出码 0 但 0 产出，`download()` 静默返回 `[]`，39 条推文（938–976，W35 宁波周报全部数据）无 NoteImage 行；图片未落 original_url + `.downloads` 已删，只能重爬补图
+  - 修复（spec：`docs/superpowers/specs/2026-09-07-zero-image-guard-and-zip-md-annotation-design.md`）：
+    - 爬取侧 `notes.py download_note`：download 空列表 → WARNING"未下载到任何图片，重试一次" + 自动重试一次；仍为空 → ERROR"图片下载仍为空…可检测登录后重爬"（任务日志标红），推文流程继续不中断
+    - 导出侧 `report.py _build_md_for_zip`：一条推文 0 张本地图进 zip 时，md 段输出 `> **该推文无本地图片**（可能因抓取时未登录或图片下载失败导致，可重爬补齐）`
+    - `docs/api-doc.md` download 端点补 zip/xlsx 行为现状
+  - TDD：`tests/test_crawl_zero_image_download_guard.py` 2 用例（恒空→2 次调用+WARNING+ERROR；重试恢复→2 次调用+仅 WARNING+NoteImage 1 行）+ `test_report_zip_and_xlsx.py` 新增 1 用例（无图推文标注恰好 1 次且落其段内），先红后绿；`test_report_zip_and_xlsx.py` 全 9 用例绿
+  - 注意：并发会话的流水线重排（download_note/ocr_staged_note 拆分）已在工作区落地，防护随之位于 `download_note` 空图分支；该会话同步将 test_crawl_task_resilience 的 keyword 用例 fake download 改为非空返回以绕开重试路径（本测试断言 download 只调一次）
+  - 验收：`pytest tests/test_crawl_zero_image_download_guard.py tests/test_report_zip_and_xlsx.py` 9 passed；报告相关 6 文件 + 防守用例共 58 passed；全量 pytest 28 failed 均与本改动无关（27 个系并发会话进行中的流水线重排/opencli/config/database 未提交改动，1 个 keyword 用例已被该会话就地修复），**worker 必须重启**（notes.py 变更）
+  - 遗留：938–976 这批无图推文如需补图，须登录后重爬（无图推文在周报 zip md 里有缺图标注，可据此识别）
 
 - [x] 2026-09-01 launcher 升级 .app 时保留 .app/.env 的用户改过的系统 key（v0.7.0+10）
   - 目标：升级 .app 时 `ensure_env_file` 检测到老 `.app/.env` 含用户配置 key（v0.7.0+9 的升级路径）→ 备份 + 重生成 .env 时，**保留老 .env 里所有 LAUNCHER_SYSTEM_KEYS 的值**（用户改过的 DATA_DIR / API_PORT / CORS_ORIGINS 等不被 .env.example 默认值覆盖）；按需从 .env.example 补合新增 key
