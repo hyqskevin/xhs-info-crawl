@@ -1,13 +1,15 @@
-"""单条笔记的两阶段处理：download + OCR → StagedNote；extract + archive → Activity。
+"""单条笔记的流水线阶段：download → OCR → StagedNote；extract + archive → Activity。
 
-阶段 1（``download_and_ocr``）：拉取详情 + 图片 + OCR，生成 StagedNote；
+阶段 1（``download_note``）：拉取详情 + 图片，生成 StagedNote（状态 DOWNLOADED，未 OCR）；
+阶段 1.5（``ocr_staged_note``）：对 StagedNote 的图片集中 OCR，填充 NoteImage 与
+combined_text，状态置 OCR_DONE；
 阶段 2（``extract_and_save``）：校验活动 + 写 Activity + 归档 + 更新 Note 状态；
-向后兼容包装（``process_note``）：阶段 1 + 单篇 MiniMax 提取 + 阶段 2（旧路径，已不
+向后兼容包装（``process_note``）：单篇三阶段 + 单篇 MiniMax 提取（旧路径，已不
 被 ``run_crawl`` 主流程使用，保留以兼容直接调用方）。
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from app.core.timeutil import now_cn
@@ -108,13 +110,15 @@ def _extract_engagement(detail: dict, field: str) -> int | None:
 
 @dataclass
 class StagedNote:
-    """阶段 1 产出、阶段 2 消费的中间结构。
+    """阶段 1 产出、后续阶段消费的中间结构。
 
-    - note：已写入 DB 的 Note（状态为 OCR_DONE / DOWNLOADED）
-    - combined_text：标题+正文+OCR 拼接文本，供 MiniMax/规则提取
+    - note：已写入 DB 的 Note（阶段 1 状态为 DOWNLOADED，阶段 1.5 后为 OCR_DONE）
+    - combined_text：标题+正文+OCR 拼接文本，阶段 1 产出时为空串，阶段 1.5 OCR 后填充，
+      供 MiniMax/规则提取
     - reference_now：活动日期推断基准（Note.published_at 或 task.started_at）
     - started_at：任务开始时间，用于归档目录
-    - image_rows：[(image_path, NoteImage)]，归档时复制图片用
+    - image_rows：[(image_path, NoteImage)]，归档时复制图片用（阶段 1.5 填充）
+    - images：阶段 1 下载的图片路径列表，供阶段 1.5 OCR
     """
 
     note: Note
@@ -122,6 +126,7 @@ class StagedNote:
     reference_now: datetime
     started_at: datetime
     image_rows: list[tuple]
+    images: list = field(default_factory=list)
 
 
 def cleanup_incomplete_note(db, source_url: str) -> None:
@@ -165,7 +170,7 @@ def prepare_existing_note(db, source_url: str) -> bool:
     return False
 
 
-def download_and_ocr(
+def download_note(
     db,
     task: CrawlTask,
     run_token: str,
@@ -175,8 +180,9 @@ def download_and_ocr(
     settings,
     excluded_words: set[str] | None = None,
 ) -> StagedNote | None:
-    """阶段 1：下载笔记详情 + 图片 + OCR，返回 StagedNote 或 None（跳过/失败）。
+    """阶段 1：下载笔记详情 + 图片（不 OCR），返回 StagedNote 或 None（跳过/失败）。
 
+    OCR 由阶段 1.5 ``ocr_staged_note`` 在全部笔记下载完成后集中执行。
     不调用 MiniMax，不写 Activity。保留 assert_execution_active / set_progress 调用。
 
     excluded_words（P2 #6 新增参数）：caller 预查的 city 级排除词 set。
@@ -262,25 +268,62 @@ def download_and_ocr(
     download_dir = folder / ".downloads" / note.platform_note_id
     images = run_stage(lambda: adapter.download(note_url, download_dir), attempts, delay)
     assert_execution_active(db, task.id, run_token)
+    if not images:
+        # 0 图可能是未登录/风控（退出码 0 但无产出），不告警会静默产出无图推文（2026-09-07 周报排查）
+        log(db, task.id, "WARNING", f"笔记未下载到任何图片，重试一次 url={note_url}")
+        images = run_stage(lambda: adapter.download(note_url, download_dir), attempts, delay)
+    if not images:
+        log(db, task.id, "ERROR", f"笔记图片下载仍为空，该推文将没有图片（常见原因：账号未登录或风控），可检测登录后重爬 url={note_url}")
     task.downloaded_notes += 1
     db.commit()
 
-    set_progress(db, task, run_token, "OCR", note.title)
+    # reference_now 必须是"笔记发布当天"对应的本地日期（CST），无年份推断时才正确。
+    # 错误做法：把 aware UTC 直接 .replace(tzinfo=None) 会保留 UTC 时间数值却被当本地解析，
+    # 导致活动日期推断比实际早 8 小时（同一天内），容易把当天/次日误判成过去。
+    # 修正：转 Asia/Shanghai 后归零到 00:00，并向前减 2 天作为推断基准，
+    # 避免"凌晨发布的笔记提到当天活动"被误判成上一年（datetime 比较只看数值不区分凌晨）。
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    _CST = ZoneInfo("Asia/Shanghai")
+    def _to_local_midnight(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(hour=0, minute=0, second=0, microsecond=0)
+        local = value.astimezone(_CST).replace(tzinfo=None)
+        return local.replace(hour=0, minute=0, second=0, microsecond=0)
+    base_day = _to_local_midnight(note.published_at) if note.published_at else _to_local_midnight(started_at)
+    reference_now = base_day - timedelta(days=2)
+    return StagedNote(
+        note=note,
+        combined_text="",  # 阶段 1.5 OCR 后填充
+        reference_now=reference_now,
+        started_at=started_at,
+        image_rows=[],
+        images=images,
+    )
+
+
+def ocr_staged_note(db, task: CrawlTask, staged: StagedNote, settings) -> None:
+    """阶段 1.5：对已下载的 StagedNote 执行 OCR，填充 NoteImage 行与 combined_text。
+
+    由 run_crawl 在全部笔记下载完成后集中调用；单张 OCR 失败不中断（process 内捕获）。
+    ocr_enabled=False 时写 status="disabled" 的 NoteImage 行，Note 状态保持 DOWNLOADED。
+    """
+    note = staged.note
+    attempts = settings.pipeline_stage_max_retries
+    delay = settings.pipeline_stage_retry_delay_seconds
     ocr = OCRService(PaddleOCREngine(settings), settings.ocr_min_confidence) if settings.ocr_enabled else None
     ocr_texts: list[str] = []
     image_rows: list[tuple] = []
-    assert_execution_active(db, task.id, run_token)
     if ocr:
-        # 并行 OCR：process_batch 用 ThreadPoolExecutor 并行处理所有图片，子线程内含重试
+        # 并行 OCR：process_batch 用 ThreadPoolExecutor 并行处理该篇所有图片，子线程内含重试
         ocr_results = ocr.process_batch(
-            images,
+            staged.images,
             workers=settings.ocr_parallel_workers,
             attempts=attempts,
             delay=delay,
         )
-        assert_execution_active(db, task.id, run_token)
         data_root = settings.data_dir.resolve()
-        for index, (image, result) in enumerate(zip(images, ocr_results), 1):
+        for index, (image, result) in enumerate(zip(staged.images, ocr_results), 1):
             # storage_key 用相对 data_dir 的路径，与 API 端 FileResponse(data_root / storage_key) 一致
             try:
                 storage_key = str(image.resolve().relative_to(data_root))
@@ -301,8 +344,7 @@ def download_and_ocr(
                 ocr_texts.append(f"[IMAGE {index}]\n{result['text']}")
     else:
         data_root = settings.data_dir.resolve()
-        for index, image in enumerate(images, 1):
-            result = {"status": "disabled", "text": "", "error": ""}
+        for image in staged.images:
             try:
                 storage_key = str(image.resolve().relative_to(data_root))
             except ValueError:
@@ -311,39 +353,17 @@ def download_and_ocr(
                 note_id=note.id,
                 storage_key=storage_key,
                 original_url="",
-                ocr_text=result["text"],
-                ocr_status=result["status"],
-                ocr_error=result["error"],
+                ocr_text="",
+                ocr_status="disabled",
+                ocr_error="",
             )
             db.add(image_row)
             image_rows.append((image, image_row))
     note.status = "OCR_DONE" if ocr else "DOWNLOADED"
     task.ocr_notes += 1
+    staged.image_rows = image_rows
+    staged.combined_text = f"标题：{note.title}\n正文：{note.content}\n" + "\n".join(ocr_texts)
     db.commit()
-
-    combined = f"标题：{note.title}\n正文：{note.content}\n" + "\n".join(ocr_texts)
-    # reference_now 必须是"笔记发布当天"对应的本地日期（CST），无年份推断时才正确。
-    # 错误做法：把 aware UTC 直接 .replace(tzinfo=None) 会保留 UTC 时间数值却被当本地解析，
-    # 导致活动日期推断比实际早 8 小时（同一天内），容易把当天/次日误判成过去。
-    # 修正：转 Asia/Shanghai 后归零到 00:00，并向前减 2 天作为推断基准，
-    # 避免"凌晨发布的笔记提到当天活动"被误判成上一年（datetime 比较只看数值不区分凌晨）。
-    from datetime import timedelta
-    from zoneinfo import ZoneInfo
-    _CST = ZoneInfo("Asia/Shanghai")
-    def _to_local_midnight(value: datetime) -> datetime:
-        if value.tzinfo is None:
-            return value.replace(hour=0, minute=0, second=0, microsecond=0)
-        local = value.astimezone(_CST).replace(tzinfo=None)
-        return local.replace(hour=0, minute=0, second=0, microsecond=0)
-    base_day = _to_local_midnight(note.published_at) if note.published_at else _to_local_midnight(started_at)
-    reference_now = base_day - timedelta(days=2)
-    return StagedNote(
-        note=note,
-        combined_text=combined,
-        reference_now=reference_now,
-        started_at=started_at,
-        image_rows=image_rows,
-    )
 
 
 def extract_and_save(db, task: CrawlTask, run_token: str, staged: StagedNote, extracted, settings) -> bool:
@@ -431,13 +451,15 @@ def extract_and_save(db, task: CrawlTask, run_token: str, staged: StagedNote, ex
 
 
 def process_note(db, task: CrawlTask, run_token: str, city: str, item: dict, adapter: OpenCLIAdapter, settings) -> bool:
-    """向后兼容包装：download_and_ocr + 单篇 MiniMax 提取 + extract_and_save。
+    """向后兼容包装：download_note + ocr_staged_note + 单篇 MiniMax 提取 + extract_and_save。
 
-    供直接调用 process_note 的旧路径使用；run_crawl 已改为两阶段流水线，不再走这里。
+    供直接调用 process_note 的旧路径使用；run_crawl 已改为三阶段流水线，不再走这里。
+    单篇场景下"下载后立即 OCR"与旧版 download_and_ocr 行为等价。
     """
-    staged = download_and_ocr(db, task, run_token, city, item, adapter, settings)
+    staged = download_note(db, task, run_token, city, item, adapter, settings)
     if staged is None:
         return False
+    ocr_staged_note(db, task, staged, settings)
     attempts = settings.pipeline_stage_max_retries
     delay = settings.pipeline_stage_retry_delay_seconds
     if settings.minimax_api_key:

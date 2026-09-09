@@ -52,9 +52,10 @@ from app.tasks.crawl.accounts import (  # noqa: F401
 from app.tasks.crawl.notes import (  # noqa: F401
     StagedNote,
     cleanup_incomplete_note,
-    download_and_ocr,
+    download_note,
     extract_and_save,
     load_excluded_words_for_city,
+    ocr_staged_note,
     prepare_existing_note,
     process_note,
 )
@@ -365,9 +366,9 @@ def retry_failed_schedules(now=None) -> None:
 
 @celery_app.task(name="app.tasks.crawl_task.run", bind=True)
 def run_crawl(self, task_id: int, run_token=None) -> None:
-    """两阶段流水线：先批量 download + OCR，再批量 MiniMax + extract + archive。
+    """三阶段流水线：逐篇 download → 集中 OCR（阶段 1.5）→ 批量 MiniMax + extract + archive。
 
-    函数体内的 helper 引用（``SessionLocal`` / ``OpenCLIAdapter`` / ``download_and_ocr``
+    函数体内的 helper 引用（``SessionLocal`` / ``OpenCLIAdapter`` / ``download_note``
     / ``extract_and_save`` / ``throttled_search`` 等）通过本模块 globals 解析——
     这样测试中 ``monkeypatch.setattr("app.tasks.crawl_task.X", ...)`` 能影响 run_crawl
     的实际行为。
@@ -480,6 +481,8 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
             current.error_message = str(exc)
             db.commit()
             log(db, current.id, "ERROR", f"笔记处理失败 [{entry[1]['url']}]：{exc}")
+            # 失败也计入 staged_notes（让账号轮询能触发，避免连续失败卡在同一账号）
+            staged_notes.append(SimpleNamespace(note=None, combined_text="", reference_now=None))
 
         def reset_adapter_session(current_adapter: OpenCLIAdapter, reason: str) -> OpenCLIAdapter:
             """强制重建 CDP 连接，释放 Chrome profile 状态。失败仅 WARNING，不中断任务。"""
@@ -527,7 +530,7 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
         attempts = settings.pipeline_stage_max_retries
         delay = settings.pipeline_stage_retry_delay_seconds
 
-        # 阶段 1：逐篇下载 + OCR（串行，opencli 不支持并发），暂存 StagedNote
+        # 阶段 1：逐篇下载详情 + 图片（串行，opencli 不支持并发；OCR 延后到阶段 1.5 集中执行）
         staged_notes: list = []
         empty_streak = 0  # 连续空详情熔断计数器
         empty_threshold = max(1, settings.crawl_empty_detail_threshold)  # 防 0/负数
@@ -552,7 +555,7 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
                     # 避免之前累积的计数让后续真实失败更快触发熔断。
                     consecutive_failures = 0
                     continue
-                staged = download_and_ocr(
+                staged = download_note(
                     db, task, run_token, entry[0], entry[1], adapter, settings,
                     excluded_words=excluded_words_cache.setdefault(entry[0], load_excluded_words_for_city(db, entry[0])),
                 )
@@ -589,7 +592,7 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
                                 # 刷新成功：用新 URL 重抓当前 entry
                                 db.rollback()
                                 cleanup_incomplete_note(db, old_url)
-                                retry_staged = download_and_ocr(
+                                retry_staged = download_note(
                                     db, task, run_token, entry[0], entry[1], adapter, settings,
                                     excluded_words=excluded_words_cache.setdefault(entry[0], load_excluded_words_for_city(db, entry[0])),
                                 )
@@ -618,6 +621,7 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
                         adapter = reset_adapter_session(adapter, f"周期性 reset @ {len(staged_notes)} 篇")
                     # 多账号轮询：每抓 N 篇主动切到下一个账号（避免触发频率限制）
                     # 仅当 ≥2 个账号时切；单账号 / 默认 session 时跳过
+                    # 失败也计入 staged_notes（让轮询能触发，避免连续失败卡在同一账号）
                     rotation_n = getattr(settings, "account_rotation_notes", 25) or 0
                     if (
                         rotation_n > 0
@@ -736,7 +740,7 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
                         log(db, task.id, "INFO", f"账号 {failed_account.name!r} 失效（{exc}），切换并自动登录到 {account.name!r}")
                     # 用该账号重试当前笔记一次
                     try:
-                        staged = download_and_ocr(
+                        staged = download_note(
                             db, task, run_token, entry[0], entry[1], new_adapter, settings,
                             excluded_words=excluded_words_cache.setdefault(entry[0], load_excluded_words_for_city(db, entry[0])),
                         )
@@ -792,6 +796,23 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
                         f"最近一次错误：{exc}。请检查浏览器登录/验证状态后点「检测登录并继续」，或「结束抓取」。"
                     )
 
+        # 阶段 1.5：集中 OCR（全部下载完成后执行；逐篇之间响应停止请求）
+        for staged in staged_notes:
+            if getattr(staged, "note", None) is None:
+                # 下载失败占位（on_failure 追加的 SimpleNamespace），不进 OCR
+                continue
+            try:
+                set_progress(db, task, run_token, "OCR", staged.note.title)
+                assert_execution_active(db, task.id, run_token)
+                ocr_staged_note(db, task, staged, settings)
+            except ExecutionStopped:
+                db.rollback()
+                finish_stop_if_requested(db, task.id, run_token)
+                return
+            except ExecutionSuperseded:
+                db.rollback()
+                return
+
         # 阶段 2：批量并行 MiniMax + 写 DB
         if staged_notes:
             if settings.minimax_api_key:
@@ -816,6 +837,10 @@ def _run_crawl_body(task_id: int, run_token: str, db, stop_event) -> None:
                 extracted_list = [extract_activities(s.combined_text, s.reference_now, None) for s in staged_notes]
 
             for staged, extracted in zip(staged_notes, extracted_list):
+                if getattr(staged, "note", None) is None:
+                    # 下载失败占位（on_failure 追加的 SimpleNamespace），只用于账号轮询计数，
+                    # 不进 OCR/提取，否则 extract_and_save 对 note=None 直接 AttributeError
+                    continue
                 if finish_stop_if_requested(db, task.id, run_token):
                     return
                 try:
@@ -943,7 +968,9 @@ def _safe_cleanup_task_resources(
     """
     if adapter is not None:
         try:
-            adapter.close_session()
+            closed = adapter.close_session()
+            if closed:
+                log(db, task_id, "INFO", f"任务结束清理：已关闭 {closed} 个残留标签页")
         except Exception as exc:
             log(db, task_id, "WARNING", f"adapter.close_session 失败（{reason}）：{exc}")
     if chrome_pool is not None and accounts:
