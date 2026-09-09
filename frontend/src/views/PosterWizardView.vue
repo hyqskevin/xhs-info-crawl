@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, UploadFilled } from '@element-plus/icons-vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
+import { cnWallStamp } from '@/utils/datetime'
 
 const step = ref(1)
 const granularity = ref<'note' | 'activity'>('note')
@@ -68,7 +69,7 @@ async function saveDraft() {
     return
   }
   const payload = {
-    name: `营销海报-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}`,
+    name: `营销海报-${cnWallStamp()}`,
     template_id: templateId.value,
     items: items.value,
     override_html: overrideHtml.value || null,

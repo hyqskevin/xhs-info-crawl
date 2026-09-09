@@ -4,7 +4,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getHealth } from '@/api/health'
 import { api } from '@/api/client'
-import { formatUtcAsShanghai } from '@/utils/datetime'
+import { formatCnDateTime, toCnWallString } from '@/utils/datetime'
 import { confirmSafe } from '@/utils/confirm'
 import CrawlTrendChart from '@/components/CrawlTrendChart.vue'
 import CrawlSuccessPie from '@/components/CrawlSuccessPie.vue'
@@ -215,7 +215,7 @@ async function loadDiagnosticsSnapshot() {
     diagnostics.value = { ...diagnostics.value, ...res.data.data }
   } catch (error: any) {
     // 单点失败不应影响仪表盘其他卡片
-    diagnostics.value.checked_at = new Date().toISOString()
+    diagnostics.value.checked_at = toCnWallString(new Date())
   }
 }
 
@@ -224,10 +224,10 @@ async function probe(section: 'opencli' | 'xhs_login' | 'xhs_pool') {
   try {
     const fn = section === 'opencli' ? api.diagnosticsOpencli : section === 'xhs_login' ? api.diagnosticsXhsLogin : api.diagnosticsXhsPool
     const res = await fn()
-    diagnostics.value = { ...diagnostics.value, [section]: res.data.data, checked_at: new Date().toISOString() }
+    diagnostics.value = { ...diagnostics.value, [section]: res.data.data, checked_at: toCnWallString(new Date()) }
   } catch (error: any) {
     const reason = error.response?.data?.message || error.response?.data?.detail || '检测失败'
-    diagnostics.value = { ...diagnostics.value, [section]: { ...diagnostics.value[section], ok: section === 'opencli' ? false : diagnostics.value[section].ok, logged_in: section === 'xhs_login' ? false : diagnostics.value[section].logged_in, mode: section === 'xhs_pool' ? 'unknown' : diagnostics.value[section].mode, cdp_reachable: section === 'xhs_pool' ? false : diagnostics.value[section].cdp_reachable, reason }, checked_at: new Date().toISOString() }
+    diagnostics.value = { ...diagnostics.value, [section]: { ...diagnostics.value[section], ok: section === 'opencli' ? false : diagnostics.value[section].ok, logged_in: section === 'xhs_login' ? false : diagnostics.value[section].logged_in, mode: section === 'xhs_pool' ? 'unknown' : diagnostics.value[section].mode, cdp_reachable: section === 'xhs_pool' ? false : diagnostics.value[section].cdp_reachable, reason }, checked_at: toCnWallString(new Date()) }
     ElMessage.error(reason)
   } finally {
     diagLoading.value[section] = false
@@ -643,7 +643,7 @@ onUnmounted(() => {
         <div v-for="log in summary.recent_logs" :key="log.id" class="log-line" @click="$router.push('/tasks')">
           <ElTag size="small" :type="log.level === 'ERROR' ? 'danger' : log.level === 'WARNING' ? 'warning' : 'info'">{{ log.level }}</ElTag>
           <span class="log-message">#{{ log.task_id }} {{ log.message }}</span>
-          <span class="log-time">{{ formatUtcAsShanghai(log.created_at) }}</span>
+          <span class="log-time">{{ formatCnDateTime(log.created_at) }}</span>
         </div>
       </div>
       <ElEmpty v-else description="暂无任务日志" :image-size="60" />

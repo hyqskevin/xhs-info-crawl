@@ -3,7 +3,7 @@ import { Delete, Refresh, View } from '@element-plus/icons-vue'
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
-import { formatUtcAsShanghai } from '@/utils/datetime'
+import { formatCnDateTime } from '@/utils/datetime'
 import { confirmSafe } from '@/utils/confirm'
 
 const rows = ref<any[]>([])
@@ -83,12 +83,12 @@ onMounted(load)
       <ElTableColumn prop="failed_notes" label="失败" width="90" />
       <ElTableColumn prop="skipped_notes" label="已跳过" width="90" />
       <ElTableColumn label="进度" width="160"><template #default="scope"><ElProgress :percentage="progress(scope.row)" /></template></ElTableColumn>
-      <ElTableColumn label="创建时间" min-width="180"><template #default="scope">{{ formatUtcAsShanghai(scope.row.created_at) }}</template></ElTableColumn>
+      <ElTableColumn label="创建时间" min-width="180"><template #default="scope">{{ formatCnDateTime(scope.row.created_at) }}</template></ElTableColumn>
       <ElTableColumn prop="error_message" label="错误" min-width="220" show-overflow-tooltip />
       <ElTableColumn label="操作" min-width="190" class-name="action-column"><template #default="scope"><ElButton v-if="resumableStatuses.includes(scope.row.status)" text :icon="Refresh" :loading="restartingId === scope.row.id" @click="restart(scope.row)">{{ scope.row.status === 'PAUSED' ? '登录并继续' : '继续抓取' }}</ElButton><ElButton text :icon="View" @click="show(scope.row.id)">日志</ElButton></template></ElTableColumn>
     </ElTable>
   </ElCard>
-  <ElDrawer v-model="drawer" title="任务日志"><ElTimeline><ElTimelineItem v-for="item in logs" :key="item.id" :timestamp="formatUtcAsShanghai(item.created_at)">{{ item.level }} - {{ item.message }}</ElTimelineItem></ElTimeline></ElDrawer>
+  <ElDrawer v-model="drawer" title="任务日志"><ElTimeline><ElTimelineItem v-for="item in logs" :key="item.id" :timestamp="formatCnDateTime(item.created_at)">{{ item.level }} - {{ item.message }}</ElTimelineItem></ElTimeline></ElDrawer>
 </template>
 
 <style scoped>

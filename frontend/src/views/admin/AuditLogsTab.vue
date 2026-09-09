@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
-import { formatUtcAsShanghai } from '@/utils/datetime'
+import { formatCnDateTime } from '@/utils/datetime'
 import { confirmSafe } from '@/utils/confirm'
 
 interface AuditLogOut {
@@ -103,7 +103,7 @@ onMounted(load)
       <ElTableColumn type="selection" width="48" />
       <ElTableColumn label="时间" width="180">
         <template #default="scope">
-          {{ formatUtcAsShanghai(scope.row.created_at) }}
+          {{ formatCnDateTime(scope.row.created_at) }}
         </template>
       </ElTableColumn>
       <ElTableColumn prop="actor_username" label="操作者" width="140" />

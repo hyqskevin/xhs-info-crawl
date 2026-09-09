@@ -3,7 +3,7 @@ import { CircleCheck, CircleClose, Delete, Edit, Refresh, Search, View } from '@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
-import { formatUtcAsShanghai } from '@/utils/datetime'
+import { formatCnDateTime, toCnWallString } from '@/utils/datetime'
 import { confirmSafe } from '@/utils/confirm'
 
 const rows = ref<any[]>([])
@@ -115,8 +115,8 @@ function resetFilters() {
   })
   load()
 }
-function formatTime(value: string | null) { return value ? formatUtcAsShanghai(value) : '待确认' }
-function formatDate(value: string | null) { return value ? formatUtcAsShanghai(value).slice(0, 10) : '待确认' }
+function formatTime(value: string | null) { return value ? formatCnDateTime(value) : '待确认' }
+function formatDate(value: string | null) { return value ? formatCnDateTime(value).slice(0, 10) : '待确认' }
 /** 点赞/收藏/评论；任一字段缺失显示 "—"；全部缺失显示 "—" */
 function formatEngagement(row: any) {
   const fmt = (v: any) => (v == null ? '—' : Number(v).toLocaleString())
@@ -145,7 +145,7 @@ async function show(id: number) {
   finally { imagesLoading.value = false }
 }
 function openEdit(activity: any) { editingId.value = activity.id; Object.keys(form).forEach(key => delete form[key]); Object.assign(form, activity); editDialog.value = true }
-async function saveActivity() { await api.updateActivity(editingId.value!, { ...form, start_time: form.start_time ? new Date(form.start_time).toISOString() : null, end_time: form.end_time ? new Date(form.end_time).toISOString() : null }); editDialog.value = false; await show(detail.value.id); await load(); ElMessage.success('活动已更新') }
+async function saveActivity() { await api.updateActivity(editingId.value!, { ...form, start_time: form.start_time ? toCnWallString(new Date(form.start_time)) : null, end_time: form.end_time ? toCnWallString(new Date(form.end_time)) : null }); editDialog.value = false; await show(detail.value.id); await load(); ElMessage.success('活动已更新') }
 async function removeActivity(activity: any) { if (!await confirmSafe('确认删除该识别活动？', '删除确认', { type: 'warning' })) return; await api.deleteActivity(activity.id); await show(detail.value.id); await load() }
 async function reExtractNote() {
   reExtracting.value = true
@@ -168,8 +168,8 @@ async function saveNewActivity() {
     const response = await api.createNoteActivity(noteForm.id, {
       name: newActivityForm.name.trim(),
       location: newActivityForm.location,
-      start_time: newActivityForm.start_time ? new Date(newActivityForm.start_time).toISOString() : null,
-      end_time: newActivityForm.end_time ? new Date(newActivityForm.end_time).toISOString() : null,
+      start_time: newActivityForm.start_time ? toCnWallString(new Date(newActivityForm.start_time)) : null,
+      end_time: newActivityForm.end_time ? toCnWallString(new Date(newActivityForm.end_time)) : null,
       type: newActivityForm.type,
       summary: newActivityForm.summary,
     })
@@ -207,7 +207,7 @@ async function saveNote() {
       title: noteForm.title.trim(),
       content: noteForm.content,
       city_code: noteForm.city_code,
-      published_at: noteForm.published_at ? new Date(noteForm.published_at).toISOString() : null,
+      published_at: noteForm.published_at ? toCnWallString(new Date(noteForm.published_at)) : null,
     })
     noteEditDialog.value = false
     await load()
