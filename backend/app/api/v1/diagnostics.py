@@ -3,9 +3,11 @@
 关联 spec: docs/superpowers/specs/2026-08-03-diagnostics-panel-design.md
 """
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.config import Settings
+from app.core.database import get_db
 from app.core.security import require_admin
 from app.services import diagnostics as svc
 from app.services import diagnostics_ocr as ocr_svc
@@ -22,8 +24,12 @@ def _raise_if_opencli_failure(payload: dict) -> None:
 
 
 @router.get("/snapshot")
-def diagnostics_snapshot(_: dict = Depends(require_admin), settings: Settings = Depends(get_settings)) -> dict:
-    return {"code": 200, "message": "success", "data": svc.probe_snapshot(settings)}
+def diagnostics_snapshot(
+    _: dict = Depends(require_admin),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> dict:
+    return {"code": 200, "message": "success", "data": svc.probe_snapshot(settings, db=db)}
 
 
 @router.get("/opencli")
@@ -34,14 +40,18 @@ def diagnostics_opencli(_: dict = Depends(require_admin), settings: Settings = D
 
 
 @router.get("/xhs-login")
-def diagnostics_xhs_login(_: dict = Depends(require_admin), settings: Settings = Depends(get_settings)) -> dict:
-    payload = svc.probe_xhs_login(settings)
+def diagnostics_xhs_login(
+    _: dict = Depends(require_admin),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> dict:
+    payload = svc.probe_xhs_login(settings, db=db)
     return {"code": 200, "message": "success", "data": payload}
 
 
 @router.get("/xhs-pool")
-def diagnostics_xhs_pool(_: dict = Depends(require_admin), settings: Settings = Depends(get_settings)) -> dict:
-    payload = svc.probe_xhs_pool(settings)
+def diagnostics_xhs_pool(_: dict = Depends(require_admin), settings: Settings = Depends(get_settings), db: Session = Depends(get_db)) -> dict:
+    payload = svc.probe_xhs_pool(settings, db=db)
     return {"code": 200, "message": "success", "data": payload}
 
 

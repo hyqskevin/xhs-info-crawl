@@ -248,6 +248,12 @@ class Settings(BaseSettings):
         "google-chrome",
         validation_alias="CHROME_BIN",
     )
+    # opencli Browser Bridge 扩展解压目录（ChromePool 启动实例时 --load-extension）。
+    # 配置后实例以非 headless 启动（扩展需真实窗口连接 opencli daemon）；
+    # None = 保持 headless、不加载扩展（向后兼容）。
+    opencli_extension_path: Path | None = Field(
+        default=None, validation_alias="OPENCLI_EXTENSION_PATH"
+    )
 
     @model_validator(mode="after")
     def _sync_storage_subdirs_from_data_dir(self) -> "Settings":
@@ -325,6 +331,14 @@ class Settings(BaseSettings):
         """解析后的临时文件目录（绝对路径，在项目内）。"""
         path = self.tmp_dir_setting or self.data_dir / "tmp"
         return self.resolve_project_path(path)
+
+    @computed_field
+    @property
+    def opencli_extension_dir(self) -> Path | None:
+        """解析后的 opencli Browser Bridge 扩展目录（绝对路径）；未配置返回 None。"""
+        if self.opencli_extension_path is None:
+            return None
+        return self.resolve_project_path(self.opencli_extension_path)
 
     @property
     def cors_origin_list(self) -> list[str]:

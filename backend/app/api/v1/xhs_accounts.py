@@ -256,10 +256,6 @@ def check_login(account_id: int, _: Admin, db: DB) -> dict:
     if account is None:
         raise HTTPException(404, "账号不存在")
     settings = get_settings()
-    # 1. 先设 logging_in 中间态 → 前端可立刻看到「正在检查」
-    account.login_status = "logging_in"
-    db.commit()
-    db.refresh(account)
 
     # 2. profile_alias 通道:session_name 直接当 opencli alias 用
     # （spec 2026-08-24 §3.1 决定 — 零 schema 改动）
@@ -271,19 +267,43 @@ def check_login(account_id: int, _: Admin, db: DB) -> dict:
         else None
     )
     if account.cdp_port is not None:
-        try:
-            chrome_pool = get_global_chrome_pool()
-            chrome_pool.acquire(account.session_name)
-        except ChromeLaunchError as exc:
-            raise HTTPException(503, f"Chrome 实例启动失败：{exc}") from exc
+        # 探测只读：用 .get()（不启动 Chrome）。没实例时先探测 DB 端口——
+        # 后端重启会清 pool 内存态，但账号的 Chrome 可能还活着（持久化登录态仍在），
+        # 此时 adopt 复用后走真实探测；端口确实无活 Chrome → not_started。
+        # 用户主动「扫码登录」才走 acquire() 启动 Chrome。
+        chrome_pool = get_global_chrome_pool()
+        existing = chrome_pool.get(account.session_name)
+        if existing is None or not existing.alive():
+            from app.services.opencli_extension import cdp_version_ok
+            if cdp_version_ok(account.cdp_port):
+                chrome_pool.adopt_existing(account.session_name, account.cdp_port)
+            else:
+                # not_started ≠ 未登录：Chrome 关了不代表登录态丢了（profile 持久）。
+                # 已有 logged_in 时不覆盖，避免"明明登录了却显示未登录"
+                if account.login_status != "logged_in":
+                    account.login_status = "not_started"
+                    db.commit()
+                    db.refresh(account)
+                return {
+                    "code": 200, "message": "success",
+                    "data": {
+                        **_dump(account),
+                        "logged_in": False,
+                        "reason": "not_started",
+                    },
+                }
     try:
+        # 走真实探测才设 logging_in 中间态（not_started 快路径不碰登录态）
+        account.login_status = "logging_in"
+        db.commit()
+        db.refresh(account)
         adapter = OpenCLIAdapter(
             settings,
             session=account.session_name,
             cdp_endpoint=cdp_endpoint,
             profile_alias=profile_alias,
         )
-        raw = adapter.check_login(foreground=True)
+        raw = adapter.check_login(foreground=True, timeout=8)
         account.login_status = "logged_in"
         # check_login 现在返 {logged_in, uid, user_id, ...} —— user_id 由实现映射自 uid
         user_id = (raw or {}).get("user_id") or (raw or {}).get("uid")
@@ -329,11 +349,25 @@ def open_login(account_id: int, _: Admin, db: DB) -> dict:
         else None
     )
     if account.cdp_port is not None:
-        try:
+        from app.services.opencli_extension import cdp_version_ok, wait_browser_session_ready
+        # DB 记录端口上有活 Chrome（后端重启后 pool 内存态丢失的常见场景）→ adopt 复用，
+        # 避免 acquire 重分配端口与 DB cdp_port 错位（UNIQUE 冲突 500）
+        if cdp_version_ok(account.cdp_port):
             chrome_pool = get_global_chrome_pool()
-            instance = chrome_pool.acquire(account.session_name)
-        except ChromeLaunchError as exc:
-            raise HTTPException(503, f"Chrome 实例启动失败：{exc}") from exc
+            instance = chrome_pool.adopt_existing(account.session_name, account.cdp_port)
+            # adopt 的实例可能不健康（所有 tab 已关 → No current window）：
+            # 短超时健康检查不过 → release 后重启全新实例
+            if not wait_browser_session_ready(settings, account.session_name, timeout_s=5.0):
+                chrome_pool.release(account.session_name)
+                instance = chrome_pool.acquire(account.session_name, preferred_port=account.cdp_port)
+        else:
+            try:
+                chrome_pool = get_global_chrome_pool()
+                # preferred_port = 账号自己的 DB 端口：空闲时优先复用，
+                # 写回 DB 不会撞其他账号的 cdp_port UNIQUE 约束
+                instance = chrome_pool.acquire(account.session_name, preferred_port=account.cdp_port)
+            except ChromeLaunchError as exc:
+                raise HTTPException(503, f"Chrome 实例启动失败：{exc}") from exc
         # 同步端口回 DB
         if instance.port != account.cdp_port:
             account.cdp_port = instance.port
@@ -341,6 +375,10 @@ def open_login(account_id: int, _: Admin, db: DB) -> dict:
         # pool 实际分配端口可能与 DB 记录不同（跨进程端口冲突后重分配）——
         # 端点必须在 acquire 之后按实例动态端口解析，用旧端口会打开错误的 Chrome 实例
         cdp_endpoint = f"http://127.0.0.1:{instance.port}"
+        # Chrome 新启动后 Browser Bridge 扩展连接 daemon 有几秒延迟——
+        # 必须等扩展就绪再 open，否则命令落在 about:blank（2026-09-03 现场根因）
+        if not wait_browser_session_ready(settings, account.session_name, timeout_s=15.0):
+            raise HTTPException(503, "浏览器扩展尚未连接，请稍后重试（Chrome 刚启动需要几秒完成扩展连接）")
     # 打开小红书登录页（在 Chrome 实例中打开，foreground=True 拉前台）
     try:
         adapter = OpenCLIAdapter(
@@ -357,6 +395,53 @@ def open_login(account_id: int, _: Admin, db: DB) -> dict:
     except Exception as exc:
         raise HTTPException(503, f"打开登录页失败：{exc}") from exc
     return {"code": 200, "message": "success", "data": {"url": settings.xhs_login_url, "session": account.session_name}}
+
+
+@router.get("/{account_id}/extension-status")
+def extension_status(account_id: int, _: Admin, db: DB) -> dict:
+    """检测账号 Chrome 实例运行状态与 opencli Browser Bridge 扩展加载状态。
+
+    - chrome_running：ChromePool 中实例存活 或 CDP /json/version 可达
+    - extension_installed：CDP /json/list 存在该扩展的 chrome-extension:// 条目
+      （Chrome 未运行时为 False）
+
+    关联 spec: docs/superpowers/specs/2026-09-02-extension-autodiscovery-bind-flow-design.md
+    """
+    from app.services import opencli_extension
+    from app.services.chrome_pool import get_global_chrome_pool
+
+    account = db.get(XhsAccount, account_id)
+    if account is None:
+        raise HTTPException(404, "账号不存在")
+
+    chrome_running = False
+    instance = None
+    if account.cdp_port is not None:
+        try:
+            instance = get_global_chrome_pool().get(account.session_name)
+        except Exception:  # noqa: BLE001 - pool 不可用时退回 CDP 探测
+            instance = None
+        chrome_running = bool(instance is not None and instance.alive()) or (
+            instance is None and opencli_extension.cdp_version_ok(account.cdp_port)
+        )
+        extension_installed = (
+            opencli_extension.cdp_has_extension(account.cdp_port)
+            if chrome_running
+            else False
+        )
+    else:
+        extension_installed = False
+
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "chrome_running": chrome_running,
+            "extension_installed": extension_installed,
+            "cdp_port": account.cdp_port,
+            "session_name": account.session_name,
+        },
+    }
 
 
 @router.post("/{account_id}/logout")

@@ -97,10 +97,66 @@ class OpenCLIAdapter:
         except Exception as exc:
             self._warn(f"浏览器标签页清理失败: {exc}")
 
-    def close_session(self) -> None:
-        """Explicitly close a preserved crawler session after the user ends a paused task."""
+    def _sweep_tabs(self) -> int | None:
+        """关闭本会话 Chrome 实例里的所有残留标签页，保留 1 个常驻页。
+
+        保留策略：第一个 xiaohongshu.com 页 → 无则 active 页 → 再无则第 0 个。
+        保留页让下个任务的 check_login eval 直接命中（快路径），也避免
+        Chrome 零页面 → No current window 循环（2026-09-04 事故）。
+
+        Returns:
+            成功关闭的标签页数量；tab list 失败或返回异常时 None（调用方回退关当前页）。
+        """
+        try:
+            tabs = self.run(
+                ["browser", self.session, "tab", "list"],
+                enforce_execution=False,
+                timeout=10,
+            )
+        except Exception as exc:
+            self._warn(f"标签页清理失败（tab list 不可用，回退关闭当前页）: {exc}")
+            return None
+        if not isinstance(tabs, list) or not tabs:
+            return None
+
+        def _is_xhs(t: dict) -> bool:
+            return "xiaohongshu.com" in str(t.get("url") or "")
+
+        keep = next((t for t in tabs if _is_xhs(t)), None)
+        if keep is None:
+            keep = next((t for t in tabs if t.get("active")), tabs[0])
+        keep_page = keep.get("page")
+
+        closed = 0
+        for t in tabs:
+            page = t.get("page")
+            if page is None or page == keep_page:
+                continue
+            try:
+                self.run(
+                    ["browser", self.session, "tab", "close", str(page)],
+                    enforce_execution=False,
+                    timeout=10,
+                )
+                closed += 1
+            except Exception as exc:
+                self._warn(f"关闭标签页 {page} 失败（继续清理其余）: {exc}")
+        return closed
+
+    def close_session(self) -> int | None:
+        """任务结束清理：sweep 掉所有残留标签页（保留 1 个常驻页）。
+
+        安全验证保留页（_preserve_browser_tab=True）跳过 sweep 走原关闭路径。
+        tab list 不可用时回退关闭当前页。返回关闭数量（回退时 None）。
+        """
+        preserve = self._preserve_browser_tab
         self._preserve_browser_tab = False
+        if not preserve:
+            closed = self._sweep_tabs()
+            if closed is not None:
+                return closed
         self._close_browser_tab()
+        return None
 
     def logout(self) -> bool:
         """登出当前账号：经 opencli browser <session> eval 清 localStorage + 全部 cookie。
@@ -240,7 +296,7 @@ class OpenCLIAdapter:
             return json.loads(output)
         except json.JSONDecodeError:
             return output
-    def check_login(self, foreground: bool = False):
+    def check_login(self, foreground: bool = False, timeout: int | None = None):
         """登录预检：经 browser <session> eval 读 localStorage.RWP_LOGIN_TOKEN.uid（2026-08-24 改）。
 
         之前用 ``xiaohongshu whoami`` 实测返回**硬编码假账号**「花卷的📷日常」(spec
@@ -251,6 +307,9 @@ class OpenCLIAdapter:
             foreground: True 时拉起前台可见窗口,让用户扫码（API check-login 用）。
                        仅当 RWP_LOGIN_TOKEN 不存在时才有意义（提示用户去扫码）,
                        这里不强制拉前台——eval 是只读探测,不阻塞。
+            timeout: 单次命令超时（秒）。诊断探测必须传短超时（≤10s），
+                    否则 snapshot 会拖到 45s+ 超过前端 axios 10s 超时。
+                    None = 用默认 _command_timeout()（150s）。
         """
         # RWP_LOGIN_TOKEN 是小红书 SPA 启动后才写入 localStorage 的 key,
         # 页面打开未加载完时拿不到。脚本直接读,失败由调用方决定是否重试。
@@ -265,10 +324,47 @@ class OpenCLIAdapter:
             "}catch(e){return JSON.stringify({logged_in:false,reason:'parse_err',err:String(e)});"
             "}})()"
         )
+        # eval-first 设计（2026-09-03 简化）：直接 eval 读 localStorage，
+        # - 返回 logged_in → 完事（1 条命令，1-2s，最快路径）
+        # - 返回 parse_err（about:blank 等非小红书源，SecurityError 被 eval 内部 catch）
+        #   → open 页面 + wait + 重 eval + close 我们开的 tab
+        # - 返回 no_token（页面对但 SPA 未挂载完）→ 等 2s 重 eval
+        # - 抛 OpenCLIError（如 No current window：所有 tab 已关，无页面上下文）
+        #   → 同 parse_err，open 页面重 eval
+        # 不再用 state 预检（省 1-3s，且少一条命令）。
+        # open 的 tab **保留不关**：作为账号常驻小红书页，后续检测 eval 直接命中，
+        # 避免反复开关 tab（2026-09-04 现场：close 导致 Chrome 零页面 → No current window 循环）。
+        eval_timeout = max(1, (timeout or 8) - 3) if timeout is not None else None
+        # 诊断探测（timeout≤8）时 wait 缩短到 1s；抓取任务用默认 2s
+        wait_seconds = "1" if timeout is not None and timeout <= 8 else "2"
+
+        def _open_page_and_wait() -> None:
+            # foreground：确保有活动窗口（No current window 场景需要建立页面上下文），
+            # 且用户本就要在登录页扫码
+            # 打开账号 session 的页面（不是默认 session），foreground=True 时拉前台
+            window_mode = "foreground" if foreground else "background"
+            self.run(["browser", self.session, "open", self.settings.xhs_login_url, "--window", window_mode], timeout=timeout)
+            self.run(["browser", self.session, "wait", "time", wait_seconds], timeout=timeout)
+
         try:
-            raw = self.run(["browser", self.session, "eval", eval_script])
+            try:
+                raw = self.run(["browser", self.session, "eval", eval_script], timeout=eval_timeout)
+                # parse_err = 页面不在小红书源（about:blank 或其他）→ 打开页面再读
+                if isinstance(raw, dict) and raw.get("reason") == "parse_err":
+                    _open_page_and_wait()
+                    raw = self.run(["browser", self.session, "eval", eval_script], timeout=eval_timeout)
+                elif isinstance(raw, dict) and raw.get("reason") == "no_token":
+                    # no_token = 页面对但 SPA 未挂载完 → 等 2s 重 eval 一次
+                    self.run(["browser", self.session, "wait", "time", "2"], timeout=timeout)
+                    raw = self.run(["browser", self.session, "eval", eval_script], timeout=eval_timeout)
+            except OpenCLIError as exc:
+                # No current window（所有 tab 已关 / 零窗口坏实例）→ open 也不可靠，
+                # 转为登录异常，让用户点「扫码登录」走 open_login 的健康检查+重启链路
+                raise AuthenticationRequired(
+                    '浏览器实例状态异常（无可用页面），请点「扫码登录」重启 Chrome 实例后重新登录'
+                ) from exc
         except OpenCLITimeout as exc:
-            # 如果该 session 还没打开过 SPA,eval 会拿 about:blank — 同归为未登录
+            # 扩展未响应 / 页面未打开过 SPA → 同归为未登录
             raise AuthenticationRequired(
                 '小红书登录检查超时：可能未登录或 session 未打开小红书页面,'
                 '请打开小红书并完成扫码后点击「继续抓取」'
@@ -398,6 +494,9 @@ class OpenCLIAdapter:
 
         Returns:
             list of {"title": str, "url": str, "author": str}，url 必须带 xsec_token
+
+        Raises:
+            OpenCLIError: xsec_token 注入失败（重试 3 次仍全缺）时抛错，避免静默返 0。
         """
         if not profile_url or not profile_url.strip():
             raise OpenCLIError(f'blogger_notes: profile_url 为空，跳过该博主')
@@ -406,17 +505,52 @@ class OpenCLIAdapter:
             raise OpenCLIError(f'blogger_notes: 无法从 profile_url 提取 user-id: {profile_url}')
         user_id = match.group(1)
         self.check_login()
-        results = self.run(['xiaohongshu', 'user', user_id, '-f', 'json', '--window', 'background']) or []
+        # 先打开博主主页（about:blank 状态下 xiaohongshu user 会被小红书风控拒绝）
+        self.run(['browser', self.session, 'open', profile_url, '--window', 'background'])
+        self.run(['browser', self.session, 'wait', 'time', '2'])
+
         notes: list[dict[str, Any]] = []
-        for item in results:
-            url = (item.get('url') or '').strip()
-            if not url or 'xsec_token' not in url:
-                continue
-            notes.append({
-                'title': (item.get('title') or '博主笔记').strip(),
-                'url': url,
-                'author': username.strip() if username else '',
-            })
+        last_total = 0
+        last_without_token = 0
+        # 最多重试 3 次（首次 + 2 次重试），让 opencli 有机会在 tab 暖好后注入 xsec_token
+        for attempt in range(1, 4):
+            results = self.run(['xiaohongshu', 'user', user_id, '-f', 'json', '--window', 'background']) or []
+            notes = []
+            without_token = 0
+            for item in results:
+                url = (item.get('url') or '').strip()
+                if not url:
+                    continue
+                if 'xsec_token' not in url:
+                    without_token += 1
+                    continue
+                notes.append({
+                    'title': (item.get('title') or '博主笔记').strip(),
+                    'url': url,
+                    'author': username.strip() if username else '',
+                })
+            last_total = len(results)
+            last_without_token = without_token
+            logger.warning(
+                "blogger_notes user_id=%s attempt=%d total=%d with_token=%d without_token=%d",
+                user_id, attempt, last_total, len(notes), without_token,
+            )
+            if notes:
+                break
+            # 0 条带 token：可能是风控 / token 未注入 → 等长一点再重试
+            if attempt < 3:
+                self.run(['browser', self.session, 'wait', 'time', '3'])
+
+        if not notes:
+            # 区分"博主真没笔记"和"抓不到"：opencli 返回 0 条时不报错；返回 N 条但全没 token 视为抓取失败
+            if last_total > 0 and last_without_token == last_total:
+                raise OpenCLIError(
+                    f'blogger_notes: opencli 返回 {last_total} 条但全部缺少 xsec_token，'
+                    f'user_id={user_id} profile_url={profile_url}。'
+                    f'可能是被风控拒绝 / xsec_token 注入失败。'
+                )
+            # opencli 真的返回 0 条 —— 博主本身可能没笔记，正常返回空
+            return []
         return notes[:self.settings.xhs_search_target_count]
     def download(self,url:str,output_dir:Path)->list[Path]:
         if not url or not url.strip():

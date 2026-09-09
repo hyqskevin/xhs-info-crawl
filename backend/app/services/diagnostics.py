@@ -79,10 +79,13 @@ def _parse_daemon_status(text: str) -> dict[str, Any]:
             result["daemon_running"] = True
         elif line.startswith("Daemon: stopped") or line.startswith("Daemon: not running"):
             result["daemon_running"] = False
-        elif line.startswith("Extension: connected"):
-            result["extension_connected"] = True
         elif line.startswith("Extension: disconnected"):
             result["extension_connected"] = False
+        elif line.startswith("Extension:") and "profiles connected" in line:
+            # opencli ≥1.8.5 多 profile 格式："Extension: 3 profiles connected, none selected"
+            result["extension_connected"] = True
+        elif line.startswith("Extension: connected"):
+            result["extension_connected"] = True
         elif line.startswith("Profiles:"):
             profiles_part = line.split(":", 1)[1].strip()
             if profiles_part:
@@ -136,39 +139,41 @@ def probe_opencli(settings: Settings) -> dict[str, Any]:
     }
 
 
-def probe_xhs_login(settings: Settings) -> dict[str, Any]:
-    """探测当前 Chrome 是否登录小红书。
+def probe_xhs_login(settings: Settings, db=None) -> dict[str, Any]:
+    """返回所有已启用账号的登录状态（读 DB 缓存，毫秒级，不做 opencli 探测）。
 
-    返回 ``{logged_in, username, user_id, reason}``；``reason`` 取值
-    ``auth_required / timeout / other / None``。
+    设计（2026-09-03 规模化改造）：20+ 账号场景下串行 opencli 探测（每个最多 8s）
+    需 160s+，超过前端 axios 超时。snapshot 只读 DB 的 login_status 缓存；
+    实际探测由前端逐账号并行调 ``POST /xhs-accounts/{id}/check-login``，
+    查完一个更新一个，互不阻塞。
+
+    返回 ``{logged_in, reason, accounts}``；``accounts`` 每项含
+    ``{account_name, session_name, logged_in, user_id, username}``。
     """
-    try:
-        payload = OpenCLIAdapter(settings).check_login()
-    except AuthenticationRequired:
-        return {"logged_in": False, "username": None, "user_id": None, "reason": "auth_required"}
-    except OpenCLITimeout:
-        return {"logged_in": False, "username": None, "user_id": None, "reason": "timeout"}
-    except OpenCLIError as exc:
-        return {"logged_in": False, "username": None, "user_id": None, "reason": "other", "error": str(exc)}
-    except Exception as exc:  # pragma: no cover - 兜底
-        logger.warning("probe_xhs_login unexpected error: %s", exc)
-        return {"logged_in": False, "username": None, "user_id": None, "reason": "other", "error": str(exc)}
+    from app.models.xhs_account import XhsAccount
+    from sqlalchemy import select
 
-    if isinstance(payload, dict):
-        username = payload.get("username") or payload.get("nickname") or payload.get("name")
-        user_id = (
-            payload.get("user_id")
-            or payload.get("id")
-            or payload.get("platform_user_id")
-        )
-    else:
-        username = None
-        user_id = None
+    accounts_rows = []
+    if db is not None:
+        accounts_rows = list(db.scalars(
+            select(XhsAccount).where(XhsAccount.enabled.is_(True)).order_by(XhsAccount.priority, XhsAccount.id)
+        ).all())
+
+    accounts_status: list[dict[str, Any]] = []
+    for acc in accounts_rows:
+        accounts_status.append({
+            "account_name": acc.name,
+            "session_name": acc.session_name,
+            "logged_in": acc.login_status == "logged_in",
+            "user_id": acc.platform_user_id,
+            "username": None,
+        })
+
+    logged_in = any(a["logged_in"] for a in accounts_status)
     return {
-        "logged_in": True,
-        "username": username,
-        "user_id": user_id,
-        "reason": None,
+        "logged_in": logged_in,
+        "reason": None if logged_in else ("auth_required" if accounts_rows else None),
+        "accounts": accounts_status,
     }
 
 
@@ -193,7 +198,7 @@ def _probe_cdp(endpoint: str, timeout: float = 2.0) -> tuple[bool, str | None]:
         return False, f"CDP 端点 {endpoint} 连接失败：{exc}"
 
 
-def probe_xhs_pool(settings: Settings) -> dict[str, Any]:
+def probe_xhs_pool(settings: Settings, db=None) -> dict[str, Any]:
     """探测浏览器连接：按 opencli 版本路由到 daemon 或 CDP 检测。
 
     版本 ≥(1,8,5) → daemon+扩展模式检测；
@@ -201,8 +206,13 @@ def probe_xhs_pool(settings: Settings) -> dict[str, Any]:
     版本解析失败 → 能力探测兜底（先 daemon，失败再 CDP）。
 
     返回 ``{mode, version, version_tuple, daemon_running, extension_connected,
-    profiles, daemon_port, cdp_endpoint, cdp_reachable, sessions, reason}``。
+    profiles, daemon_port, cdp_endpoint, cdp_reachable, sessions,
+    accounts, reason}``：``accounts`` 字典 key 是 session_name，value 含
+    ``{account_name, chrome_alive, extension_connected}``（2026-09-03 加）
     """
+    from app.models.xhs_account import XhsAccount
+    from sqlalchemy import select
+
     bin_name = (settings.opencli_bin or "opencli").strip() or "opencli"
     resolved = shutil.which(bin_name)
 
@@ -217,8 +227,31 @@ def probe_xhs_pool(settings: Settings) -> dict[str, Any]:
         "cdp_endpoint": None,
         "cdp_reachable": None,
         "sessions": [],
+        "accounts": {},
         "reason": None,
     }
+
+    # 收集每账号扩展状态（2026-09-03）：chrome_pool.get() 不启动新实例，仅检查 alive
+    if db is not None:
+        try:
+            from app.services.chrome_pool import get_global_chrome_pool
+            pool = get_global_chrome_pool()
+        except Exception:
+            pool = None
+        if pool is not None:
+            accounts_rows = list(db.scalars(
+                select(XhsAccount).where(XhsAccount.enabled.is_(True))
+                .order_by(XhsAccount.priority, XhsAccount.id)
+            ).all())
+            for acc in accounts_rows:
+                instance = pool.get(acc.session_name)
+                alive = bool(instance is not None and instance.alive())
+                base["accounts"][acc.session_name] = {
+                    "account_name": acc.name,
+                    "chrome_alive": alive,
+                    # 单 daemon 多 profile：ext 是否连上要看该 session 是否在 profiles 列表
+                    "extension_connected": alive,
+                }
 
     if not resolved:
         base["reason"] = f"opencli 不在 PATH，请设置 OPENCLI_BIN 环境变量指向 {bin_name} 的绝对路径"
@@ -259,6 +292,12 @@ def probe_xhs_pool(settings: Settings) -> dict[str, Any]:
             base["reason"] = "浏览器扩展未连接"
         elif not parsed["profiles"]:
             base["reason"] = "未找到已连接的浏览器 profile"
+        # 修正每账号 extension_connected：只在全局 extension_connected 为 True 且 Chrome alive 时为 True
+        if base["accounts"]:
+            for sess, info in base["accounts"].items():
+                info["extension_connected"] = bool(
+                    info["chrome_alive"] and parsed["extension_connected"]
+                )
         return base
 
     # CDP 模式（版本 <1.8.5 或兜底路径 daemon 失败）
@@ -295,13 +334,13 @@ def probe_xhs_pool(settings: Settings) -> dict[str, Any]:
     return base
 
 
-def probe_snapshot(settings: Settings) -> dict[str, Any]:
+def probe_snapshot(settings: Settings, db=None) -> dict[str, Any]:
     """三合一聚合，任一 probe 异常都被隔离不影响其它段。"""
     sections: dict[str, dict[str, Any]] = {}
     for name, fn in (
         ("opencli", probe_opencli),
-        ("xhs_login", probe_xhs_login),
-        ("xhs_pool", probe_xhs_pool),
+        ("xhs_login", lambda s: probe_xhs_login(s, db=db)),
+        ("xhs_pool", lambda s: probe_xhs_pool(s, db=db)),
     ):
         try:
             sections[name] = fn(settings)

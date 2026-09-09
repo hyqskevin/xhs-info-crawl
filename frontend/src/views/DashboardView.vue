@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Connection, Link, RefreshRight, TrendCharts, VideoPlay } from '@element-plus/icons-vue'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getHealth } from '@/api/health'
 import { api } from '@/api/client'
@@ -14,10 +15,12 @@ const database = ref('SQLite')
 const cities = ref<any[]>([])
 const bloggers = ref<any[]>([])
 const xhsAccounts = ref<any[]>([])
+const router = useRouter()
 const submitting = ref(false)
 const restarting = ref(false)
 const restartingScheduleId = ref<number | null>(null)
 const openingLogin = ref(false)
+const openingLoginId = ref<number | null>(null)
 const stopping = ref(false)
 const lastTask = ref<any>(null)
 const resumableTask = ref<any>(null)
@@ -30,6 +33,15 @@ const diagnostics = ref<any>({
   checked_at: null,
 })
 const diagLoading = ref<Record<string, boolean>>({ opencli: false, xhs_login: false, xhs_pool: false })
+// snapshot 整体加载中（挂载时 + 每 30s 自动刷新）：三张卡显示"检测中"而非"未检测"
+const diagSnapshotLoading = ref(false)
+const opencliTag = computed(() => {
+  const v = diagnostics.value.opencli
+  if (diagSnapshotLoading.value && v.ok === null) return { type: 'info' as const, text: '检测中' }
+  if (v.ok === true) return { type: 'success' as const, text: `已就绪${v.version ? ' v' + v.version : ''}` }
+  if (v.ok === false) return { type: 'danger' as const, text: '缺失' }
+  return { type: 'info' as const, text: '未检测' }
+})
 const reasonText = (key: string | null | undefined) => {
   switch (key) {
     case 'auth_required': return '小红书未登录，请在 Chrome 完成扫码后重试'
@@ -40,15 +52,51 @@ const reasonText = (key: string | null | undefined) => {
 }
 const xhsLoginTag = computed(() => {
   const v = diagnostics.value.xhs_login
-  if (v.logged_in === true) return { type: 'success' as const, text: `已登录: ${v.username || v.user_id || '未知账号'}` }
+  if (diagSnapshotLoading.value && v.logged_in === null) return { type: 'info' as const, text: '检测中' }
+  if (v.logged_in === true) {
+    // 多账号场景：显示已登录账号数 + 第一个账号名
+    const accounts = v.accounts || []
+    const loggedCount = accounts.filter((a: any) => a.logged_in).length
+    if (loggedCount > 1) {
+      return { type: 'success' as const, text: `已登录 ${loggedCount} 个账号: ${v.account_name || v.username || v.user_id || '未知'}` }
+    }
+    return { type: 'success' as const, text: `已登录: ${v.account_name || v.username || v.user_id || '未知账号'}` }
+  }
   if (v.logged_in === false) {
+    // 全部账号 not_started（Chrome 均未运行）≠ 未登录，是环境未就绪
+    const accounts = v.accounts || []
+    const notStarted = accounts.filter((a: any) => a.not_started)
+    if (accounts.length > 0 && notStarted.length === accounts.length) {
+      return { type: 'warning' as const, text: 'Chrome 未运行' }
+    }
     if (v.reason === 'timeout') return { type: 'warning' as const, text: '登录检测超时' }
     return { type: 'danger' as const, text: '未登录' }
   }
   return { type: 'info' as const, text: '未检测' }
 })
+// per-account chip 文案/颜色：not_started（Chrome 未运行）≠ 未登录
+const accountChipLabel = (acc: any) => {
+  if (acc.not_started) return (acc.logged_in ? '已登录 · Chrome 未运行' : 'Chrome 未运行')
+  return acc.logged_in ? '已登录' : '未登录'
+}
+const accountChipType = (acc: any) => {
+  if (acc.logged_in) return 'success' as const
+  if (acc.not_started) return 'info' as const
+  return 'danger' as const
+}
+// 登录卡提示文案：优先按账号状态给出可行动指引
+const xhsLoginHint = computed(() => {
+  const v = diagnostics.value.xhs_login
+  const accounts = v.accounts || []
+  if (accounts.length > 0 && accounts.every((a: any) => a.not_started)) {
+    return '所有账号的 Chrome 均未运行，请点对应账号的「打开登录页」启动'
+  }
+  if (v.logged_in === false && v.reason) return reasonText(v.reason)
+  return ''
+})
 const xhsPoolTag = computed(() => {
   const v = diagnostics.value.xhs_pool
+  if (diagSnapshotLoading.value && v.daemon_running === null && v.cdp_reachable === null) return { type: 'info' as const, text: '检测中' }
   if (v.mode === 'daemon') {
     if (v.daemon_running && v.extension_connected) return { type: 'success' as const, text: `Daemon 已连接 · ${(v.profiles || []).length} profiles` }
     return { type: 'danger' as const, text: 'Daemon 未就绪' }
@@ -57,8 +105,25 @@ const xhsPoolTag = computed(() => {
     if (v.cdp_reachable === true) return { type: 'success' as const, text: `CDP 可达 · ${(v.sessions || []).length} sessions` }
     if (v.cdp_reachable === false) return { type: 'danger' as const, text: 'CDP 不可达' }
   }
-  if (v.mode === 'unknown') return { type: 'danger' as const, text: '未就绪' }
+  if (v.mode === 'unknown') {
+    // 尚未检测过（无任何探测结果）显示中性"未检测"，仅真实探测失败才显示红色"未就绪"
+    if (v.reason) return { type: 'danger' as const, text: '未就绪' }
+    return { type: 'info' as const, text: '未检测' }
+  }
   return { type: 'info' as const, text: '未检测' }
+})
+
+// 按账号扩展连接状态（2026-09-03）：来自 snapshot xhs_pool.accounts
+const xhsPoolAccountsList = computed(() => {
+  const accounts = diagnostics.value.xhs_pool?.accounts || {}
+  return Object.entries(accounts).map(([session, info]: [string, any]) => ({
+    session,
+    name: info.account_name || session,
+    label: info.chrome_alive
+      ? (info.extension_connected ? '扩展已连接' : 'Chrome 运行中 · 扩展未连接')
+      : 'Chrome 未运行',
+    chipType: info.extension_connected ? 'success' as const : (info.chrome_alive ? 'warning' as const : 'info' as const),
+  }))
 })
 
 // 抓取启动门控：opencli OK + extension connected + 浏览器连接 OK + xhs 已登录
@@ -198,31 +263,95 @@ async function initialize() {
   } catch {
     status.value = 'error'
   }
-  loadDiagnosticsSnapshot()
+  loadDiagnosticsSnapshot().then(() => probeAccountLogins())
   await Promise.all([loadLatestTask(), pollAnalytics()])
   pollLastTaskTimer = setInterval(pollLastTask, 3000)
   pollStatsTimer = setInterval(async () => {
     await pollSummaryStats()
     await pollAnalytics()
   }, 60_000)
-  // 诊断每 30s 刷新（whoami 1-2s × 3 项顺序执行 → 整体 ≤6s，对仪表盘压力可接受）
+  // 诊断每 30s 刷新（只读 DB 快照，毫秒级）；fan-out 仅在挂载时和手动「检测」按钮触发
+  // 频繁探测会干扰用户操作 + 累积 tab，改为按需探测
   diagRefreshTimer = setInterval(loadDiagnosticsSnapshot, 30_000)
 }
 
 async function loadDiagnosticsSnapshot() {
+  diagSnapshotLoading.value = true
   try {
     const res = await api.diagnosticsSnapshot()
     diagnostics.value = { ...diagnostics.value, ...res.data.data }
   } catch (error: any) {
     // 单点失败不应影响仪表盘其他卡片
     diagnostics.value.checked_at = toCnWallString(new Date())
+  } finally {
+    diagSnapshotLoading.value = false
+  }
+}
+
+// 逐账号异步探测：snapshot 立即返回 DB 缓存状态后，并行调 /check-login 刷新每个账号。
+// 支持规模化（20+ 账号）：每批 5 个并行，查完一个更新一个，互不阻塞。
+let accountProbeRunning = false
+async function probeAccountLogins() {
+  if (accountProbeRunning) return
+  if (xhsAccounts.value.length === 0) return
+  accountProbeRunning = true
+  try {
+    const loginDiag = diagnostics.value.xhs_login
+    loginDiag.accounts = xhsAccounts.value.map((a: any) => ({
+      account_name: a.name,
+      session_name: a.session_name,
+      logged_in: a.login_status === 'logged_in',
+      user_id: a.platform_user_id || null,
+      username: null,
+    }))
+    const applyResult = (sessionName: string, data: any) => {
+      const entry = (diagnostics.value.xhs_login.accounts || []).find((x: any) => x.session_name === sessionName)
+      if (!entry) return
+      entry.user_id = data.platform_user_id || null
+      // not_started = Chrome 实例未运行（≠ 未登录）：登录态是 profile 持久的，
+      // 不被"Chrome 没开"覆盖；UI 单独标记 not_started
+      entry.not_started = data.login_status === 'not_started' || data.reason === 'not_started'
+      if (!entry.not_started) entry.logged_in = !!data.logged_in
+    }
+    const CHUNK = 5
+    for (let i = 0; i < xhsAccounts.value.length; i += CHUNK) {
+      await Promise.all(xhsAccounts.value.slice(i, i + CHUNK).map(async (acc: any) => {
+        try {
+          const res = await api.checkXhsAccountLogin(acc.id)
+          applyResult(acc.session_name, res.data.data || {})
+        } catch {
+          applyResult(acc.session_name, { logged_in: false })
+        }
+      }))
+    }
+    loginDiag.logged_in = (loginDiag.accounts || []).some((x: any) => x.logged_in)
+    loginDiag.reason = loginDiag.logged_in ? null : 'auth_required'
+  } finally {
+    accountProbeRunning = false
   }
 }
 
 async function probe(section: 'opencli' | 'xhs_login' | 'xhs_pool') {
+  if (section === 'xhs_login') {
+    // 小红书登录改为逐账号探测（规模化：不再走聚合 snapshot 探测）。
+    // not_started 快路径全量 <100ms，转圈一闪而过用户感知不到点击已生效 → 最短展示 500ms。
+    diagLoading.value.xhs_login = true
+    const startedAt = Date.now()
+    try {
+      await probeAccountLogins()
+      const elapsed = Date.now() - startedAt
+      const MIN_LOADING_MS = 500
+      if (elapsed < MIN_LOADING_MS) {
+        await new Promise((resolve) => setTimeout(resolve, MIN_LOADING_MS - elapsed))
+      }
+    } finally {
+      diagLoading.value.xhs_login = false
+    }
+    return
+  }
   diagLoading.value[section] = true
   try {
-    const fn = section === 'opencli' ? api.diagnosticsOpencli : section === 'xhs_login' ? api.diagnosticsXhsLogin : api.diagnosticsXhsPool
+    const fn = section === 'opencli' ? api.diagnosticsOpencli : api.diagnosticsXhsPool
     const res = await fn()
     diagnostics.value = { ...diagnostics.value, [section]: res.data.data, checked_at: toCnWallString(new Date()) }
   } catch (error: any) {
@@ -353,6 +482,34 @@ async function openLogin() {
   } finally { openingLogin.value = false }
 }
 
+function goAccountConfig() {
+  router.push({ path: '/settings', query: { tab: 'xhs-accounts' } })
+}
+
+function accountIdBySession(sessionName: string): number | null {
+  const acc = xhsAccounts.value.find((a: any) => a.session_name === sessionName)
+  return acc ? acc.id : null
+}
+
+// 为指定账号打开其独立 Chrome 实例的小红书登录页（等待扩展就绪后 open）
+async function openAccountLoginPage(sessionName: string) {
+  const id = accountIdBySession(sessionName)
+  if (id === null) {
+    ElMessage.warning('账号尚未同步，请刷新页面重试')
+    return
+  }
+  openingLoginId.value = id
+  try {
+    await api.openXhsAccountLogin(id)
+    ElMessage.success(`「${sessionName}」Chrome 已打开，请在该窗口完成扫码登录，完成后点「检测」刷新`)
+  } catch (error: any) {
+    const reason = error.response?.data?.message || error.response?.data?.detail || '打开登录页失败'
+    ElMessage.error(reason)
+  } finally {
+    openingLoginId.value = null
+  }
+}
+
 async function stop() {
   if (!lastTask.value) return
   if (!await confirmSafe('当前笔记完成后停止，已处理数据会保留。确认停止抓取？', '安全停止', { type: 'warning' })) return
@@ -390,7 +547,7 @@ onUnmounted(() => {
 
 <template>
   <div class="dashboard">
-    <div class="page-intro"><div><p class="eyebrow">PHASE ONE</p><h2>小红书本地活动信息抓取系统</h2><p>从已配置的城市、关键词组和博主中选择本次抓取范围。</p></div></div>
+    <div class="page-intro"><div><p class="eyebrow">PHASE ONE</p><h2>推文信息抓取系统</h2><p>从已配置的城市、关键词组和博主中选择本次抓取范围。</p></div></div>
 
     <div class="stats-row">
       <ElCard shadow="never" class="stat-card"><div class="stat-card__content"><span>本周抓取笔记</span><strong>{{ summary.weekly_notes_count }}</strong></div></ElCard>
@@ -408,22 +565,54 @@ onUnmounted(() => {
         </div>
         <div class="system-item">
           <span class="system-label">opencli</span>
-          <ElTag :type="diagnostics.opencli.ok === true ? 'success' : diagnostics.opencli.ok === false ? 'danger' : 'info'">{{ diagnostics.opencli.ok === true ? `已就绪${diagnostics.opencli.version ? ' v' + diagnostics.opencli.version : ''}` : diagnostics.opencli.ok === false ? '缺失' : '未检测' }}</ElTag>
+          <ElTag :type="opencliTag.type">{{ opencliTag.text }}</ElTag>
           <ElButton size="small" :loading="diagLoading.opencli" @click="probe('opencli')">检测</ElButton>
           <p v-if="diagnostics.opencli.ok === false && diagnostics.opencli.reason" class="system-reason">{{ diagnostics.opencli.reason }}</p>
         </div>
         <div class="system-item">
           <span class="system-label">小红书登录</span>
-          <ElTag :type="xhsLoginTag.type">{{ xhsLoginTag.text }}</ElTag>
-          <ElButton size="small" :loading="diagLoading.xhs_login" @click="probe('xhs_login')">检测</ElButton>
-          <ElButton v-if="diagnostics.xhs_login.logged_in === false" size="small" type="primary" plain :icon="Link" :loading="openingLogin" @click="openLogin">打开登录页</ElButton>
-          <p v-if="diagnostics.xhs_login.logged_in === false && diagnostics.xhs_login.reason" class="system-reason">{{ reasonText(diagnostics.xhs_login.reason) }}</p>
+          <!-- 未配置账号：显示引导 -->
+          <template v-if="xhsAccounts.length === 0">
+            <ElTag type="warning">未配置账号</ElTag>
+            <ElButton size="small" type="primary" plain @click="goAccountConfig">去配置</ElButton>
+            <p class="system-reason">请先在配置中心添加小红书账号</p>
+          </template>
+          <!-- 已配置账号：显示登录状态 -->
+          <template v-else>
+            <ElTag :type="xhsLoginTag.type">{{ xhsLoginTag.text }}</ElTag>
+            <ElButton size="small" :loading="diagLoading.xhs_login" @click="probe('xhs_login')">检测</ElButton>
+            <p v-if="xhsLoginHint" class="system-reason">{{ xhsLoginHint }}</p>
+            <!-- 多账号状态列表：每个未登录账号独立打开其 Chrome 实例的登录页 -->
+            <div v-if="diagnostics.xhs_login.accounts && diagnostics.xhs_login.accounts.length > 0" class="account-status-list">
+              <div v-for="acc in diagnostics.xhs_login.accounts" :key="acc.session_name" class="account-status-item">
+                <ElTag :type="accountChipType(acc)" size="small">
+                  {{ acc.account_name }}: {{ accountChipLabel(acc) }}
+                </ElTag>
+                <ElButton
+                  v-if="!acc.logged_in && accountIdBySession(acc.session_name) !== null"
+                  size="small"
+                  text
+                  type="primary"
+                  :loading="openingLoginId === accountIdBySession(acc.session_name)"
+                  @click="openAccountLoginPage(acc.session_name)"
+                >打开登录页</ElButton>
+              </div>
+            </div>
+          </template>
         </div>
         <div class="system-item">
           <span class="system-label">浏览器连接</span>
           <ElTag :type="xhsPoolTag.type">{{ xhsPoolTag.text }}</ElTag>
           <ElButton size="small" :loading="diagLoading.xhs_pool" @click="probe('xhs_pool')">检测</ElButton>
           <p v-if="diagnostics.xhs_pool.reason" class="system-reason">{{ diagnostics.xhs_pool.reason }}</p>
+          <!-- 按账号扩展连接状态（2026-09-03）：每个账号独立显示 Chrome 是否存活 + 扩展是否连上 -->
+          <div v-if="xhsPoolAccountsList.length > 0" class="account-status-list">
+            <div v-for="acc in xhsPoolAccountsList" :key="acc.session" class="account-status-item">
+              <ElTag :type="acc.chipType" size="small">
+                {{ acc.name }}: {{ acc.label }}
+              </ElTag>
+            </div>
+          </div>
         </div>
       </div>
     </ElCard>
@@ -697,4 +886,6 @@ onUnmounted(() => {
 .system-item .el-button { align-self: flex-start; }
 .system-reason { color: var(--el-color-danger); font-size: 12px; margin: 4px 0 0; line-height: 1.4; word-break: break-word; }
 .system-detail { color: var(--el-text-color-secondary); font-size: 12px; }
+.account-status-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.account-status-item { display: flex; align-items: center; gap: 4px; }
 </style>

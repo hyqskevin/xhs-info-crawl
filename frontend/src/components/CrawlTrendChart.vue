@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, toRef } from 'vue'
 import { useECharts } from '@/composables/useECharts'
 
 const props = defineProps<{ tasks: any[] }>()

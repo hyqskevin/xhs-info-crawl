@@ -39,6 +39,7 @@ const editingId = ref<number | null>(null)
 const enrichingId = ref<number | null>(null)
 const importingBloggers = ref(false)
 const checkingLoginId = ref<number | null>(null)
+const checkingEnvId = ref<number | null>(null)
 const openingLoginId = ref<number | null>(null)
 // 5 个 tab 各自独立的 selection；切换 tab 时不会残留。
 const citiesSelectedIds = ref<number[]>([])
@@ -50,6 +51,7 @@ const recentFilters = ['不限', '一天内', '一周内', '半年内']
 const loginStatusMeta: Record<string, { type: string; label: string }> = {
   logged_in: { type: 'success', label: '已登录' },
   logged_out: { type: 'danger', label: '未登录' },
+  not_started: { type: 'warning', label: 'Chrome 未运行' },
   unknown: { type: 'info', label: '未知' },
 }
 const loginStatusOf = (status: string) => loginStatusMeta[status] || { type: 'info', label: status || '未知' }
@@ -224,6 +226,28 @@ async function openLogin(row: any) {
   }
 }
 
+async function checkExtensionEnv(row: any) {
+  checkingEnvId.value = row.id
+  try {
+    const res = await api.xhsAccountExtensionStatus(row.id)
+    const d = res.data.data || {}
+    const parts = [
+      d.chrome_running ? 'Chrome 运行中' : 'Chrome 未运行',
+      d.extension_installed ? '扩展已加载' : '扩展未加载',
+    ]
+    if (d.chrome_running && d.extension_installed) {
+      ElMessage.success(`「${row.name}」${parts.join('，')}（端口 ${d.cdp_port}）`)
+    } else {
+      ElMessage.warning(`「${row.name}」${parts.join('，')}。可点「扫码登录」重新打开实例`)
+    }
+  } catch (error: any) {
+    const reason = error.response?.data?.message || error.response?.data?.detail || '检测环境失败'
+    ElMessage.error(reason)
+  } finally {
+    checkingEnvId.value = null
+  }
+}
+
 async function enrich(row: any) {
   enrichingId.value = row.id
   try {
@@ -395,6 +419,7 @@ onMounted(load)
         <template #default="scope">
           <ElButton text type="primary" :loading="openingLoginId === scope.row.id" @click="openLogin(scope.row)">扫码登录</ElButton>
           <ElButton text type="primary" :loading="checkingLoginId === scope.row.id" @click="checkLogin(scope.row)">检测登录</ElButton>
+          <ElButton text type="primary" :loading="checkingEnvId === scope.row.id" @click="checkExtensionEnv(scope.row)">检测环境</ElButton>
           <ElButton text type="primary" :icon="Edit" @click="open(scope.row)">编辑</ElButton>
           <ElButton text type="danger" :icon="Delete" @click="remove(scope.row)">删除</ElButton>
         </template>

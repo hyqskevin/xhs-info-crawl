@@ -51,6 +51,8 @@ def _make_chrome_pool_for_task(settings, db, accounts) -> ChromePool:
     使用全局 ChromePool 单例——API 端点（如 check-login）和 crawl_task 共享同一池，
     避免重复启动 Chrome 实例导致端口冲突。
     """
+    from app.services.opencli_extension import cdp_version_ok
+
     pool = get_global_chrome_pool()
     # 同步端口到 DB（持久化，供下次复用）
     for account in accounts:
@@ -58,13 +60,28 @@ def _make_chrome_pool_for_task(settings, db, accounts) -> ChromePool:
         if port is None:
             continue
         try:
-            instance = pool.acquire(account.session_name)
+            # preferred_port = 账号自己的 DB 端口：空闲时优先复用，
+            # 写回 DB 不会撞其他账号的 cdp_port UNIQUE 约束
+            instance = pool.acquire(account.session_name, preferred_port=port)
         except ChromeLaunchError:
             raise
-        # 同步实际分配端口（避免 ChromePool 分配与 cdp_port 不一致）
         if instance.port != port:
-            account.cdp_port = instance.port
-            db.commit()
+            # 端口漂移：DB 原端口若有活 Chrome（多半就是该账号之前的实例）→ adopt 回，
+            # 漂移实例 release 丢弃；否则写回漂移端口（IntegrityError 防御转可读错误）
+            if cdp_version_ok(port):
+                pool.release(account.session_name)
+                instance = pool.adopt_existing(account.session_name, port)
+            else:
+                try:
+                    account.cdp_port = instance.port
+                    db.commit()
+                except Exception as exc:
+                    db.rollback()
+                    pool.release(account.session_name)
+                    raise ChromeLaunchError(
+                        f"账号 {account.name!r} 的 cdp_port={instance.port} 与其他账号冲突，"
+                        f"已放弃该实例；请稍后重试（原端口 {port} 无活实例）"
+                    ) from exc
     return pool
 
 

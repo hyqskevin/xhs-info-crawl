@@ -86,6 +86,10 @@ class ChromeInstance:
         return f"http://127.0.0.1:{self.port}"
 
     def alive(self) -> bool:
+        # adopted 实例（process=None，非本进程启动）无法 kill/poll，
+        # 由调用方用 CDP 探测判断存活；这里视为 alive
+        if self.process is None:
+            return True
         return self.process.poll() is None
 
 
@@ -105,6 +109,7 @@ class ChromePool:
         chrome_bin: str,
         base_user_data_dir: Path,
         cdp_port_start: int = _CDP_PORT_START,
+        extension_path: Path | None = None,
     ) -> None:
         # chrome_bin 懒解析：仅在 acquire() 时调 resolve_chrome_bin，
         # 便于构造期 monkeypatch + 错误延后到启动 Chrome 时才报。
@@ -112,11 +117,39 @@ class ChromePool:
         self._base_user_data_dir = Path(base_user_data_dir)
         self._base_user_data_dir.mkdir(parents=True, exist_ok=True)
         self._cdp_port_start = cdp_port_start
+        # opencli Browser Bridge 扩展解压目录；配置后实例非 headless 启动并 --load-extension
+        self._extension_path = Path(extension_path) if extension_path is not None else None
         self._instances: dict[str, ChromeInstance] = {}
         self._next_port_offset = 0
 
-    def acquire(self, session_name: str) -> ChromeInstance:
-        """获取（或启动）该 session_name 对应的 Chrome 实例。已存在则直接复用。"""
+    def adopt_existing(self, session_name: str, port: int) -> ChromeInstance:
+        """把外部启动 / 后端重启前遗留的活 Chrome 注册进池（不启动新进程）。
+
+        后端重启后 pool 内存态清空，若 DB 记录的 cdp_port 上仍有活 Chrome
+        （大概率就是该账号之前的实例），调用方应先 CDP 探测确认存活再 adopt 复用，
+        避免 acquire 重新分配端口与 DB cdp_port 错位（UNIQUE 冲突）。
+
+        幂等：同 session 同端口重复 adopt 返回同一实例；端口漂移则覆盖注册。
+        adopted 实例 process=None：release 只从池移除、不 kill（进程非我们启动）。
+        """
+        existing = self._instances.get(session_name)
+        if existing is not None and existing.alive() and existing.port == port:
+            return existing
+        inst = ChromeInstance(
+            session_name=session_name,
+            port=port,
+            user_data_dir=self._base_user_data_dir / session_name,
+            process=None,  # type: ignore[arg-type] - adopted：无进程句柄
+        )
+        self._instances[session_name] = inst
+        return inst
+
+    def acquire(self, session_name: str, preferred_port: int | None = None) -> ChromeInstance:
+        """获取（或启动）该 session_name 对应的 Chrome 实例。已存在则直接复用。
+
+        preferred_port：账号 DB 记录的 cdp_port。空闲时优先使用（账号固定端口，
+        避免 acquire 新分配端口写回 DB 时撞其他账号的 cdp_port UNIQUE 约束）。
+        """
         if session_name in self._instances:
             inst = self._instances[session_name]
             if inst.alive():
@@ -134,7 +167,7 @@ class ChromePool:
                     "（请确认 Chrome 已安装或更新 Settings.chrome_bin）"
                 )
 
-        port = self._allocate_port()
+        port = self._allocate_port(preferred_port)
         user_data_dir = self._base_user_data_dir / session_name
         user_data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -149,14 +182,23 @@ class ChromePool:
         self._wait_cdp_ready(instance)
         return instance
 
-    def _allocate_port(self) -> int:
+    def _allocate_port(self, preferred_port: int | None = None) -> int:
         """按顺序扫描分配一个实际空闲的 CDP 端口（跨进程安全）。
+
+        preferred_port 非空且空闲时优先使用（账号固定端口，消除 DB cdp_port
+        UNIQUE 冲突——每个账号永远用自己的端口）。
 
         背景（2026-09-02 评估修复 I3）：uvicorn 与 celery worker 各持独立
         ChromePool，纯顺序分配不检测占用时跨进程必然撞端口，且错误端口会被
         _make_chrome_pool_for_task 持久化到 DB。bind 探测跳过被占端口；
         探测与 Chrome 启动之间的 TOCTOU 窗口由 _wait_cdp_ready 超时警告兜底。
         """
+        if (
+            preferred_port is not None
+            and self._cdp_port_start <= preferred_port < self._cdp_port_start + _CDP_PORT_RANGE
+            and _port_is_free(preferred_port)
+        ):
+            return preferred_port
         for _ in range(_CDP_PORT_RANGE):
             port = self._next_port_offset % _CDP_PORT_RANGE + self._cdp_port_start
             self._next_port_offset += 1
@@ -188,7 +230,16 @@ class ChromePool:
             self._chrome_bin,
             # 新 headless 模式(Chrome 109+);不是 --headless=old,也不是 --headless=new=new typo。
             # 关联 spec: docs/superpowers/specs/2026-08-23-audit-fixes-batch-design.md §3.7
-            "--headless=new",
+            #
+            # 配置了 opencli Browser Bridge 扩展时不用 headless：扩展需要真实窗口
+            # 连接 opencli daemon 才能形成独立 profile（多账号 localStorage 隔离）。
+            # 关联 spec: docs/superpowers/specs/2026-09-02-chrome-pool-load-extension-design.md
+        ]
+        if self._extension_path is not None:
+            cmd.append(f"--load-extension={self._extension_path}")
+        else:
+            cmd.append("--headless=new")
+        cmd += [
             "--no-sandbox",
             "--disable-gpu",
             f"--remote-debugging-port={port}",
@@ -226,6 +277,8 @@ class ChromePool:
 
     @staticmethod
     def _safe_kill(proc: subprocess.Popen) -> None:
+        if proc is None:
+            return  # adopted 实例无进程句柄：只从池移除，不 kill
         if proc.poll() is None:
             try:
                 proc.kill()
@@ -254,10 +307,12 @@ def get_global_chrome_pool() -> ChromePool:
     global _global_pool
     if _global_pool is None:
         from app.core.config import get_settings
+        from app.services.opencli_extension import resolve_extension_dir
         settings = get_settings()
         _global_pool = ChromePool(
             chrome_bin=settings.chrome_bin,
             base_user_data_dir=settings.resolve_project_path(settings.chrome_user_data_dir),
+            extension_path=resolve_extension_dir(settings),
         )
     return _global_pool
 
