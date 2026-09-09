@@ -66,6 +66,7 @@ def to_cn_naive(value: datetime) -> datetime:
 **明确不动**（协议内部时间或已正确）：
 
 - `app/core/security.py` JWT `exp`：保持 aware UTC（pyjwt 按 epoch 换算，协议时间非显示时间）
+- `app/services/maintenance.py:23` 文件 mtime cutoff：`datetime.now(timezone.utc).timestamp()` 是系统时间域（与文件 mtime 比较），若改 naive 北京墙钟 `.timestamp()` 会按机器时区解释——必须保持 aware UTC
 - `activity_validator` 内部 aware 运算（双方 `astimezone(utc)` 再比日期，口径自洽）
 - `celery_timezone = "Asia/Shanghai"`（config.py:162）
 - `search_rate_limit` ISO 周、`published_at` / `note_id_published_at` 解析、活动窗口（均已按 Asia/Shanghai）
