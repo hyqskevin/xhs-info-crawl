@@ -376,6 +376,80 @@ data/
 
 ---
 
+### 13.4 迁移数据目录到 macOS 默认位置（v0.7.0+）
+
+> 适用：v0.6.x 或更早版本，数据落在 `~/.xhs-info-crawl/`（用户为防御早期 bug 临时改的路径），现在希望迁到 macOS 标准默认位置 `~/Library/Application Support/com.xhs-info-crawl.local/` 的用户。
+>
+> **只适用于 macOS**。Windows 默认路径不同，暂未提供迁移脚本。
+
+**为什么要做**：
+
+- `~/.xhs-info-crawl/` 不是 macOS 推荐位置，重装系统/清理时会一起丢
+- `~/Library/Application Support/com.xhs-info-crawl.local/` 是 macOS 标准的"用户应用数据"目录，符合 macOS 应用规范
+- 跟 iCloud 备份、系统迁移工具兼容更好
+
+**前置**：
+
+1. **完全退出 .app**（菜单栏图标 → 退出，或 Dock 右键退出）。后台进程（uvicorn / celery worker / celery beat）必须全部关闭。
+2. 项目根目录可写（迁移脚本从仓库内调用）
+
+**执行迁移**：
+
+在项目根目录打开终端（终端 app → `cd` 到 `xhs-info-crawl.app/Contents/Resources/xhs-info-crawl/`），执行：
+
+```bash
+bash scripts/migrate-data-dir-to-application-support.sh
+```
+
+脚本会做 4 件事：
+
+1. 检测 .app 是否真的关了（在跑就报错退出）
+2. 用 `rsync` 把 `~/.xhs-info-crawl/` 拷到 `~/Library/Application Support/com.xhs-info-crawl.local/`，**跳过 `.env`**
+3. 做 6 道不变量校验：总大小 / app.db 文件大小 / notes 行数 / xhs_accounts 行数 / scheduled_crawls 行数 / alembic_version
+4. 任一不通过 → 自动 `rmtree` 目标目录回滚，不会留下半生不熟的数据
+
+**迁移成功的输出**：
+
+```
+✓ 迁移脚本执行成功
+  - 拷贝大小: <N> 字节
+  - notes: 840
+  - xhs_accounts: 2
+  - scheduled_crawls: 3
+  - alembic_version: 0028
+```
+
+**迁移后**：
+
+1. 启动 `.app`
+2. 在 launcher UI "LLM 与系统配置 → 存储路径 → 数据根目录" 填入：
+   ```
+   ~/Library/Application Support/com.xhs-info-crawl.local
+   ```
+   （如果 launcher 拆分配置上线，这一行可能不需要手动填——直接使用默认推荐值）
+3. 在 UI 验证：
+   - "数据根目录" 显示成上面那条路径
+   - "数据库预览" 显示成 `.../app.db`
+   - 管理后台能看到原账号 / schedule / notes 齐全
+4. 触发一次小抓取验证 `task_logs / archive` 写入新路径
+5. 验证 OK 后，删除旧数据：
+   ```bash
+   rm -rf ~/.xhs-info-crawl
+   ```
+
+**常见问题**：
+
+- **Q：脚本报"检测到 .app 服务进程仍在跑"？**
+  A：完全退出 .app（菜单栏 → 退出 + Dock 右键退出）。如果还报，用活动监视器强制杀掉所有 `python` / `uvicorn` / `celery` 进程。
+- **Q：脚本报"迁移校验失败"？**
+  A：脚本会自动 rmtree 目标目录回滚，不会污染新路径。原始数据还在 `~/.xhs-info-crawl/`，可以重试。如果是 rsync 中途失败，看启动器日志卡片里的 `data/logs/` 找 traceback。
+- **Q：迁移会动我的 .env 吗？**
+  A：不会，脚本显式 `--exclude=.env`。目标位置如果已有旧 `.env`（v0.5.x 时代的），也不会被覆盖。正确做法是在 launcher UI 里填好配置后，`.env` 由 UI 自动写入新位置。
+- **Q：能不能反过来迁回 `~/.xhs-info-crawl/`？**
+  A：脚本只单向迁回。如果你出于调试需要手动复制：`rsync -a ~/Library/Application\ Support/com.xhs-info-crawl.local/ ~/.xhs-info-crawl/` 即可，不推荐作为长期方案。
+
+---
+
 ## 14. 常见问题 FAQ
 
 ### 14.1 macOS Gatekeeper 拦截
