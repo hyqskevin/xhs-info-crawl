@@ -62,7 +62,8 @@ _BUSINESS_COLUMNS = [
 
 
 def _backup_database(bind) -> None:
-    engine = bind.get_bind()
+    # bind 在真实 alembic 运行时是 Connection（.engine），单测 monkeypatch 时是 Session（.get_bind()）
+    engine = getattr(bind, "engine", None) or bind.get_bind()
     db_path = Path(engine.url.database)
     if not db_path.is_file():
         raise RuntimeError(f"0029: DB 文件不存在 {db_path}，拒绝在无备份的情况下迁移")

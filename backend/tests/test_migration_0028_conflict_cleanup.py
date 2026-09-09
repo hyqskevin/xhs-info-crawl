@@ -138,7 +138,7 @@ def test_upgrade_0028_no_op_when_no_duplicates(tmp_path: Path) -> None:
     conn = _connect(db_path)
     try:
         # alembic_version 推到 0028
-        assert _alembic_version(conn) == "0028"
+        assert _alembic_version(conn) == "0029"  # head 已推进到 0029
         # partial unique index 创建成功
         assert _index_exists(conn, "ux_crawl_tasks_active_per_schedule")
         # 没有任何 task 被强制 FAILED(全部保持原状态)
@@ -172,7 +172,7 @@ def test_upgrade_0028_marks_duplicates_failed(tmp_path: Path) -> None:
 
     conn = _connect(db_path)
     try:
-        assert _alembic_version(conn) == "0028"
+        assert _alembic_version(conn) == "0029"  # head 已推进到 0029
         rows = {
             row["id"]: row
             for row in conn.execute(
@@ -283,7 +283,7 @@ def test_upgrade_0028_sqlite_timestamp_binding_does_not_raise(tmp_path: Path) ->
 
     conn = _connect(db_path)
     try:
-        assert _alembic_version(conn) == "0028"
+        assert _alembic_version(conn) == "0029"  # head 已推进到 0029
         # 4 条重复里 1 条保留,3 条强制 FAILED
         n_failed = conn.execute(
             "SELECT COUNT(*) FROM crawl_tasks "
@@ -324,7 +324,7 @@ def test_init_database_with_duplicates_boots_cleanly(tmp_path: Path) -> None:
 
     conn = _connect(db_path)
     try:
-        assert _alembic_version(conn) == "0028"
+        assert _alembic_version(conn) == "0029"  # head 已推进到 0029
         # 3 条里 1 条保留,2 条强制 FAILED
         n_failed = conn.execute(
             "SELECT COUNT(*) FROM crawl_tasks "

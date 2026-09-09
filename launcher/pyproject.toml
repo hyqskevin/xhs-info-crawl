@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "pywebview>=5.3,<6",
     "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
     "httpx>=0.28,<1",
 ]
 
