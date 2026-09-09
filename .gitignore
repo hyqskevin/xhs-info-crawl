@@ -64,6 +64,8 @@ frontend/src/**/*.spec.ts
 frontend/e2e/
 launcher/ui/src/**/*.spec.ts
 launcher/ui/src/__tests__/
+scripts/tests/
+.pytest_cache/
 
 # CI 测试工作流(不跑测试)
 .github/workflows/ci.yml
