@@ -129,6 +129,9 @@ def _build_md_for_zip(
             archive_name = f"note_{note.id}/{local_path.name}"
             lines.extend([f"![图片 {local_image_index}](images/{archive_name})", ""])
             files.append((local_path, f"images/{archive_name}"))
+        if local_image_index == 0:
+            # 缺图是抓取侧静默丢图（如未登录），标注让用户能区分数据缺图与导出故障（2026-09-07）
+            lines.extend(["> **该推文无本地图片**（可能因抓取时未登录或图片下载失败导致，可重爬补齐）", ""])
         lines.extend([
             "### 推文正文", "", note.content or "无", "",
             "### 图片 OCR", "",
