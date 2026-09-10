@@ -119,8 +119,10 @@ $PKG_DIR/runtime/python/bin/python3 -m venv $PKG_DIR/runtime/venv
 export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 
 $PKG_DIR/runtime/venv/bin/pip install --upgrade pip
-$PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/backend/requirements-runtime.txt
-$PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/launcher/requirements.txt
+$PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/backend/requirements-runtime.txt \
+  || $PKG_DIR/runtime/venv/bin/pip install --index-url https://pypi.org/simple -r $ROOT_DIR/backend/requirements-runtime.txt
+$PKG_DIR/runtime/venv/bin/pip install -r $ROOT_DIR/launcher/requirements.txt \
+  || $PKG_DIR/runtime/venv/bin/pip install --index-url https://pypi.org/simple -r $ROOT_DIR/launcher/requirements.txt
 
 # v0.7.0 修复:paddleocr / paddlepaddle / paddlex 是 .app 运行时依赖,
 # 必须打进 .app/runtime/venv/lib/python3.11/site-packages/。
